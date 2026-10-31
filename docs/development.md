@@ -22,15 +22,15 @@ Open <http://127.0.0.1:8082>. Bun runs the TypeScript source directly (no build 
 
 ## Checks
 
-| Task                                                                      | Command                         |
-| ------------------------------------------------------------------------- | ------------------------------- |
-| Install from the lockfile (also installs the pre-commit hook)             | `bun install --frozen-lockfile` |
-| All checks: CI runs the same steps                                        | `bun run check`                 |
-| Lint (Biome plus SonarJS through ESLint, cognitive complexity at most 15) | `bun run lint`                  |
-| Apply Biome fixes                                                         | `bun run format`                |
-| Typecheck                                                                 | `bun run typecheck`             |
-| Tests, with a line coverage gate of 80 %                                  | `bun run test`                  |
-| One test file                                                             | `bun test src/<name>.test.ts`   |
+| Task                                                                                             | Command                         |
+| ------------------------------------------------------------------------------------------------ | ------------------------------- |
+| Install from the lockfile (also installs the pre-commit hook)                                    | `bun install --frozen-lockfile` |
+| All checks: CI runs the same steps                                                               | `bun run check`                 |
+| Lint (Biome, SonarJS through ESLint with cognitive complexity at most 15, and `pulse-workflows`) | `bun run lint`                  |
+| Apply Biome fixes                                                                                | `bun run format`                |
+| Typecheck                                                                                        | `bun run typecheck`             |
+| Tests, with a line coverage gate of 80 %                                                         | `bun run test`                  |
+| One test file                                                                                    | `bun test src/<name>.test.ts`   |
 
 ## Tests
 
@@ -48,16 +48,17 @@ Work test first. Tests sit next to the code as `src/<module>.test.ts`, use hand-
 
 `.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on `v*` tags. It has three jobs:
 
-- `check` uses the shared `check.yml` workflow of `lorenzh/pulse-config`, pinned to a commit SHA: install from the lockfile, lint, typecheck, tests with coverage.
+- `check` uses the shared `check.yml` workflow of `lorenzh/pulse-config`, pinned to a commit SHA: install from the lockfile, lint (with `pulse-workflows`: every action pinned to an approved SHA, every checkout with `persist-credentials: false`, config workflow refs equal to the `package.json` pin), typecheck, tests with coverage.
 - `docker` runs as a matrix on two native runners, `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64), with `fail-fast: false`. Both legs run the same steps, so the arm64 image is built and smoke-tested in every pull request. Each leg builds the image and runs it:
   1. builds `pulse-console:local`;
   2. fails if the image holds `*.test.ts` or `*.spec.ts` files outside `node_modules`, or `/app/node_modules/@biomejs`, `/app/node_modules/lefthook`, `/app/node_modules/typescript7` or `/app/bunfig.toml` (no tests or dev packages ship);
-  3. starts the container with `PULSE_API_URL=http://api.invalid:3000` and a sentinel admin token and waits up to 30 s for `/readyz` to answer `200` (the service starts and is ready);
-  4. checks that `id -u` in the container is not `0` (non-root);
-  5. checks that `/` holds `pulse Console` and carries `x-frame-options: DENY` (page and headers);
-  6. checks that the sentinel token is in neither the container logs nor the page (no secret leaks);
-  7. checks that `docker stop` gives exit code `0` (graceful shutdown);
-  8. checks that a container without `PULSE_API_URL` exits `2` with `PULSE_API_URL must be set` (settings are validated).
+  3. `Image ignores dotenv files` runs `bash scripts/image-dotenv.sh pulse-console:local`: a control run proves that `PULSE_LOG_LEVEL` from the environment is read; then `.env`, `.env.production` and `.env.local` holding a bad `PULSE_LOG_LEVEL` and `PULSE_CONSOLE_PORT=1` are mounted into `/app` in turn, and the container must pass its own healthcheck, keep the marker out of its logs and stop with `0`; last, `Cmd` and the healthcheck must start Bun with `--no-env-file`. The script prints `ok:` or `FAIL:` per case and runs all cases;
+  4. starts the container with `PULSE_API_URL=http://api.invalid:3000` and a sentinel admin token and waits up to 30 s for `/readyz` to answer `200` (the service starts and is ready);
+  5. checks that `id -u` in the container is not `0` (non-root);
+  6. checks that `/` holds `pulse Console` and carries `x-frame-options: DENY` (page and headers);
+  7. checks that the sentinel token is in neither the container logs nor the page (no secret leaks);
+  8. checks that `docker stop` gives exit code `0` (graceful shutdown);
+  9. checks that a container without `PULSE_API_URL` exits `2` with `PULSE_API_URL must be set` (settings are validated).
 - `release` runs only on a tag. It needs `check` and both `docker` legs, and calls the shared `release.yml` workflow of `lorenzh/pulse-config` (see [Releasing](#releasing)). On pull requests and on `main` it is skipped.
 
 A tag run is never cancelled by a later push to the same ref; branch and pull request runs are.

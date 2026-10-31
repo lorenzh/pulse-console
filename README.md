@@ -36,7 +36,7 @@ docker run --rm -p 127.0.0.1:8082:8082 -e PULSE_API_URL=http://api:3000 ghcr.io/
 
 Pin a setup to `X.Y.Z` by digest. How a release is cut and verified is in [docs/development.md](docs/development.md#releasing).
 
-The image listens on `0.0.0.0:8082` inside the container and runs as the non-root user `bun`. In the pulse Compose stack (pulse-api `compose.yaml`) the console is published on host loopback only.
+The image listens on `0.0.0.0:8082` inside the container and runs as the non-root user `bun`. It starts with `bun --no-env-file src/main.ts`, and its healthcheck also runs `bun --no-env-file`. So neither the console nor its healthcheck reads `.env` files, also not ones mounted into `/app`. Settings come from the container environment (`-e`, `docker run --env-file` read on the host, Compose `environment:` or `env_file:`). In the pulse Compose stack (pulse-api `compose.yaml`) the console is published on host loopback only.
 
 ## Settings
 
