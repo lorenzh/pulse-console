@@ -37,8 +37,8 @@ When set, the value follows the api's admin token rules, so an accepted value ca
 | both settings set                           | `set only one of PULSE_CONSOLE_ADMIN_TOKEN and PULSE_CONSOLE_ADMIN_TOKEN_FILE` (the file is not read) | same                                                          |
 | file cannot be read                         |                                                                                                       | `PULSE_CONSOLE_ADMIN_TOKEN_FILE=<path>: cannot read (<code>)` |
 | file is empty                               |                                                                                                       | `…: file is empty`                                            |
-| at least 16 characters                      | `PULSE_CONSOLE_ADMIN_TOKEN must hold at least 16 characters`                                          | `…: must hold at least 16 characters`                         |
 | one line                                    |                                                                                                       | `…: must hold one line`                                       |
+| at least 16 characters                      | `PULSE_CONSOLE_ADMIN_TOKEN must hold at least 16 characters`                                          | `…: must hold at least 16 characters`                         |
 | no whitespace                               | `PULSE_CONSOLE_ADMIN_TOKEN must not contain whitespace`                                               | `…: must not contain whitespace`                              |
 | printable ASCII without space (`\x21-\x7e`) | `PULSE_CONSOLE_ADMIN_TOKEN must hold printable ASCII`                                                 | `…: must hold printable ASCII`                                |
 | not starting with `replace-with-`           | `PULSE_CONSOLE_ADMIN_TOKEN still has the example placeholder`                                         | `…: still has the example placeholder`                        |
@@ -64,7 +64,7 @@ The image sets `NODE_ENV=production` and `PULSE_CONSOLE_HOST=0.0.0.0`, exposes `
 
 The path is the raw request target up to the first `?`, compared byte for byte. It is not decoded or normalised, so `/index.html`, `//healthz`, `/%2e%2e/`, `/./` and `/healthz/` are `404`. `GET` and `HEAD` are the only methods; any other method answers `405` with `allow: GET, HEAD` and an empty body, on every path. The console reads no request body.
 
-On `SIGTERM` or `SIGINT` the console turns not ready, stops accepting connections, closes idle ones and exits `0`. Open requests get 5000 ms.
+On `SIGTERM` or `SIGINT` the console turns not ready, stops accepting connections, closes idle ones and exits `0` after a clean stop. Open requests get 5000 ms; a stop that takes longer logs a warning and exits `1`.
 
 ## Security headers
 

@@ -26,7 +26,7 @@
     "typescript7": "npm:typescript@7.0.2"
   },
   "dependencies": {
-    "@lorenzh/pulse-kit": "github:lorenzh/pulse-kit#fa79ba8cd93949fc0cf87f7b41bdaf261dbe4dc6"
+    "@lorenzh/pulse-kit": "github:lorenzh/pulse-kit#236df214f9df8658f2992dd6f7c100952c07102b"
   },
   "packageManager": "bun@1.4.0"
 }
