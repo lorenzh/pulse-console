@@ -46,10 +46,10 @@ Work test first. Tests sit next to the code as `src/<module>.test.ts`, use hand-
 
 ## CI
 
-`.github/workflows/ci.yml` has two jobs:
+`.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on `v*` tags. It has three jobs:
 
 - `check` uses the shared `check.yml` workflow of `lorenzh/pulse-config`, pinned to a commit SHA: install from the lockfile, lint, typecheck, tests with coverage.
-- `docker` builds the image and runs it:
+- `docker` runs as a matrix on two native runners, `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64), with `fail-fast: false`. Both legs run the same steps, so the arm64 image is built and smoke-tested in every pull request. Each leg builds the image and runs it:
   1. builds `pulse-console:local`;
   2. fails if the image holds `*.test.ts` or `*.spec.ts` files outside `node_modules`, or `/app/node_modules/@biomejs`, `/app/node_modules/lefthook`, `/app/node_modules/typescript7` or `/app/bunfig.toml` (no tests or dev packages ship);
   3. starts the container with `PULSE_API_URL=http://api.invalid:3000` and a sentinel admin token and waits up to 30 s for `/readyz` to answer `200` (the service starts and is ready);
@@ -58,6 +58,47 @@ Work test first. Tests sit next to the code as `src/<module>.test.ts`, use hand-
   6. checks that the sentinel token is in neither the container logs nor the page (no secret leaks);
   7. checks that `docker stop` gives exit code `0` (graceful shutdown);
   8. checks that a container without `PULSE_API_URL` exits `2` with `PULSE_API_URL must be set` (settings are validated).
+- `release` runs only on a tag. It needs `check` and both `docker` legs, and calls the shared `release.yml` workflow of `lorenzh/pulse-config` (see [Releasing](#releasing)). On pull requests and on `main` it is skipped.
+
+A tag run is never cancelled by a later push to the same ref; branch and pull request runs are.
+
+## Releasing
+
+The git tag is the version. `package.json` keeps `"version": "0.0.0"`.
+
+- A stable tag is `vX.Y.Z` (no leading zeros). It must point to a commit on `main`; otherwise the release fails before any build.
+- A pre-release tag is `vX.Y.Z-<pre>`, for example `v0.2.0-rc.1`. It may point to any commit.
+- Other tag shapes (`v1.2`, `v1.2.3+build.5`, `v01.2.3`) fail the release.
+
+A person cuts the release. A tag pushed by a workflow token starts no workflow.
+
+```sh
+git tag vX.Y.Z <sha on main> && git push origin vX.Y.Z
+```
+
+The tag run executes the gate first: `check` (lint, typecheck, tests) and both `docker` legs (amd64 and arm64 smoke tests). When any of them fails, `release` is skipped and nothing is published.
+
+When the gate is green, `release` publishes `ghcr.io/lorenzh/pulse-console` for `linux/amd64` and `linux/arm64`:
+
+- `X.Y.Z` always;
+- `X.Y` only when `X.Y.Z` is the highest stable `vX.Y.*` tag, and `X` only when it is the highest stable `vX.*.*` tag, so these tags never move backward;
+- a pre-release gets only its own tag, for example `0.2.0-rc.1`.
+
+There is no `latest` and no `edge` tag. A push to `main` publishes nothing.
+
+Never move or re-push a release tag. The workflow refuses to publish a version that already exists in the registry. The per-platform digests of a refused run stay in the package as untagged versions; delete them in the package settings if you want.
+
+The release builds the image again from the tagged commit. The content matches the image that the `docker` job checked (same Dockerfile, lockfile and digest-pinned base), but the digest can differ through timestamps.
+
+Verify the build provenance:
+
+```sh
+gh attestation verify oci://ghcr.io/lorenzh/pulse-console:<version> --owner lorenzh
+```
+
+Setups pin `X.Y.Z` by digest. `0` moves across breaking `0.x` minors.
+
+The package starts private. After the first release the owner sets it to public once in the package settings on GitHub.
 
 ## Shared configuration
 

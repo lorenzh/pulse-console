@@ -27,6 +27,15 @@ docker build --tag pulse-console:local .
 docker run --rm -p 127.0.0.1:8082:8082 -e PULSE_API_URL=http://api:3000 pulse-console:local
 ```
 
+Released images are published as `ghcr.io/lorenzh/pulse-console` for `linux/amd64` and `linux/arm64`, with the tags `X.Y.Z`, `X.Y` and `X` (no `latest`):
+
+```sh
+docker pull ghcr.io/lorenzh/pulse-console:0.1.0
+docker run --rm -p 127.0.0.1:8082:8082 -e PULSE_API_URL=http://api:3000 ghcr.io/lorenzh/pulse-console:0.1.0
+```
+
+Pin a setup to `X.Y.Z` by digest. How a release is cut and verified is in [docs/development.md](docs/development.md#releasing).
+
 The image listens on `0.0.0.0:8082` inside the container and runs as the non-root user `bun`. In the pulse Compose stack (pulse-api `compose.yaml`) the console is published on host loopback only.
 
 ## Settings
