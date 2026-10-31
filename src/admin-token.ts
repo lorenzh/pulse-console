@@ -1,4 +1,4 @@
-import { type Env, readString, StartupError } from "@lorenzh/pulse-kit";
+import { type Env, readSecretFile, readString, StartupError } from "@lorenzh/pulse-kit";
 
 const TOKEN_VAR = "PULSE_CONSOLE_ADMIN_TOKEN";
 const FILE_VAR = "PULSE_CONSOLE_ADMIN_TOKEN_FILE";
@@ -9,7 +9,6 @@ const EXAMPLE_TOKENS: readonly string[] = [
   "example-token-change-me-0000",
   "example-token-0123456789abcdef",
 ];
-const FS_CODE = /^E[A-Z0-9]+$/;
 // A header value must be ASCII; space is already refused by the whitespace rule.
 const PRINTABLE_ASCII = /^[\x21-\x7e]+$/;
 
@@ -23,28 +22,12 @@ function tokenProblem(token: string): string | undefined {
   return undefined;
 }
 
-function fsCode(err: unknown): string | undefined {
-  if (typeof err !== "object" || err === null || !Object.hasOwn(err, "code")) return undefined;
-  const code: unknown = Object.getOwnPropertyDescriptor(err, "code")?.value;
-  return typeof code === "string" && FS_CODE.test(code) ? code : undefined;
-}
-
 function readTokenFile(path: string, readFile: (path: string) => string): string {
-  const fail = (rule: string, cause?: unknown): StartupError =>
-    new StartupError(`${FILE_VAR}=${path}: ${rule}`, { setting: FILE_VAR, cause });
-  let content: string;
-  try {
-    content = readFile(path);
-  } catch (err) {
-    // Only the code: the raw fs message may carry more than the path.
-    const code = fsCode(err);
-    throw fail(code === undefined ? "cannot read" : `cannot read (${code})`, err);
-  }
-  const token = content.trim();
-  if (token === "") throw fail("file is empty");
+  const fail = (rule: string): StartupError =>
+    new StartupError(`${FILE_VAR}=${path}: ${rule}`, { setting: FILE_VAR });
+  const token = readSecretFile(path, { setting: FILE_VAR, readFile });
   if (token.length < MIN_TOKEN_LENGTH)
     throw fail(`must hold at least ${MIN_TOKEN_LENGTH} characters`);
-  if (/[\r\n]/.test(token)) throw fail("must hold one line");
   const problem = tokenProblem(token);
   if (problem !== undefined) throw fail(problem);
   return token;

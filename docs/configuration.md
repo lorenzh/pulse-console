@@ -64,7 +64,7 @@ The image sets `NODE_ENV=production` and `PULSE_CONSOLE_HOST=0.0.0.0`, exposes `
 
 The path is the raw request target up to the first `?`, compared byte for byte. It is not decoded or normalised, so `/index.html`, `//healthz`, `/%2e%2e/`, `/./` and `/healthz/` are `404`. `GET` and `HEAD` are the only methods; any other method answers `405` with `allow: GET, HEAD` and an empty body, on every path. The console reads no request body.
 
-On `SIGTERM` or `SIGINT` the console turns not ready, stops accepting connections, closes idle ones and exits `0`. Open requests get 5000 ms.
+On `SIGTERM` or `SIGINT` the console turns not ready, stops accepting connections, closes idle ones and exits `0` after a clean stop. Open requests get 5000 ms; a stop that takes longer logs a warning and exits `1`.
 
 ## Security headers
 
