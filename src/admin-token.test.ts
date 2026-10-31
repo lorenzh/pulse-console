@@ -118,6 +118,27 @@ describe("PULSE_CONSOLE_ADMIN_TOKEN_FILE", () => {
     expect(noCode).toBe(`${FILE_PREFIX}cannot read`);
   });
 
+  test("a read error and file content never reach the message", () => {
+    let err: unknown;
+    try {
+      readAdminToken({ PULSE_CONSOLE_ADMIN_TOKEN_FILE: PATH }, () => {
+        throw new Error("secret-sentinel");
+      });
+    } catch (caught) {
+      err = caught;
+    }
+    expect(err).toBeInstanceOf(StartupError);
+    expect(err instanceof StartupError ? err.setting : undefined).toBe(
+      "PULSE_CONSOLE_ADMIN_TOKEN_FILE",
+    );
+    expect(err instanceof Error ? err.message : "").not.toContain("secret-sentinel");
+    expect(fileFailure("secret-sentinel-0000\nx")).not.toContain("secret-sentinel");
+  });
+
+  test("a short multi-line file reports one line before length", () => {
+    expect(fileFailure("short\nline")).toBe(`${FILE_PREFIX}must hold one line`);
+  });
+
   test("an empty file is refused", () => {
     expect(fileFailure("")).toBe(`${FILE_PREFIX}file is empty`);
     expect(fileFailure(" \n\n")).toBe(`${FILE_PREFIX}file is empty`);
