@@ -1,0 +1,3 @@
+{
+  "extends": ["@lorenzh/pulse-config/biome.json"]
+}
