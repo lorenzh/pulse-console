@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: lorenzh/pulse-config/.github/workflows/check.yml@51e95b0eb463b27a196a33b428607bd92443e4f0
+
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build --tag pulse-console:local .
+      - name: Check the image holds no test files or dev packages
+        run: |
+          found=$(docker run --rm --entrypoint sh pulse-console:local -c "find /app -type f \( -name '*.test.ts' -o -name '*.spec.ts' \) -not -path '*/node_modules/*'")
+          if [ -n "$found" ]; then
+            echo "Test files in the image:"
+            echo "$found"
+            exit 1
+          fi
+          for path in /app/node_modules/@biomejs /app/node_modules/lefthook /app/node_modules/typescript7 /app/bunfig.toml; do
+            if docker run --rm --entrypoint sh pulse-console:local -c "test -e $path"; then
+              echo "Dev-only path in the image: $path"
+              exit 1
+            fi
+          done
+      - name: Start the container and wait for /readyz
+        run: |
+          docker run -d --name console -p 127.0.0.1:8082:8082 \
+            -e PULSE_API_URL=http://api.invalid:3000 \
+            -e PULSE_CONSOLE_ADMIN_TOKEN=console-ci-sentinel-token-0123 \
+            pulse-console:local
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/readyz || true)
+            if [ "$code" = "200" ]; then
+              echo "ok: /readyz answers 200"
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "/readyz did not answer 200 within 30 s"
+          docker logs console
+          exit 1
+      - name: Check the container runs as non-root
+        run: |
+          uid=$(docker exec console id -u)
+          if [ "$uid" = "0" ]; then
+            echo "The container runs as root"
+            exit 1
+          fi
+          echo "ok: uid $uid"
+      - name: Check the page and its headers
+        run: |
+          curl -fsS http://127.0.0.1:8082/ > page.html
+          grep -F 'pulse Console' page.html
+          curl -sI http://127.0.0.1:8082/ | grep -i 'x-frame-options: DENY'
+      - name: Check the admin token is not in the logs or the page
+        run: |
+          if docker logs console 2>&1 | grep -F 'console-ci-sentinel-token-0123'; then
+            echo "The admin token is in the logs"
+            exit 1
+          fi
+          if grep -F 'console-ci-sentinel-token-0123' page.html; then
+            echo "The admin token is in the page"
+            exit 1
+          fi
+          echo "ok: the token is not in the logs or the page"
+      - name: Check docker stop exits 0
+        run: |
+          docker stop -t 10 console
+          code=$(docker inspect -f '{{.State.ExitCode}}' console)
+          if [ "$code" != "0" ]; then
+            echo "Exit code after docker stop: $code"
+            docker logs console
+            exit 1
+          fi
+          echo "ok: exit code 0"
+      - name: Check a missing PULSE_API_URL exits 2
+        run: |
+          set +e
+          docker run --rm pulse-console:local 2> stderr.txt
+          code=$?
+          set -e
+          cat stderr.txt
+          if [ "$code" != "2" ]; then
+            echo "Exit code without PULSE_API_URL: $code"
+            exit 1
+          fi
+          grep -F 'PULSE_API_URL must be set' stderr.txt
