@@ -2,7 +2,7 @@ import { type Env, readSecretFile, readString, StartupError } from "@lorenzh/pul
 
 const TOKEN_VAR = "PULSE_CONSOLE_ADMIN_TOKEN";
 const FILE_VAR = "PULSE_CONSOLE_ADMIN_TOKEN_FILE";
-const MIN_TOKEN_LENGTH = 16;
+const MIN_TOKEN_LENGTH = 32;
 const PLACEHOLDER_PREFIX = "replace-with-";
 // Copied from pulse-api src/tokens.ts:11-14 (EXAMPLE_TOKENS); the console cannot import the api.
 const EXAMPLE_TOKENS: readonly string[] = [

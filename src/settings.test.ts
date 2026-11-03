@@ -116,12 +116,12 @@ describe("order of checks", () => {
 
   test("the admin token is part of the settings", () => {
     const s = readSettings(
-      { PULSE_API_URL: API, PULSE_CONSOLE_ADMIN_TOKEN: "abcdefghijklmnop0123" },
+      { PULSE_API_URL: API, PULSE_CONSOLE_ADMIN_TOKEN: "abcdefghijklmnopqrstuvwxyz012345" },
       noFile,
     );
-    expect(s.adminToken).toBe("abcdefghijklmnop0123");
-    expect(failure({ PULSE_API_URL: API, PULSE_CONSOLE_ADMIN_TOKEN: "exactly-15-char" })).toBe(
-      "PULSE_CONSOLE_ADMIN_TOKEN must hold at least 16 characters",
-    );
+    expect(s.adminToken).toBe("abcdefghijklmnopqrstuvwxyz012345");
+    expect(
+      failure({ PULSE_API_URL: API, PULSE_CONSOLE_ADMIN_TOKEN: "abcdefghijklmnopqrstuvwxyz01234" }),
+    ).toBe("PULSE_CONSOLE_ADMIN_TOKEN must hold at least 32 characters");
   });
 });
