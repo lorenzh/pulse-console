@@ -37,16 +37,22 @@ const fileFailure = (content: string): string =>
   failure({ PULSE_CONSOLE_ADMIN_TOKEN_FILE: PATH }, fileWith(content));
 
 // Each case: the token, the rule text that both sources must report.
+const T31 = "abcdefghijklmnopqrstuvwxyz01234";
+const T32 = "abcdefghijklmnopqrstuvwxyz012345";
+
+// Each case: the token, the rule text that both sources must report.
 const REFUSED: readonly (readonly [string, string])[] = [
-  ["exactly-15-char", "must hold at least 16 characters"],
-  ["replace-with-", "must hold at least 16 characters"],
-  ["abcdefgh ijklmnop", "must not contain whitespace"],
-  ["abcdefgh\tijklmnop", "must not contain whitespace"],
-  ["abcdefghijklmnop\u0000", "must hold printable ASCII"],
-  ["abcdefghijklmnopé", "must hold printable ASCII"],
-  ["replace-with-a-random-token", "still has the example placeholder"],
-  ["example-token-change-me-0000", "is a public example token: generate your own"],
-  ["example-token-0123456789abcdef", "is a public example token: generate your own"],
+  [T31, "must hold at least 32 characters"],
+  ["exactly-16-chars", "must hold at least 32 characters"],
+  ["replace-with-", "must hold at least 32 characters"],
+  ["abcdefghijklmnop qrstuvwxyz012345", "must not contain whitespace"],
+  ["abcdefghijklmnop\tqrstuvwxyz012345", "must not contain whitespace"],
+  ["abcdefghijklmnopqrstuvwxyz012345\u0000", "must hold printable ASCII"],
+  ["abcdefghijklmnopqrstuvwxyz012345é", "must hold printable ASCII"],
+  ["replace-with-a-random-token-0123456789", "still has the example placeholder"],
+  // The public example tokens are shorter than 32, so the length rule reports them first.
+  ["example-token-change-me-0000", "must hold at least 32 characters"],
+  ["example-token-0123456789abcdef", "must hold at least 32 characters"],
 ];
 
 describe("sources", () => {
@@ -75,16 +81,12 @@ describe("sources", () => {
 });
 
 describe("PULSE_CONSOLE_ADMIN_TOKEN", () => {
-  test("16 characters after trim and a near example token are accepted", () => {
-    expect(readAdminToken({ PULSE_CONSOLE_ADMIN_TOKEN: "exactly-16-chars" }, noFile)).toBe(
-      "exactly-16-chars",
-    );
-    expect(readAdminToken({ PULSE_CONSOLE_ADMIN_TOKEN: "  exactly-16-chars\n" }, noFile)).toBe(
-      "exactly-16-chars",
-    );
+  test("32 characters after trim and a near example token are accepted", () => {
+    expect(readAdminToken({ PULSE_CONSOLE_ADMIN_TOKEN: T32 }, noFile)).toBe(T32);
+    expect(readAdminToken({ PULSE_CONSOLE_ADMIN_TOKEN: `  ${T32}\n` }, noFile)).toBe(T32);
     expect(
-      readAdminToken({ PULSE_CONSOLE_ADMIN_TOKEN: "example-token-change-me-0001" }, noFile),
-    ).toBe("example-token-change-me-0001");
+      readAdminToken({ PULSE_CONSOLE_ADMIN_TOKEN: "example-token-0123456789abcdef01" }, noFile),
+    ).toBe("example-token-0123456789abcdef01");
   });
 
   test.each(REFUSED)("%p is refused with the rule and without the value", (token, rule) => {
@@ -95,16 +97,10 @@ describe("PULSE_CONSOLE_ADMIN_TOKEN", () => {
 });
 
 describe("PULSE_CONSOLE_ADMIN_TOKEN_FILE", () => {
-  test("the content is trimmed", () => {
-    expect(
-      readAdminToken({ PULSE_CONSOLE_ADMIN_TOKEN_FILE: PATH }, fileWith("abcdefghijklmnop0123\n")),
-    ).toBe("abcdefghijklmnop0123");
-    expect(
-      readAdminToken(
-        { PULSE_CONSOLE_ADMIN_TOKEN_FILE: PATH },
-        fileWith("example-token-change-me-0001"),
-      ),
-    ).toBe("example-token-change-me-0001");
+  test("32 characters after trim are accepted", () => {
+    expect(readAdminToken({ PULSE_CONSOLE_ADMIN_TOKEN_FILE: PATH }, fileWith(`  ${T32}\n`))).toBe(
+      T32,
+    );
   });
 
   test("a read failure names the path and the code only", () => {

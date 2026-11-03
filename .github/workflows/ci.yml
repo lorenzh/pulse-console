@@ -51,7 +51,7 @@ jobs:
         run: |
           docker run -d --name console -p 127.0.0.1:8082:8082 \
             -e PULSE_API_URL=http://api.invalid:3000 \
-            -e PULSE_CONSOLE_ADMIN_TOKEN=console-ci-sentinel-token-0123 \
+            -e PULSE_CONSOLE_ADMIN_TOKEN=console-ci-sentinel-token-0123456789ab \
             pulse-console:local
           for _ in $(seq 1 60); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/readyz || true)
@@ -79,11 +79,11 @@ jobs:
           curl -sI http://127.0.0.1:8082/ | grep -i 'x-frame-options: DENY'
       - name: Check the admin token is not in the logs or the page
         run: |
-          if docker logs console 2>&1 | grep -F 'console-ci-sentinel-token-0123'; then
+          if docker logs console 2>&1 | grep -F 'console-ci-sentinel-token-0123456789ab'; then
             echo "The admin token is in the logs"
             exit 1
           fi
-          if grep -F 'console-ci-sentinel-token-0123' page.html; then
+          if grep -F 'console-ci-sentinel-token-0123456789ab' page.html; then
             echo "The admin token is in the page"
             exit 1
           fi

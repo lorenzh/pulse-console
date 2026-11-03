@@ -45,8 +45,8 @@ The image listens on `0.0.0.0:8082` inside the container and runs as the non-roo
 | `PULSE_API_URL`                  | none, required                 | Base URL of pulse-api, `http` or `https`, without credentials, query or fragment. |
 | `PULSE_CONSOLE_PORT`             | `8082`                         | Listen port.                                                                      |
 | `PULSE_CONSOLE_HOST`             | `127.0.0.1` (image: `0.0.0.0`) | Listen address.                                                                   |
-| `PULSE_CONSOLE_ADMIN_TOKEN`      | unset                          | Optional pulse-api admin token. Never logged.                                     |
-| `PULSE_CONSOLE_ADMIN_TOKEN_FILE` | unset                          | File that holds the admin token, instead of `PULSE_CONSOLE_ADMIN_TOKEN`.          |
+| `PULSE_CONSOLE_ADMIN_TOKEN`      | unset                          | Optional pulse-api admin token, at least 32 characters. Never logged.             |
+| `PULSE_CONSOLE_ADMIN_TOKEN_FILE` | unset                          | File with the admin token (at least 32 characters), instead of the env var.       |
 | `PULSE_LOG_LEVEL`                | `info`                         | `debug`, `info`, `warn` or `error`.                                               |
 
 An invalid setting stops the start with exit code 2 and one line on stderr. Every rule and error text is in [docs/configuration.md](docs/configuration.md).
