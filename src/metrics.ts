@@ -1,10 +1,24 @@
 import { createRegistry } from "@lorenzh/pulse-kit";
 
 /** The `path` label values; every other request path counts as "other". */
-export type PathLabel = "/" | "/healthz" | "/readyz" | "/metrics" | "other";
+export type PathLabel =
+  | "/"
+  | "/healthz"
+  | "/readyz"
+  | "/metrics"
+  | "/setup"
+  | "/setup/owner"
+  | "/sign-in"
+  | "/sign-out"
+  | "/console.css"
+  | "other";
+
+export type AuthKind = "sign-in" | "setup-code";
+export type AuthResult = "success" | "failure" | "throttled";
 
 export interface Metrics {
   recordRequest: (path: PathLabel, code: number) => void;
+  recordAuthAttempt: (kind: AuthKind, result: AuthResult) => void;
   setShuttingDown: () => void;
   isReady: () => boolean;
   render: () => string;
@@ -18,6 +32,10 @@ export function createMetrics(): Metrics {
     "pulse_console_http_requests_total",
     "HTTP responses by request path and status code.",
   );
+  const authCounter = registry.counter(
+    "pulse_console_auth_attempts_total",
+    "Sign-in and setup-code attempts by kind and result.",
+  );
   let isShuttingDown = false;
 
   registry.collect(() => {
@@ -26,6 +44,7 @@ export function createMetrics(): Metrics {
 
   return {
     recordRequest: (path, code) => httpCounter.inc({ path, code: String(code) }),
+    recordAuthAttempt: (kind, result) => authCounter.inc({ kind, result }),
     setShuttingDown: () => {
       isShuttingDown = true;
     },

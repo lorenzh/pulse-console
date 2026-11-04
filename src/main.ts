@@ -1,12 +1,17 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, closeSync, openSync, readFileSync } from "node:fs";
 import { createLogger, readLogLevel, runService, StartupError } from "@lorenzh/pulse-kit";
+import { createAccountStore } from "./account-store.ts";
+import { openDatabase } from "./database.ts";
 import { createMetrics } from "./metrics.ts";
+import { PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { createConsoleServer, listen } from "./server.ts";
 import { readSettings } from "./settings.ts";
+import { createSetupGate } from "./setup-code.ts";
 
 const SHUTDOWN_TIMEOUT_MS = 5000;
 const EXIT_STARTUP = 2;
 const EXIT_RUNTIME = 1;
+const SESSION_IDLE_MS = 2_592_000_000;
 
 let level: ReturnType<typeof readLogLevel>;
 try {
@@ -20,11 +25,49 @@ const log = createLogger({ level });
 
 let stopRunning: (() => Promise<void>) | undefined;
 
-// Settings are read inside `start`, so the signal handlers exist first and a StartupError exits 2.
+const randomBytes = (size: number): Uint8Array => crypto.getRandomValues(new Uint8Array(size));
+
+// Settings and the database are read inside `start`, so the signal handlers exist first and a
+// StartupError exits 2. The database opens before the setup code is printed.
 async function start(): Promise<void> {
   const settings = readSettings(process.env, (path) => readFileSync(path, "utf8"));
+  const db = openDatabase(settings.dbPath, {
+    createFile: (path, mode) => closeSync(openSync(path, "wx", mode)),
+    chmod: chmodSync,
+  });
+  const store = createAccountStore(db);
+  const instance = store.instance();
+  store.deleteExpiredSessions(Date.now(), SESSION_IDLE_MS);
+  if (instance !== undefined && instance.apiUrl !== settings.apiUrl) {
+    log.warn("PULSE_API_URL differs from the API URL saved at setup; the saved URL is used");
+  }
+  if (settings.mode === "strict-http") {
+    log.warn("PULSE_CONSOLE_PUBLIC_URL uses http: session cookies are not marked Secure");
+  }
+  let gate: ReturnType<typeof createSetupGate>["gate"] | undefined;
+  if (instance === undefined) {
+    const setup = createSetupGate({ now: Date.now, randomBytes });
+    gate = setup.gate;
+    // Written outside the logger, so PULSE_LOG_LEVEL never hides it.
+    process.stdout.write(
+      `pulse-console setup code: ${setup.code} (open /setup; a restart prints a new code)\n`,
+    );
+  }
   const metrics = createMetrics();
-  const server = createConsoleServer(metrics);
+  const server = createConsoleServer({
+    metrics,
+    log,
+    mode: settings.mode,
+    publicOrigin: settings.publicOrigin,
+    defaultApiUrl: settings.apiUrl,
+    adminToken: settings.adminToken,
+    store,
+    gate,
+    now: Date.now,
+    randomBytes,
+    hashPassword: (password) => Bun.password.hash(password, PASSWORD_HASH_OPTIONS),
+    fetch,
+  });
   const port = await listen(server, settings.host, settings.port);
   server.on("error", (err) => {
     log.error("server error", { error: err.message });
@@ -33,14 +76,19 @@ async function start(): Promise<void> {
   stopRunning = () =>
     new Promise<void>((resolve) => {
       metrics.setShuttingDown();
-      server.close(() => resolve());
+      server.close(() => {
+        db.close();
+        resolve();
+      });
       server.closeIdleConnections();
     });
   log.info("pulse-console listening", {
     host: settings.host,
     port,
-    apiUrl: new URL(settings.apiUrl).origin,
+    apiUrl: new URL(instance?.apiUrl ?? settings.apiUrl).origin,
     hasAdminToken: settings.adminToken !== undefined,
+    mode: settings.mode,
+    isSetUp: instance !== undefined,
   });
 }
 

@@ -1,8 +1,8 @@
 # pulse-console documentation
 
-pulse-console is the web console of pulse. It is a small web server that will manage pulse through the pulse-api admin API. Today it serves one page and the ops routes.
+pulse-console is the web console of pulse. It is a small web server that will manage pulse through the pulse-api admin API. Today it serves first-run setup with a local owner account, the sign-in page and the ops routes.
 
-- [configuration.md](configuration.md): every environment variable, the image defaults, the ops routes and the security headers.
+- [configuration.md](configuration.md): every environment variable, the modes, setup, the database, routes, cookies, the image defaults and the security headers.
 - [development.md](development.md): local run, layout, tests, lint and CI.
 
 Related pages in other repositories:

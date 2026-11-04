@@ -79,7 +79,7 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 
 ## End-to-end checks
 
-- `src/server.test.ts` starts the real server on port `0` and drives it over HTTP; `src/main.startup.test.ts` spawns `bun src/main.ts`.
+- `src/server.test.ts`, `src/server.setup.test.ts` and `src/server.security.test.ts` start the real server on port `0` and drive it over HTTP; `src/main.startup.test.ts` spawns `bun src/main.ts`.
 - A change to an endpoint or a response shape gets such a test; once the console reads the API, the response is typed by the contract.
 - Before handoff of a user-visible change, start the service with `bun start` and exercise the changed behavior once; report the command and result.
 
@@ -100,12 +100,17 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 
 ## This repository
 
-- The page is server-rendered HTML from a template string in `src/page.ts`. There is no client
-  script, stylesheet, font or image; the CSP (`default-src 'none'`) forbids them. A change that
-  needs one widens the CSP in `src/server.ts` in the same change.
+- Pages are server-rendered HTML from template strings in `src/pages.ts`; every value goes
+  through kit `escapeHtml`. The only asset is the stylesheet in `src/styles.ts`, served at
+  `/console.css`. The CSP in `src/server.ts` is `default-src 'none'; script-src 'self';
+  style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors
+  'none'`: no inline script or style and no external asset. A change that needs more widens the
+  CSP in the same change.
+- Every form POST follows the fixed order in `docs/configuration.md` (Origin, content type, body
+  size, repeated fields, CSRF before any other check of the form).
 - The server compares the raw request path (`req.url` up to the first `?`) byte for byte. Never
   route on a parsed `URL.pathname`: it turns `//healthz` or `/%2e%2e/` into `/`.
-- The admin token never appears in a log line, an error, `/metrics` or a response.
+- The admin token, passwords and the setup code never appear in a log line, an error, `/metrics` or a response (the code's one stdout line excepted).
 
 ## Shared tooling configuration
 
