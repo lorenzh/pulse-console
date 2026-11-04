@@ -204,6 +204,55 @@ describe("readOverview", () => {
     });
   }
 
+  const noHeader: FakeReply = {
+    status: 200,
+    body: JSON.stringify(emptyConfig),
+    headers: { "content-type": "application/json" },
+  };
+  const noHeaderChecks: FakeReply = {
+    status: 200,
+    body: "[]",
+    headers: { "content-type": "application/json" },
+  };
+  const warnings: [string, FakeReply, FakeReply, string[]][] = [
+    [
+      "config without header, checks 503",
+      noHeader,
+      { status: 503 },
+      ["checks:http", "config:missing-header"],
+    ],
+    [
+      "config 503, checks without header",
+      { status: 503 },
+      noHeaderChecks,
+      ["config:http", "checks:missing-header"],
+    ],
+    [
+      "config 401, checks without header",
+      { status: 401 },
+      noHeaderChecks,
+      ["config:http", "checks:missing-header"],
+    ],
+    ["config 403, checks 503", { status: 403 }, { status: 503 }, ["config:http", "checks:http"]],
+    [
+      "both without header",
+      noHeader,
+      noHeaderChecks,
+      ["config:missing-header", "checks:missing-header"],
+    ],
+  ];
+  for (const [name, config, checks, expected] of warnings) {
+    test(`one warning per failed read: ${name}`, async () => {
+      setReplies(api, config, checks);
+      const { deps, logs } = depsWith();
+      await readOverview(api.url, deps);
+      expect(logs.map((l) => `${String(l.fields.call)}:${String(l.fields.kind)}`)).toEqual(
+        expected,
+      );
+      expect(logs.map((l) => l.message)).toEqual(expected.map(() => "api read failed"));
+    });
+  }
+
   test("a 302 is not followed: the destination gets 0 requests", async () => {
     second.seen.length = 0;
     setReplies(api, okConfig, { status: 302, headers: { location: `${second.url}/checks` } });

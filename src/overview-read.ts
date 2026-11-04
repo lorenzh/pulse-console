@@ -103,6 +103,9 @@ export async function readOverview(apiUrl: string, deps: OverviewReadDeps): Prom
   ]);
   const configFailure = failureOf("config", config, origin, deps);
   const checksFailure = failureOf("checks", checks, origin, deps);
+  // Log every failed read before any return, so each failure gets its one warning.
+  const isConfigAbsent = isWireAbsent("config", config, deps);
+  const isChecksAbsent = isWireAbsent("checks", checks, deps);
   if (configFailure?.kind === "http" && configFailure.status === 401) {
     return { kind: "token-rejected" };
   }
@@ -110,8 +113,6 @@ export async function readOverview(apiUrl: string, deps: OverviewReadDeps): Prom
   if (failure !== undefined) {
     return { kind: "failed", failure };
   }
-  const isConfigAbsent = isWireAbsent("config", config, deps);
-  const isChecksAbsent = isWireAbsent("checks", checks, deps);
   if (isConfigAbsent || isChecksAbsent || !checks.result.ok) {
     return { kind: "failed", failure: { kind: "missing-header" } };
   }
