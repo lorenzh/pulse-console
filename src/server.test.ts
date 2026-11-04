@@ -1,16 +1,23 @@
+/* eslint-disable sonarjs/no-clear-text-protocols -- loopback test servers and URL inputs under test */
 import { afterEach, describe, expect, test } from "bun:test";
+import { chmodSync, closeSync, mkdtempSync, openSync, rmSync } from "node:fs";
 import { createServer as createHttpServer, type Server } from "node:http";
 import { connect } from "node:net";
-import { StartupError } from "@lorenzh/pulse-kit";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createLogger, StartupError } from "@lorenzh/pulse-kit";
+import { createAccountStore } from "./account-store.ts";
+import { openDatabase } from "./database.ts";
 import { createMetrics, type Metrics } from "./metrics.ts";
 import { createConsoleServer, listen } from "./server.ts";
+import { createSetupGate } from "./setup-code.ts";
 
 const HEADERS = {
   "content-security-policy":
-    "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
-  "referrer-policy": "no-referrer",
+  "referrer-policy": "same-origin",
 };
 
 interface Running {
@@ -20,7 +27,9 @@ interface Running {
 }
 
 const servers: Server[] = [];
+const dirs: string[] = [];
 afterEach(async () => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   for (const s of servers.splice(0)) {
     await new Promise<void>((resolve) => {
       s.close(() => resolve());
@@ -29,9 +38,34 @@ afterEach(async () => {
   }
 });
 
+function depsFor(metrics: Metrics): Parameters<typeof createConsoleServer>[0] {
+  const dir = mkdtempSync(join(tmpdir(), "console-server-"));
+  dirs.push(dir);
+  const db = openDatabase(join(dir, "console.db"), {
+    createFile: (path, mode) => closeSync(openSync(path, "wx", mode)),
+    chmod: chmodSync,
+  });
+  const bytes = (size: number): Uint8Array => new Uint8Array(size).fill(7);
+  return {
+    metrics,
+    log: createLogger({ level: "error", write: () => undefined }),
+    mode: "loopback",
+    publicOrigin: undefined,
+    defaultApiUrl: "http://api.invalid:3000",
+    adminToken: undefined,
+    store: createAccountStore(db),
+    gate: createSetupGate({ now: () => 0, randomBytes: bytes }).gate,
+    now: () => 0,
+    randomBytes: bytes,
+    hashPassword: () => Promise.reject(new Error("not used")),
+    verifier: { verify: () => Promise.reject(new Error("not used")) },
+    fetch: () => Promise.reject(new Error("no network in this test")),
+  };
+}
+
 async function start(): Promise<Running> {
   const metrics = createMetrics();
-  const server = createConsoleServer(metrics);
+  const server = createConsoleServer(depsFor(metrics));
   servers.push(server);
   const port = await listen(server, "127.0.0.1", 0);
   return { base: `http://127.0.0.1:${port}`, port, metrics };
@@ -67,41 +101,49 @@ function requestSeries(text: string): string[] {
   return text.split("\n").filter((l) => l.startsWith("pulse_console_http_requests_total{"));
 }
 
-describe("page", () => {
-  test("GET / serves the HTML page", async () => {
+describe("app routes", () => {
+  test("GET / before setup redirects to /setup with the security headers", async () => {
     const { base } = await start();
-    const res = await fetch(`${base}/`);
+    const res = await fetch(`${base}/`, { redirect: "manual" });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/setup");
+    expectSecurityHeaders(res);
+  });
+
+  test("GET /setup serves the HTML page with the stylesheet link and no inline assets", async () => {
+    const { base } = await start();
+    const res = await fetch(`${base}/setup`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
     expect(res.headers.get("cache-control")).toBe("no-store");
     expectSecurityHeaders(res);
     const html = await res.text();
     expect(html.startsWith("<!doctype html>")).toBe(true);
-    expect(html).toContain('<html lang="en">');
-    expect(html).toContain('<meta charset="utf-8">');
     expect(html).toContain('<meta name="viewport" content="width=device-width, initial-scale=1">');
-    expect(html).toContain("<title>pulse Console</title>");
-    expect(html).toContain("<h1>pulse Console</h1>");
+    expect(html).toContain("pulse Console</title>");
+    expect(html).toContain('<link rel="stylesheet" href="/console.css">');
     expect(html).not.toContain("<script");
     expect(html).not.toContain("<style");
+    expect(html).not.toContain(" style=");
+    expect(html).not.toMatch(/(?:src|href)="https?:/);
   });
 
-  test("HEAD / answers the same headers without a body", async () => {
+  test("HEAD /setup answers the same headers without a body", async () => {
     const { base } = await start();
-    const res = await fetch(`${base}/`, { method: "HEAD" });
+    const res = await fetch(`${base}/setup`, { method: "HEAD" });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
-    expect(res.headers.get("cache-control")).toBe("no-store");
     expectSecurityHeaders(res);
     expect(await res.text()).toBe("");
   });
 
-  test("the query string never reaches the page", async () => {
+  test("GET /console.css serves the stylesheet", async () => {
     const { base } = await start();
-    const plain = await (await fetch(`${base}/`)).text();
-    const res = await fetch(`${base}/?x=<script>`);
+    const res = await fetch(`${base}/console.css`);
     expect(res.status).toBe(200);
-    expect(await res.text()).toBe(plain);
+    expect(res.headers.get("content-type")).toBe("text/css; charset=utf-8");
+    expectSecurityHeaders(res);
+    expect(await res.text()).toContain(":focus-visible");
   });
 });
 
@@ -174,17 +216,18 @@ describe("other paths and methods", () => {
     ]);
   });
 
-  test("other methods are 405 with allow on every path, before the ops routes", async () => {
+  test("other methods are 405 with the allowed methods of the route", async () => {
     const { base } = await start();
-    for (const [method, path] of [
-      ["POST", "/"],
-      ["DELETE", "/readyz"],
-      ["PUT", "/metrics"],
-      ["PATCH", "/nope"],
+    for (const [method, path, allow] of [
+      ["POST", "/", "GET, HEAD"],
+      ["DELETE", "/readyz", "GET, HEAD"],
+      ["PUT", "/metrics", "GET, HEAD"],
+      ["PUT", "/setup", "GET, HEAD, POST"],
+      ["GET", "/sign-out", "POST"],
     ] as const) {
       const res = await fetch(base + path, { method });
       expect(res.status).toBe(405);
-      expect(res.headers.get("allow")).toBe("GET, HEAD");
+      expect(res.headers.get("allow")).toBe(allow);
       expect(await res.text()).toBe("");
       expectSecurityHeaders(res);
     }
@@ -201,19 +244,28 @@ describe("other paths and methods", () => {
     expect(answer.toLowerCase()).toContain("allow: get, head");
   });
 
+  test("an unknown path is 404 for every method", async () => {
+    const { base } = await start();
+    expect((await fetch(`${base}/nope`, { method: "PATCH" })).status).toBe(404);
+  });
+
   test("/metrics counts responses by path label and code", async () => {
     const { base } = await start();
-    await fetch(`${base}/`);
+    await fetch(`${base}/`, { redirect: "manual" });
+    await fetch(`${base}/setup`);
+    await fetch(`${base}/console.css`);
     await fetch(`${base}/healthz`);
     await fetch(`${base}/readyz`);
     await fetch(`${base}/nope`);
     await fetch(`${base}/`, { method: "POST" });
     const text = await metricsText(base);
     expect(requestSeries(text).sort((a, b) => a.localeCompare(b))).toEqual([
-      'pulse_console_http_requests_total{path="/",code="200"} 1',
+      'pulse_console_http_requests_total{path="/",code="303"} 1',
       'pulse_console_http_requests_total{path="/",code="405"} 1',
+      'pulse_console_http_requests_total{path="/console.css",code="200"} 1',
       'pulse_console_http_requests_total{path="/healthz",code="200"} 1',
       'pulse_console_http_requests_total{path="/readyz",code="200"} 1',
+      'pulse_console_http_requests_total{path="/setup",code="200"} 1',
       'pulse_console_http_requests_total{path="other",code="404"} 1',
     ]);
   });
@@ -224,7 +276,7 @@ describe("listen", () => {
     const blocker = createHttpServer();
     servers.push(blocker);
     const port = await listen(blocker, "127.0.0.1", 0);
-    const server = createConsoleServer(createMetrics());
+    const server = createConsoleServer(depsFor(createMetrics()));
     servers.push(server);
     const err: unknown = await listen(server, "127.0.0.1", port).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(StartupError);

@@ -5,7 +5,8 @@
     "": {
       "name": "@lorenzh/pulse-console",
       "dependencies": {
-        "@lorenzh/pulse-kit": "github:lorenzh/pulse-kit#236df214f9df8658f2992dd6f7c100952c07102b",
+        "@lorenzh/pulse-contract": "github:lorenzh/pulse-contract#2c4e0e08201c6efcfff1cd1f7835616e1dff9de3",
+        "@lorenzh/pulse-kit": "github:lorenzh/pulse-kit#536133f3e8b708179fa01feeb02395a0e1961e07",
       },
       "devDependencies": {
         "@biomejs/biome": "2.6.3",
@@ -74,7 +75,9 @@
 
     "@lorenzh/pulse-config": ["@lorenzh/pulse-config@github:lorenzh/pulse-config#04108fa", { "dependencies": { "@types/bun": "1.4.0", "@typescript-eslint/eslint-plugin": "8.72.1", "@typescript-eslint/parser": "8.72.1", "eslint": "10.13.0", "eslint-plugin-sonarjs": "4.2.2", "typescript": "6.0.3" }, "bin": { "pulse-eslint": "./bin/pulse-eslint.js", "pulse-workflows": "./bin/pulse-workflows.js" } }, "lorenzh-pulse-config-04108fa", "sha512-spdP32t+kLr9477W1ozgckPmVGYXg+bCwBUELol983lhW6S9m+SsGsDE2yrmGNOGRwcwrGS0l21tvAAZdmu9UQ=="],
 
-    "@lorenzh/pulse-kit": ["@lorenzh/pulse-kit@github:lorenzh/pulse-kit#236df21", {}, "lorenzh-pulse-kit-236df21", "sha512-ys0EUPPEcW0mPgFXmVuh7FTpET4gOBZWpI/PNl78kk0SPV/HH2JTs9mFgJ095lD76U7/j3h1od+QY7qi8WvIiA=="],
+    "@lorenzh/pulse-contract": ["@lorenzh/pulse-contract@github:lorenzh/pulse-contract#2c4e0e0", { "dependencies": { "zod": "4.6.7" } }, "lorenzh-pulse-contract-2c4e0e0", "sha512-btZuF2/L5oRBwKC+h3aVjQachXs4Vbvh0/Awqq5xTVcxEANxxufZ0EXPG4ZxE5N96z6/yHTyik+SouJhuzMvVg=="],
+
+    "@lorenzh/pulse-kit": ["@lorenzh/pulse-kit@github:lorenzh/pulse-kit#536133f", {}, "lorenzh-pulse-kit-536133f", "sha512-X+xuaL/LoCt8K8vVE0rfEuHykj9URJ8/FJUrYNLFiAQZs/zB+wlJ/Y1WbvjcqXS2nvvOd7C3Oq5QO8qaTzJgCw=="],
 
     "@sonarsource/analyzer-commons-configurations": ["@sonarsource/analyzer-commons-configurations@2.31.0-5284", "", {}, "sha512-ruk3blMs9BE9RNSp9LPpWZAIjxJmq4Cp00E3cELIHz7Kym3WxdWGRlKOMYLRQ5tJg/de7jN5AtEElY3bGIfTcw=="],
 
@@ -323,6 +326,8 @@
     "yaml": ["yaml@2.9.1", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw=="],
 
     "yocto-queue": ["yocto-queue@0.1.0", "", {}, "sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q=="],
+
+    "zod": ["zod@4.6.7", "", {}, "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg=="],
 
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 

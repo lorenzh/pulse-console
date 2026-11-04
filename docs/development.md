@@ -13,12 +13,15 @@ Open <http://127.0.0.1:8082>. Bun runs the TypeScript source directly (no build 
 
 ## Code layout
 
-- `src/main.ts` reads the log level and the settings, starts the server and wires shutdown through pulse-kit's `runService`. It is the only module that touches `process.env` and the file system.
-- `src/settings.ts` reads and validates `PULSE_API_URL`, `PULSE_CONSOLE_PORT` and `PULSE_CONSOLE_HOST` (pure; the token file is read through a passed-in `readFile`).
+- `src/main.ts` reads the log level and the settings, opens the database, prints the setup code, starts the server and wires shutdown through pulse-kit's `runService`. It is the only module that touches `process.env`, the file system, `crypto` randomness, `Bun.password` and stdout.
+- `src/settings.ts` reads and validates the settings and selects the mode (pure; the token file is read through a passed-in `readFile`).
 - `src/admin-token.ts` reads and validates the optional admin token from `PULSE_CONSOLE_ADMIN_TOKEN` or `PULSE_CONSOLE_ADMIN_TOKEN_FILE`.
-- `src/server.ts` is the HTTP server: security headers, the raw path rule, `405`, the page, the ops routes through pulse-kit's `handleOps`, and `404`. `listen` reports a bind failure with the error code only.
-- `src/page.ts` is the static HTML page.
-- `src/metrics.ts` holds `pulse_up`, the request counter and the readiness state.
+- `src/database.ts` opens the SQLite file (mode `0600`, pragmas, migrations); `src/account-store.ts` holds the instance row, the owner, the setup transaction and sessions.
+- `src/setup-code.ts` makes the setup code and the grant; `src/auth-throttle.ts` is the failure limiter; `src/passwords.ts` holds the password rules and hash parameters; `src/cookies.ts` names and serializes cookies; `src/connection-test.ts` calls pulse-api.
+- `src/request-guard.ts` holds the loopback `Host`, `Origin`, CSRF and `next` rules; `src/forms.ts` the content type, repeated-field and field rules.
+- `src/server.ts` is the HTTP server: security headers and CSP, the raw path rule, routes, phases and the POST order, the ops routes through pulse-kit's `handleOps`, and `404`. `listen` reports a bind failure with the error code only.
+- `src/pages.ts` holds the HTML templates; `src/styles.ts` the stylesheet served at `/console.css`.
+- `src/metrics.ts` holds `pulse_up`, the request and auth counters and the readiness state.
 
 ## Checks
 
@@ -38,7 +41,11 @@ Work test first. Tests sit next to the code as `src/<module>.test.ts`, use hand-
 
 - `src/settings.test.ts` and `src/admin-token.test.ts` call `readSettings` and `readAdminToken` with an env object and a fake `readFile`. They cover every rule and error text, and check that no value appears in a message.
 - `src/server.test.ts` starts the real server on `127.0.0.1` port `0` and drives it over HTTP. The path-rule cases (`//healthz`, `/%2e%2e/`, …) are written as raw request lines over `node:net`, because `fetch` normalises them before sending.
-- `src/main.startup.test.ts` spawns `bun src/main.ts` and checks the exit code and stderr line of a bad setting, the start log and the exit code `0` on `SIGTERM`.
+- `src/server.setup.test.ts` drives the setup flow against a real server and a fake pulse-api, both on port `0`, with a `mkdtemp` database and an injected clock. It also signs in, scans the database file for sentinels and the plain session id, compares `sessions.id_digest` with a digest from `node:crypto`, and runs a leak scan of the full flow for two clients.
+- `src/server.sign-in.test.ts` covers sign-in, the throttle, session rotation, the idle limit, the cookie refresh, `next` and sign-out.
+- `src/server.security.test.ts` covers the POST order, `Host`, `Origin`, CSRF, body limits, the CSP, cookie attributes and a leak scan.
+- `src/main.startup.test.ts` spawns `bun src/main.ts` and checks bad settings and database errors, the setup code line, the warnings, the start log, the file mode and the exit code `0` on `SIGTERM`.
+- Test helpers stay inside the `*.test.ts` file that uses them, because the image check rejects only those names.
 
 ## Lefthook
 
@@ -53,12 +60,15 @@ Work test first. Tests sit next to the code as `src/<module>.test.ts`, use hand-
   1. builds `pulse-console:local`;
   2. fails if the image holds `*.test.ts` or `*.spec.ts` files outside `node_modules`, or `/app/node_modules/@biomejs`, `/app/node_modules/lefthook`, `/app/node_modules/typescript7` or `/app/bunfig.toml` (no tests or dev packages ship);
   3. `Image ignores dotenv files` runs `bash scripts/image-dotenv.sh pulse-console:local`: a control run proves that `PULSE_LOG_LEVEL` from the environment is read; then `.env`, `.env.production` and `.env.local` holding a bad `PULSE_LOG_LEVEL` and `PULSE_CONSOLE_PORT=1` are mounted into `/app` in turn, and the container must pass its own healthcheck, keep the marker out of its logs and stop with `0`; last, `Cmd` and the healthcheck must start Bun with `--no-env-file`. The script prints `ok:` or `FAIL:` per case and runs all cases;
-  4. starts the container with `PULSE_API_URL=http://api.invalid:3000` and a sentinel admin token and waits up to 30 s for `/readyz` to answer `200` (the service starts and is ready);
+  4. starts the container with the volume `console-ci-data:/data`, `PULSE_API_URL=http://api.invalid:3000` and a sentinel admin token and waits up to 30 s for `/readyz` to answer `200` (the service starts and is ready);
   5. checks that `id -u` in the container is not `0` (non-root);
-  6. checks that `/` holds `pulse Console` and carries `x-frame-options: DENY` (page and headers);
-  7. checks that the sentinel token is in neither the container logs nor the page (no secret leaks);
-  8. checks that `docker stop` gives exit code `0` (graceful shutdown);
-  9. checks that a container without `PULSE_API_URL` exits `2` with `PULSE_API_URL must be set` (settings are validated).
+  6. follows the redirect of `/` and checks that the page holds `pulse Console` and carries `x-frame-options: DENY` (page and headers);
+  7. checks that the log holds exactly one `pulse-console setup code:` line;
+  8. checks that `/data/console.db` belongs to `bun` with mode `600`;
+  9. scans the database file and its sidecars for the sentinel token: the file must be readable, start with `SQLite format 3`, and `grep -c` must exit `1` with `0` for each file;
+  10. checks that the sentinel token is in neither the container logs nor the page (no secret leaks);
+  11. checks that `docker stop` gives exit code `0` (graceful shutdown);
+  12. checks that a container without `PULSE_API_URL` exits `2` with `PULSE_API_URL must be set` (settings are validated).
 - `release` runs only on a tag. It needs `check` and both `docker` legs, and calls the shared `release.yml` workflow of `lorenzh/pulse-config` (see [Releasing](#releasing)). On pull requests and on `main` it is skipped.
 
 A tag run is never cancelled by a later push to the same ref; branch and pull request runs are.

@@ -6,10 +6,11 @@ RUN bun install --frozen-lockfile --production --ignore-scripts
 
 FROM oven/bun:1.4.0-alpine@sha256:07235578f79ef8c6f97d94aee7938e76f5cdba5f21ae5dbfdd3d3d38058437eb
 WORKDIR /app
-ENV NODE_ENV=production PULSE_CONSOLE_HOST=0.0.0.0
+ENV NODE_ENV=production PULSE_CONSOLE_HOST=0.0.0.0 PULSE_CONSOLE_DB=/data/console.db
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
+RUN mkdir /data && chown bun:bun /data
 USER bun
 EXPOSE 8082
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

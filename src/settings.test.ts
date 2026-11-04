@@ -74,6 +74,9 @@ describe("PULSE_CONSOLE_PORT and PULSE_CONSOLE_HOST", () => {
       port: 8082,
       host: "127.0.0.1",
       adminToken: undefined,
+      publicOrigin: undefined,
+      mode: "loopback",
+      dbPath: "./console.db",
     });
     const blank = readSettings(
       { PULSE_API_URL: API, PULSE_CONSOLE_PORT: "", PULSE_CONSOLE_HOST: " " },
@@ -123,5 +126,92 @@ describe("order of checks", () => {
     expect(
       failure({ PULSE_API_URL: API, PULSE_CONSOLE_ADMIN_TOKEN: "abcdefghijklmnopqrstuvwxyz01234" }),
     ).toBe("PULSE_CONSOLE_ADMIN_TOKEN must hold at least 32 characters");
+  });
+});
+
+describe("PULSE_CONSOLE_DB", () => {
+  test("defaults to ./console.db; blank counts as unset; the value is trimmed", () => {
+    expect(readSettings({ PULSE_API_URL: API }, noFile).dbPath).toBe("./console.db");
+    expect(readSettings({ PULSE_API_URL: API, PULSE_CONSOLE_DB: "  " }, noFile).dbPath).toBe(
+      "./console.db",
+    );
+    expect(
+      readSettings({ PULSE_API_URL: API, PULSE_CONSOLE_DB: " /data/console.db\n" }, noFile).dbPath,
+    ).toBe("/data/console.db");
+  });
+
+  test("DATABASE_URL is not read", () => {
+    const s = readSettings({ PULSE_API_URL: API, DATABASE_URL: "postgres://x/y" }, noFile);
+    expect(s.dbPath).toBe("./console.db");
+    expect(JSON.stringify(s)).not.toContain("postgres");
+  });
+});
+
+describe("PULSE_CONSOLE_PUBLIC_URL and the mode", () => {
+  const NAME = "PULSE_CONSOLE_PUBLIC_URL";
+  const mode = (value: string): unknown =>
+    readSettings({ PULSE_API_URL: API, [NAME]: value }, noFile).mode;
+
+  test("unset, blank or an http loopback host selects loopback", () => {
+    expect(readSettings({ PULSE_API_URL: API, [NAME]: " " }, noFile).mode).toBe("loopback");
+    for (const value of ["http://127.0.0.1:8082", "http://localhost:8082/", "http://[::1]:8082"]) {
+      expect(mode(value)).toBe("loopback");
+    }
+  });
+
+  test("https selects strict-https, other http hosts select strict-http", () => {
+    expect(mode("https://console.example.com")).toBe("strict-https");
+    expect(mode("https://localhost")).toBe("strict-https");
+    expect(mode("http://console.example.com")).toBe("strict-http");
+    expect(mode("http://10.0.0.5:8082")).toBe("strict-http");
+  });
+
+  test("the value is kept as its origin", () => {
+    const s = readSettings(
+      { PULSE_API_URL: API, [NAME]: "https://Console.Example.com:443/" },
+      noFile,
+    );
+    expect(s.publicOrigin).toBe("https://console.example.com");
+  });
+
+  test("invalid values get the PULSE_API_URL texts with this name, without the value", () => {
+    const cases: [string, string][] = [
+      ["http://con\tsole.example", `${NAME}: must not contain whitespace or control characters`],
+      [
+        "http://u:secret@console.example",
+        `${NAME}: must be an http(s) URL without credentials, query or fragment`,
+      ],
+      [
+        "http://console.example/?secret=1",
+        `${NAME}: must be an http(s) URL without credentials, query or fragment`,
+      ],
+      [
+        "http://console.example/#secret",
+        `${NAME}: must be an http(s) URL without credentials, query or fragment`,
+      ],
+      [
+        "ftp://console.example",
+        `${NAME}: must be an http(s) URL without credentials, query or fragment`,
+      ],
+      ["http://console.example/secret", `${NAME}: must not have a path other than /`],
+      ["https://console.example//", `${NAME}: must not have a path other than /`],
+      ["https://console.example/a/", `${NAME}: must not have a path other than /`],
+    ];
+    for (const [value, text] of cases) {
+      const message = failure({ PULSE_API_URL: API, [NAME]: value });
+      expect(message).toBe(text);
+      expect(message).not.toContain("secret");
+    }
+  });
+
+  test("order: host, then public URL, then the admin token", () => {
+    const bad = { PULSE_CONSOLE_PUBLIC_URL: "ftp://x", PULSE_CONSOLE_ADMIN_TOKEN: "short" };
+    expect(failure({ PULSE_CONSOLE_PORT: "x", ...bad })).toBe("PULSE_API_URL must be set");
+    expect(failure({ PULSE_API_URL: API, PULSE_CONSOLE_PORT: "x", ...bad })).toBe(
+      "PULSE_CONSOLE_PORT: must be an integer from 0 to 65535",
+    );
+    expect(failure({ PULSE_API_URL: API, ...bad })).toBe(
+      `${NAME}: must be an http(s) URL without credentials, query or fragment`,
+    );
   });
 });

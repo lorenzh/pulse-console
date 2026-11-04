@@ -50,6 +50,7 @@ jobs:
       - name: Start the container and wait for /readyz
         run: |
           docker run -d --name console -p 127.0.0.1:8082:8082 \
+            -v console-ci-data:/data \
             -e PULSE_API_URL=http://api.invalid:3000 \
             -e PULSE_CONSOLE_ADMIN_TOKEN=console-ci-sentinel-token-0123456789ab \
             pulse-console:local
@@ -74,9 +75,51 @@ jobs:
           echo "ok: uid $uid"
       - name: Check the page and its headers
         run: |
-          curl -fsS http://127.0.0.1:8082/ > page.html
+          curl -fsSL http://127.0.0.1:8082/ > page.html
           grep -F 'pulse Console' page.html
-          curl -sI http://127.0.0.1:8082/ | grep -i 'x-frame-options: DENY'
+          curl -sIL http://127.0.0.1:8082/ | grep -i 'x-frame-options: DENY'
+      - name: Check the log holds one setup code line
+        run: |
+          count=$(docker logs console 2>&1 | grep -cE 'pulse-console setup code: [0-9a-f]{4}(-[0-9a-f]{4}){7}' || true)
+          if [ "$count" != "1" ]; then
+            echo "Setup code lines in the log: $count"
+            exit 1
+          fi
+          echo "ok: one setup code line"
+      - name: Check the database file owner and mode
+        run: |
+          bun_uid=$(docker exec console id -u bun)
+          got=$(docker exec console stat -c '%u %a' /data/console.db)
+          if [ "$got" != "$bun_uid 600" ]; then
+            echo "Owner and mode of /data/console.db: $got"
+            exit 1
+          fi
+          echo "ok: $got"
+      - name: Check the token is not in the database
+        run: |
+          docker exec console sh -c '
+            set -u
+            db=/data/console.db
+            test -f "$db" || { echo "$db is not a regular file"; exit 1; }
+            test -r "$db" || { echo "$db is not readable"; exit 1; }
+            files="$db"
+            for side in "$db-wal" "$db-shm"; do
+              if test -e "$side"; then
+                test -r "$side" || { echo "$side is not readable"; exit 1; }
+                files="$files $side"
+              fi
+            done
+            [ "$(head -c 15 "$db")" = "SQLite format 3" ] || { echo "$db has no SQLite header"; exit 1; }
+            for f in $files; do
+              out=$(grep -a -c -F console-ci-sentinel-token-0123456789ab "$f")
+              code=$?
+              if [ "$code" != "1" ] || [ "$out" != "0" ]; then
+                echo "scan of $f: exit $code, count $out"
+                exit 1
+              fi
+            done
+            echo "ok: the token is not in $files"
+          '
       - name: Check the admin token is not in the logs or the page
         run: |
           if docker logs console 2>&1 | grep -F 'console-ci-sentinel-token-0123456789ab'; then
