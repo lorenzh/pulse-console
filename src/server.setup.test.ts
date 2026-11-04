@@ -578,6 +578,58 @@ describe("completion", () => {
     }
   });
 
+  test("a 2.0.0 api answer tests with Checks: 3 and completes with 303", async () => {
+    const config200 = {
+      revision: `sha256-${"2".repeat(64)}`,
+      checks: [
+        {
+          id: "a",
+          name: "A",
+          url: "https://a.test",
+          intervalMs: 1000,
+          method: "POST",
+          headers: { authorization: { keep: true } },
+          body: { keep: true },
+          source: "database",
+        },
+        { id: "b", name: "B", url: "https://b.test", intervalMs: 1000, source: "file" },
+        {
+          id: "h",
+          name: "H",
+          type: "heartbeat",
+          period: 1000,
+          grace: 0,
+          hasSecret: true,
+          source: "file",
+        },
+      ],
+      shadowed: [
+        { id: "b", name: "B db", url: "https://b.test", intervalMs: 1000, source: "database" },
+      ],
+      components: [],
+      maintenance: [],
+      file: { state: "invalid", message: "checks[0].url: is required", lastAppliedAt: 7 },
+    };
+    const headers = { "content-type": "application/json", "x-pulse-contract": "1" };
+    const api = startApi((path) =>
+      path.endsWith("/admin/config")
+        ? Response.json(config200, { headers })
+        : Response.json({ tokens: [] }, { headers }),
+    );
+    const c = await startConsole();
+    const client = new Client(c);
+    await client.unlock();
+    const tested = await client.post("/setup/owner", ownerFields(api.url, "test"));
+    expect(tested.status).toBe(200);
+    expect(tested.body).toContain(
+      '<p id="connection-result">Connected. Wire version: 1. Checks: 3.</p>',
+    );
+    const done = await client.post("/setup/owner", ownerFields(api.url, "complete"));
+    expect(done.status).toBe(303);
+    expect(done.headers.get("location")).toBe("/sign-in?setup=done");
+    for (const r of client.responses) expect(r.body).not.toContain(TOKEN);
+  });
+
   test("two admitted concurrent completions give one 303 and one 409", async () => {
     let waiting: (() => void)[] = [];
     const api = startApi(async (path) => {

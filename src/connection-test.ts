@@ -3,7 +3,7 @@ import {
   type FetchJsonOptions,
   type FetchJsonResult,
   fetchJson,
-  validateAdminConfigResponse,
+  validateAdminConfigSummary,
   validateTokensResponse,
   WIRE_VERSION,
   WIRE_VERSION_HEADER,
@@ -126,7 +126,7 @@ export async function testConnection(
       : undefined;
   };
 
-  const config = await get("/admin/config", (raw) => validateAdminConfigResponse(raw));
+  const config = await get("/admin/config", (raw) => validateAdminConfigSummary(raw));
   const configFailure = check("config", config);
   if (configFailure !== undefined || !config.ok) {
     return failed(configFailure ?? "pulse-api sent an invalid answer.");
