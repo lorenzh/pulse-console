@@ -58,6 +58,7 @@ function depsFor(metrics: Metrics): Parameters<typeof createConsoleServer>[0] {
     now: () => 0,
     randomBytes: bytes,
     hashPassword: () => Promise.reject(new Error("not used")),
+    verifier: { verify: () => Promise.reject(new Error("not used")) },
     fetch: () => Promise.reject(new Error("no network in this test")),
   };
 }

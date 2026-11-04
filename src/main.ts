@@ -3,7 +3,7 @@ import { createLogger, readLogLevel, runService, StartupError } from "@lorenzh/p
 import { createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
 import { createMetrics } from "./metrics.ts";
-import { PASSWORD_HASH_OPTIONS } from "./passwords.ts";
+import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { createConsoleServer, listen } from "./server.ts";
 import { readSettings } from "./settings.ts";
 import { createSetupGate } from "./setup-code.ts";
@@ -53,6 +53,13 @@ async function start(): Promise<void> {
       `pulse-console setup code: ${setup.code} (open /setup; a restart prints a new code)\n`,
     );
   }
+  const hashPassword = (password: string): Promise<string> =>
+    Bun.password.hash(password, PASSWORD_HASH_OPTIONS);
+  const verifier = await createCredentialVerifier({
+    hash: hashPassword,
+    verify: (password, hash) => Bun.password.verify(password, hash),
+    dummySecret: Buffer.from(randomBytes(32)).toString("base64url"),
+  });
   const metrics = createMetrics();
   const server = createConsoleServer({
     metrics,
@@ -65,7 +72,8 @@ async function start(): Promise<void> {
     gate,
     now: Date.now,
     randomBytes,
-    hashPassword: (password) => Bun.password.hash(password, PASSWORD_HASH_OPTIONS),
+    hashPassword,
+    verifier,
     fetch,
   });
   const port = await listen(server, settings.host, settings.port);

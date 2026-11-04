@@ -9,7 +9,7 @@ import {
   readBody,
   StartupError,
 } from "@lorenzh/pulse-kit";
-import type { AccountStore } from "./account-store.ts";
+import type { AccountStore, Session, User } from "./account-store.ts";
 import { type AuthThrottle, createAuthThrottle } from "./auth-throttle.ts";
 import { type FetchLike, NO_TOKEN_TEXT, testConnection } from "./connection-test.ts";
 import { readCookie, serializeCookie, serializeCookieDeletion } from "./cookies.ts";
@@ -27,6 +27,7 @@ import {
 import type { Metrics, PathLabel } from "./metrics.ts";
 import {
   type ConnectionView,
+  landingPage,
   messagePage,
   type OwnerErrors,
   type OwnerValues,
@@ -34,7 +35,11 @@ import {
   setupOwnerPage,
   signInPage,
 } from "./pages.ts";
-import type { HashPassword } from "./passwords.ts";
+import {
+  type CredentialVerifier,
+  type HashPassword,
+  isSignInPasswordAcceptable,
+} from "./passwords.ts";
 import {
   expectedOrigin,
   isCsrfTokenValid,
@@ -82,6 +87,11 @@ const OWNER_FIELDS = [
   "csrf",
 ] as const;
 const SIGN_OUT_FIELDS = ["csrf"] as const;
+const SIGN_IN_FIELDS = ["email", "password", "next"] as const;
+const SESSION_IDLE_MS = 2_592_000_000;
+const SESSION_TOUCH_MS = 60_000;
+const WRONG_CREDENTIALS = "Wrong email or password.";
+const EXPIRED = "Your session has expired.";
 
 export interface ConsoleServerDeps {
   metrics: Metrics;
@@ -97,11 +107,19 @@ export interface ConsoleServerDeps {
   now: () => number;
   randomBytes: (size: number) => Uint8Array;
   hashPassword: HashPassword;
+  /** Checks a sign-in password; an unknown account runs the dummy verification. */
+  verifier: CredentialVerifier;
   fetch: FetchLike;
   schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
 }
 
-type State = { gate: SetupGate | undefined; setupThrottle: AuthThrottle<"client"> };
+type State = {
+  gate: SetupGate | undefined;
+  setupThrottle: AuthThrottle<"client">;
+  signInThrottle: AuthThrottle<"account" | "client">;
+};
+
+type SignedIn = { id: string; session: Session; user: User };
 
 type Ctx = {
   req: IncomingMessage;
@@ -192,6 +210,54 @@ function ensureCsrf(ctx: Ctx): string {
   return token;
 }
 
+/** The live session row of this request's cookie, without touching it. */
+function liveSession(ctx: Ctx): { id: string; session: Session } | undefined {
+  const id = cookieOf(ctx, "session");
+  if (id === undefined) return undefined;
+  const session = ctx.deps.store.session(id);
+  if (session === undefined || ctx.deps.now() >= session.lastSeenAt + SESSION_IDLE_MS) {
+    return undefined;
+  }
+  return { id, session };
+}
+
+/**
+ * The signed-in user of this request, or undefined. A touch after 60000 ms also refreshes the
+ * session cookie with the same value.
+ */
+function signedInOf(ctx: Ctx): SignedIn | undefined {
+  const live = liveSession(ctx);
+  if (live === undefined) return undefined;
+  const user = ctx.deps.store.userById(live.session.userId);
+  if (user === undefined) return undefined;
+  const now = ctx.deps.now();
+  if (now - live.session.lastSeenAt >= SESSION_TOUCH_MS) {
+    ctx.deps.store.touchSession(live.id, now);
+    ctx.cookies.push(serializeCookie("session", live.id, ctx.deps.mode));
+  }
+  return { ...live, user };
+}
+
+function sendLanding(ctx: Ctx, isSetUp: boolean): void {
+  if (!isSetUp) {
+    redirect(ctx, "/setup");
+    return;
+  }
+  const signedIn = signedInOf(ctx);
+  if (signedIn === undefined) {
+    redirect(ctx, "/sign-in?next=%2F");
+    return;
+  }
+  const apiUrl = ctx.deps.store.instance()?.apiUrl ?? ctx.deps.defaultApiUrl;
+  const page = landingPage({
+    csrf: signedIn.session.csrfToken,
+    name: signedIn.user.name,
+    email: signedIn.user.email,
+    apiOrigin: new URL(apiUrl).origin,
+  });
+  sendHtml(ctx, 200, page);
+}
+
 function hasGrant(ctx: Ctx): boolean {
   return ctx.state.gate?.isGrantValid(cookieOf(ctx, "setup")) ?? false;
 }
@@ -208,7 +274,7 @@ function missingTokenView(ctx: Ctx): ConnectionView | undefined {
 function handleGet(ctx: Ctx, isSetUp: boolean): void {
   switch (ctx.path) {
     case "/":
-      redirect(ctx, isSetUp ? "/sign-in?next=%2F" : "/setup");
+      sendLanding(ctx, isSetUp);
       return;
     case "/setup":
       sendHtml(ctx, 200, setupCodePage({ csrf: ensureCsrf(ctx) }));
@@ -239,9 +305,22 @@ function sendSignInForm(ctx: Ctx, isSetUp: boolean): void {
     redirect(ctx, "/setup");
     return;
   }
-  const notice = ctx.query.get("setup") === "done" ? "Setup is complete. Sign in." : undefined;
+  if (signedInOf(ctx) !== undefined) {
+    redirect(ctx, "/");
+    return;
+  }
+  const notice = signInNotice(ctx);
   const next = safeNext(ctx.query.get("next") ?? undefined);
   sendHtml(ctx, 200, signInPage({ csrf: ensureCsrf(ctx), next, notice }));
+}
+
+function signInNotice(ctx: Ctx): string | undefined {
+  if (cookieOf(ctx, "session") !== undefined) {
+    // The cookie names no valid session here, so the notice shows and the cookie is cleared.
+    ctx.cookies.push(serializeCookieDeletion("session", ctx.deps.mode));
+    return EXPIRED;
+  }
+  return ctx.query.get("setup") === "done" ? "Setup is complete. Sign in." : undefined;
 }
 
 async function readBodyOrFail(ctx: Ctx): Promise<string | undefined> {
@@ -262,6 +341,7 @@ async function readBodyOrFail(ctx: Ctx): Promise<string | undefined> {
 async function readPostForm<K extends string>(
   ctx: Ctx,
   known: readonly K[],
+  expectedCsrf: string | undefined = cookieOf(ctx, "csrf"),
 ): Promise<FormFields<K | "csrf"> | undefined> {
   const { req, deps } = ctx;
   const origin = expectedOrigin(deps.mode, req.headers.host, deps.publicOrigin);
@@ -280,7 +360,7 @@ async function readPostForm<K extends string>(
     sendText(ctx, 400, "repeated form field\n");
     return undefined;
   }
-  if (!isCsrfTokenValid(parsed.fields.csrf, cookieOf(ctx, "csrf"))) {
+  if (!isCsrfTokenValid(parsed.fields.csrf, expectedCsrf)) {
     sendHtml(ctx, 403, messagePage("Request refused", REFUSED));
     return undefined;
   }
@@ -438,10 +518,79 @@ async function commitSetup(
   redirect(ctx, "/sign-in?setup=done");
 }
 
+/**
+ * The CSRF field must hold the session's token. Without a valid session the request still runs
+ * the POST order with no expected token, so it changes nothing.
+ */
 async function postSignOut(ctx: Ctx): Promise<void> {
-  const fields = await readPostForm(ctx, SIGN_OUT_FIELDS);
+  const live = liveSession(ctx);
+  if (live === undefined) {
+    redirect(ctx, "/sign-in");
+    return;
+  }
+  const fields = await readPostForm(ctx, SIGN_OUT_FIELDS, live.session.csrfToken);
   if (fields === undefined) return;
+  ctx.deps.store.deleteSession(live.id);
+  ctx.cookies.push(serializeCookieDeletion("session", ctx.deps.mode));
   redirect(ctx, "/sign-in");
+}
+
+async function postSignIn(ctx: Ctx): Promise<void> {
+  const fields = await readPostForm(ctx, SIGN_IN_FIELDS);
+  if (fields === undefined) return;
+  const csrf = csrfOf(fields);
+  const next = safeNext(fields.next);
+  // Normalized as in setup: trimmed and lowercased.
+  const email = (fields.email ?? "").trim().toLowerCase();
+  const password = fields.password ?? "";
+  if (email === "" || !isSignInPasswordAcceptable(password)) {
+    const error = "Enter your email and your password (at most 128 characters).";
+    sendHtml(ctx, 422, signInPage({ csrf, next, error }));
+    return;
+  }
+  const { deps } = ctx;
+  const client = clientKeyOf(ctx.req.socket.remoteAddress);
+  const admission = ctx.state.signInThrottle.admit({ account: email, client });
+  if (!admission.isAdmitted) {
+    deps.log.warn("sign-in failed", { client, reason: "throttled" });
+    deps.metrics.recordAuthAttempt("sign-in", "throttled");
+    const page = signInPage({ csrf, next, error: "Too many attempts. Try again later." });
+    sendHtml(ctx, 429, page, { "retry-after": String(admission.retryAfterSeconds) });
+    return;
+  }
+  let user: User | undefined;
+  let isValid: boolean;
+  try {
+    user = deps.store.userByEmail(email);
+    isValid = await deps.verifier.verify(password, user?.passwordHash);
+  } catch (err) {
+    admission.attempt.release();
+    throw err;
+  }
+  if (!isValid || user === undefined) {
+    admission.attempt.fail();
+    deps.log.warn("sign-in failed", { client, reason: "credentials" });
+    deps.metrics.recordAuthAttempt("sign-in", "failure");
+    sendHtml(ctx, 401, signInPage({ csrf, next, error: WRONG_CREDENTIALS }));
+    return;
+  }
+  startSession(ctx, user.id);
+  admission.attempt.succeed();
+  deps.log.info("signed in", { userId: user.id });
+  deps.metrics.recordAuthAttempt("sign-in", "success");
+  redirect(ctx, next);
+}
+
+/** Rotation: the old session row goes, expired rows go, then a new id is made. */
+function startSession(ctx: Ctx, userId: number): void {
+  const { store, now, mode } = ctx.deps;
+  const old = cookieOf(ctx, "session");
+  if (old !== undefined) store.deleteSession(old);
+  const time = now();
+  store.deleteExpiredSessions(time, SESSION_IDLE_MS);
+  const id = newToken(ctx);
+  store.createSession(id, userId, newToken(ctx), time);
+  ctx.cookies.push(serializeCookie("session", id, mode));
 }
 
 async function handlePost(ctx: Ctx): Promise<void> {
@@ -452,6 +601,9 @@ async function handlePost(ctx: Ctx): Promise<void> {
     case "/setup/owner":
       await postSetupOwner(ctx);
       return;
+    case "/sign-in":
+      await postSignIn(ctx);
+      return;
     default:
       await postSignOut(ctx);
   }
@@ -460,8 +612,7 @@ async function handlePost(ctx: Ctx): Promise<void> {
 /** Step 2 of the order: setup routes close after setup; sign-in has no POST before it. */
 function isClosedInPhase(path: string, method: string, isSetUp: boolean): boolean {
   if (path === "/setup" || path === "/setup/owner") return isSetUp;
-  // Password sign-in is not served yet, so its POST is closed in both phases.
-  return path === "/sign-in" && method === "POST";
+  return path === "/sign-in" && method === "POST" && !isSetUp;
 }
 
 async function handleApp(ctx: Ctx): Promise<void> {
@@ -507,6 +658,11 @@ export function createConsoleServer(deps: ConsoleServerDeps): Server {
   const state: State = {
     gate: deps.gate,
     setupThrottle: createAuthThrottle({ now: deps.now, tables: ["client"], clearsOnSuccess: [] }),
+    signInThrottle: createAuthThrottle({
+      now: deps.now,
+      tables: ["account", "client"],
+      clearsOnSuccess: ["account"],
+    }),
   };
   return createServer((req, res) => {
     const path = rawPath(req);

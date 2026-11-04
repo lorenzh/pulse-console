@@ -8,6 +8,7 @@ import { createLogger } from "@lorenzh/pulse-kit";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
 import { createMetrics } from "./metrics.ts";
+import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { createConsoleServer, listen } from "./server.ts";
 import { createSetupGate } from "./setup-code.ts";
 
@@ -109,6 +110,11 @@ async function startConsole(
     randomBytes,
     hashPassword: (pw) =>
       Bun.password.hash(pw, { algorithm: "argon2id", memoryCost: 19456, timeCost: 2 }),
+    verifier: await createCredentialVerifier({
+      hash: (pw) => Bun.password.hash(pw, PASSWORD_HASH_OPTIONS),
+      verify: (pw, hash) => Bun.password.verify(pw, hash),
+      dummySecret: "dummy secret for tests",
+    }),
     fetch,
   });
   const port = await listen(server, "127.0.0.1", 0);

@@ -126,6 +126,24 @@ ${field({ label: "Password", name: "password", type: "password", autocomplete: "
   );
 }
 
+/** The signed-in landing page with the sign-out form. */
+export function landingPage(view: {
+  csrf: string;
+  name: string;
+  email: string;
+  apiOrigin: string;
+}): string {
+  return layout(
+    "pulse Console",
+    `<p>Signed in as ${escapeHtml(view.name)} (${escapeHtml(view.email)}).</p>
+<p>pulse-api: ${escapeHtml(view.apiOrigin)}</p>
+<form method="post" action="/sign-out">
+${csrfField(view.csrf)}
+<div class="actions"><button type="submit">Sign out</button></div>
+</form>`,
+  );
+}
+
 /** A page with one message and an optional link. */
 export function messagePage(
   title: string,
