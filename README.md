@@ -7,10 +7,10 @@ pulse: Web console to manage checks, incidents, tokens, notify and status settin
 The console is the fifth service of the pulse Compose stack. Today it serves:
 
 - first-run setup: a one-time setup code from the container log unlocks `/setup/owner`. That page tests the connection to pulse-api (wire version and check count) and creates the one owner account in a local SQLite database;
-- the sign-in page with the "Setup is complete" notice; password sign-in and sessions follow in the next step of [#562](https://github.com/lorenzh/pulse-meta/issues/562);
+- password sign-in for the owner, a session that ends after 30 days without use, a landing page and sign-out;
 - the stylesheet `/console.css` and the ops routes `/healthz`, `/readyz` and `/metrics`.
 
-Two-factor sign-in follows in [#563](https://github.com/lorenzh/pulse-meta/issues/563). Checks, incidents, tokens and the notify and status settings come in later items of [#460](https://github.com/lorenzh/pulse-meta/issues/460).
+Two-factor sign-in (and any second factor or password recovery) follows in [#563](https://github.com/lorenzh/pulse-meta/issues/563). Checks, incidents, tokens and the notify and status settings come in later items of [#460](https://github.com/lorenzh/pulse-meta/issues/460).
 
 ## First-run setup
 
@@ -21,6 +21,8 @@ Two-factor sign-in follows in [#563](https://github.com/lorenzh/pulse-meta/issue
 After setup the saved API URL is used. A different `PULSE_API_URL` logs one warning at start and is ignored. There is no way to change the saved URL yet.
 
 **Reset (destructive).** A lost password has no recovery yet. Stop the console, delete the database file at `PULSE_CONSOLE_DB` with its `-wal` and `-shm` files (or the `console-data` volume), and start again. The console prints a new setup code.
+
+The console stores only SQLite; Postgres and `DATABASE_URL` are not supported.
 
 **Backup.** Copy the database file while the console is stopped, or use `sqlite3 console.db ".backup backup.db"` while it runs. On restore, remove any `-wal` and `-shm` files beside the restored file.
 
@@ -70,20 +72,21 @@ An invalid setting stops the start with exit code 2 and one line on stderr. Ever
 
 ## HTTP endpoints
 
-| Path                | Before setup                                              | After setup                  |
-| ------------------- | --------------------------------------------------------- | ---------------------------- |
-| `GET /`             | `303` to `/setup`                                         | `303` to `/sign-in?next=%2F` |
-| `GET /setup`        | `200`, the setup code form                                | `404`                        |
-| `POST /setup`       | `303` to `/setup/owner` with a grant; `401`, `422`, `429` | `404`                        |
-| `GET /setup/owner`  | `200` with a grant, else `303` to `/setup`                | `404`                        |
-| `POST /setup/owner` | test: `200` or `502`; finish: `303`, `409` or `500`       | `404`                        |
-| `GET /sign-in`      | `303` to `/setup`                                         | `200`, the sign-in form      |
-| `POST /sign-out`    | `303` to `/sign-in`                                       | `303` to `/sign-in`          |
-| `GET /console.css`  | `200`, `text/css`                                         | same                         |
-| `GET /healthz`      | `200 ok`                                                  | same                         |
-| `GET /readyz`       | `200 ok`; `503 shutting down` after `SIGTERM`             | same                         |
-| `GET /metrics`      | Prometheus text                                           | same                         |
-| any other path      | `404 not found`                                           | same                         |
+| Path                | Before setup                                              | After setup                                                          |
+| ------------------- | --------------------------------------------------------- | -------------------------------------------------------------------- |
+| `GET /`             | `303` to `/setup`                                         | `200` landing page when signed in, else `303` to `/sign-in?next=%2F` |
+| `GET /setup`        | `200`, the setup code form                                | `404`                                                                |
+| `POST /setup`       | `303` to `/setup/owner` with a grant; `401`, `422`, `429` | `404`                                                                |
+| `GET /setup/owner`  | `200` with a grant, else `303` to `/setup`                | `404`                                                                |
+| `POST /setup/owner` | test: `200` or `502`; finish: `303`, `409` or `500`       | `404`                                                                |
+| `GET /sign-in`      | `303` to `/setup`                                         | `200`, the sign-in form; `303` to `/` when signed in                 |
+| `POST /sign-in`     | `404`                                                     | `303` to `next`; `401`, `422`, `429`                                 |
+| `POST /sign-out`    | `303` to `/sign-in`                                       | `303` to `/sign-in`; ends the session                                |
+| `GET /console.css`  | `200`, `text/css`                                         | same                                                                 |
+| `GET /healthz`      | `200 ok`                                                  | same                                                                 |
+| `GET /readyz`       | `200 ok`; `503 shutting down` after `SIGTERM`             | same                                                                 |
+| `GET /metrics`      | Prometheus text                                           | same                                                                 |
+| any other path      | `404 not found`                                           | same                                                                 |
 
 `HEAD` works wherever `GET` does; another method on a known path answers `405` with `allow`. A finished setup redirects to `/sign-in?setup=done`. In loopback mode the app routes answer only a loopback `Host`. Every form POST checks `Origin` and a CSRF token. Cookies, modes, the POST order and the metrics are in [docs/configuration.md](docs/configuration.md). More in [docs/](docs/index.md).
 

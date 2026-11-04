@@ -56,7 +56,7 @@ After setup the saved API URL is the one in use. A different `PULSE_API_URL` log
 
 ## Database
 
-The console keeps its state in one SQLite file at `PULSE_CONSOLE_DB`. A new file is created with mode `0600`; an existing file is set to `0600`. SQLite gives the `-wal` and `-shm` files the same mode. The database uses WAL, foreign keys and a busy timeout of 5000 ms; its schema version is in `PRAGMA user_version` (now `1`). A file that cannot be opened, is not a database or has a newer schema stops the start; it is never replaced by a fresh database. The database never holds the api token, a setup code or grant, a password or a plain session id. Postgres and `DATABASE_URL` are not supported.
+The console keeps its state in one SQLite file at `PULSE_CONSOLE_DB`. A new file is created with mode `0600`; an existing file is set to `0600`. SQLite gives the `-wal` and `-shm` files the same mode. The database uses WAL, foreign keys and a busy timeout of 5000 ms; its schema version is in `PRAGMA user_version` (now `1`). A file that cannot be opened, is not a database or has a newer schema stops the start; it is never replaced by a fresh database. The database never holds the api token, a setup code or grant, a password or a plain session id. Postgres and `DATABASE_URL` are not supported (`DATABASE_URL` is ignored).
 
 The start opens the database before it prints a setup code, so a database error never shows a code. Expired sessions are deleted at start.
 
@@ -100,7 +100,15 @@ A form POST fails at the first broken rule, in this order: route and method (`40
 
 `/metrics` has `pulse_up`, `pulse_console_http_requests_total` with the labels `path` (`/`, `/healthz`, `/readyz`, `/metrics`, `/setup`, `/setup/owner`, `/sign-in`, `/sign-out`, `/console.css` or `other`) and `code`, and `pulse_console_auth_attempts_total` with `kind` (`sign-in`, `setup-code`) and `result` (`success`, `failure`, `throttled`).
 
-New log lines: `info` `setup complete` with `apiOrigin` and `checks`, and `warn` `setup code refused` with `client` and `reason` (`credentials` or `throttled`). No log line holds a password, an email, the token, a grant or the code.
+New log lines: `info` `setup complete` with `apiOrigin` and `checks`; `warn` `setup code refused` with `client` and `reason` (`credentials` or `throttled`); `info` `signed in` with `userId`; `warn` `sign-in failed` with `client` and `reason` (`credentials` or `throttled`). No log line holds a password, an email, the token, a grant, a session id or the code.
+
+## Sign-in and sessions
+
+`POST /sign-in` takes `email`, `password` and an optional `next`. An empty field or a password over 128 code points answers `422` and does not count. A wrong password and an unknown email give the same `401` page (`Wrong email or password.`); an unknown email is verified against a dummy hash, so both take the same time. 5 failures in 15 minutes lock the account and, separately, the client address (the socket peer; forwarding headers are ignored) for 15 minutes: `429` with `Retry-After`. Success clears the account failures only. Each table holds at most 10000 keys.
+
+A successful sign-in deletes the old session of the browser and the expired rows, makes a new 32-byte session id and a CSRF token, and redirects `303` to `next` when it is a local path (it starts with one `/` that is not followed by `/` or `\`), else to `/`. The database keeps only the SHA-256 digest of the session id. A session ends 30 days (2592000000 ms) after its last use; a request at least 60 seconds after the last use updates it and sends the cookie again with the same value. Sessions survive a restart. An invalid session cookie on `GET /sign-in` shows `Your session has expired.` and deletes the cookie. `POST /sign-out` needs the session's CSRF token; it deletes the row and the cookie. Without a session it answers `303` and changes nothing.
+
+Known limits: the setup and sign-in throttles live in memory, so a restart clears them. There is no global cap on concurrent argon2id verifications; the throttle bounds them per account and client.
 
 On `SIGTERM` or `SIGINT` the console turns not ready, stops accepting connections, closes idle ones and exits `0` after a clean stop. Open requests get 5000 ms; a stop that takes longer logs a warning and exits `1`.
 
@@ -110,7 +118,7 @@ On `SIGTERM` or `SIGINT` the console turns not ready, stops accepting connection
 | ----------------------- | -------------------- | --------- |
 | `pulse_console_csrf`    | a GET of a form page | none      |
 | `pulse_console_setup`   | a correct setup code | `1800`    |
-| `pulse_console_session` | sign-in (next step)  | `2592000` |
+| `pulse_console_session` | a correct sign-in    | `2592000` |
 
 Every cookie has `Path=/; HttpOnly; SameSite=Strict` and no `Domain`. In strict-https mode each name gets the `__Host-` prefix and the cookie gets `Secure`. Every form holds the CSRF token as `<input type="hidden" name="csrf" value="<token>">`.
 

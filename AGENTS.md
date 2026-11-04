@@ -79,7 +79,7 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 
 ## End-to-end checks
 
-- `src/server.test.ts`, `src/server.setup.test.ts` and `src/server.security.test.ts` start the real server on port `0` and drive it over HTTP; `src/main.startup.test.ts` spawns `bun src/main.ts`.
+- `src/server.test.ts`, `src/server.setup.test.ts`, `src/server.sign-in.test.ts` and `src/server.security.test.ts` start the real server on port `0` and drive it over HTTP; `src/main.startup.test.ts` spawns `bun src/main.ts`.
 - A change to an endpoint or a response shape gets such a test; once the console reads the API, the response is typed by the contract.
 - Before handoff of a user-visible change, start the service with `bun start` and exercise the changed behavior once; report the command and result.
 

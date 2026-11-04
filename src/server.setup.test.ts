@@ -1,5 +1,7 @@
 /* eslint-disable sonarjs/no-clear-text-protocols -- loopback test servers and URL inputs under test */
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import nodeCrypto from "node:crypto";
 import { chmodSync, closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -535,6 +537,22 @@ describe("completion", () => {
     expect((await other.get("/setup")).status).toBe(404);
     expect((await other.post("/setup", { code: second.code })).status).toBe(404);
 
+    await other.get("/sign-in");
+    const signedIn = await other.post("/sign-in", {
+      email: OWNER_EMAIL,
+      password: PASSWORD,
+      next: "/",
+    });
+    expect(signedIn.status).toBe(303);
+    const sessionId = other.jar.get("pulse_console_session") ?? "";
+    expect(sessionId.length).toBeGreaterThan(20);
+    const reader = new Database(c.dbPath, { readonly: true });
+    const digestRow = reader.query("SELECT id_digest FROM sessions").all();
+    reader.close();
+    expect(digestRow).toEqual([
+      { id_digest: nodeCrypto.createHash("sha256").update(sessionId).digest("hex") },
+    ]);
+
     // The database scan: the file must be read; a sidecar is skipped only when it is absent.
     const chunks: Buffer[] = [readFileSync(c.dbPath)];
     for (const suffix of ["-wal", "-shm"]) {
@@ -549,6 +567,8 @@ describe("completion", () => {
     expect(all.split(TOKEN).length - 1).toBe(0);
     expect(all.split(PASSWORD).length - 1).toBe(0);
     expect(all.split(c.code).length - 1).toBe(0);
+    expect(all.split(sessionId).length - 1).toBe(0);
+    expect(all.startsWith("SQLite format 3\0")).toBe(true);
     expect(
       c.store.userByEmail(OWNER_EMAIL)?.passwordHash.startsWith("$argon2id$v=19$m=19456,t=2,p=1$"),
     ).toBe(true);
@@ -607,5 +627,126 @@ describe("completion", () => {
     const done = await client.post("/setup/owner", ownerFields(api.url, "complete"));
     expect(done.status).toBe(303);
     expect(userCount(c.dbPath)).toBe(1);
+  });
+});
+
+type Recording = { status: number; headers: Headers; body: string };
+
+/** Header and body text of one response without the parts that are intended for its client. */
+function withoutIntended(r: Recording, cookies: string[], fields: string[]): string {
+  const headers = [...r.headers]
+    .filter(([name]) => name !== "set-cookie")
+    .map(([name, v]) => `${name}: ${v}`);
+  const setCookies = r.headers
+    .getSetCookie()
+    .filter((line) => !cookies.some((pair) => line.startsWith(`${pair};`)));
+  let body = r.body;
+  for (const f of fields)
+    body = body.split(`<input type="hidden" name="csrf" value="${f}">`).join("");
+  return [...headers, ...setCookies, body].join("\n");
+}
+
+function rawText(r: Recording): string {
+  return [
+    ...[...r.headers].map(([n, v]) => `${n}: ${v}`),
+    ...r.headers.getSetCookie(),
+    r.body,
+  ].join("\n");
+}
+
+function sessionCsrfOf(body: string): string {
+  const match = /action="\/sign-out">\n<input type="hidden" name="csrf" value="([^"]+)">/.exec(
+    body,
+  );
+  return match?.[1] ?? "";
+}
+
+describe("leak scan of the full flow", () => {
+  test("secrets of each client appear only in their intended places of that client", async () => {
+    const api = startApi();
+    const c = await startConsole();
+    const a = new Client(c);
+    const b = new Client(c);
+    await b.get("/setup");
+    await a.unlock();
+    await a.get("/setup/owner");
+    expect((await a.post("/setup/owner", ownerFields(api.url, "test"))).status).toBe(200);
+    expect((await a.post("/setup/owner", ownerFields(api.url, "complete"))).status).toBe(303);
+    await a.get("/sign-in?setup=done");
+    const signedIn = await a.post("/sign-in", {
+      email: OWNER_EMAIL,
+      password: PASSWORD,
+      next: "/",
+    });
+    expect(signedIn.status).toBe(303);
+    const sessionA = a.jar.get("pulse_console_session") ?? "";
+    const landingA = await a.get("/");
+    expect(landingA.status).toBe(200);
+    const sessionCsrfA = sessionCsrfOf(landingA.body);
+    expect(sessionCsrfA.length).toBeGreaterThan(20);
+
+    expect(
+      (await b.post("/sign-in", { email: OWNER_EMAIL, password: "wrong-password-1" })).status,
+    ).toBe(401);
+    expect((await b.post("/sign-in", { email: OWNER_EMAIL, password: PASSWORD })).status).toBe(303);
+    const sessionB = b.jar.get("pulse_console_session") ?? "";
+    const landingB = await b.get("/");
+    const sessionCsrfB = sessionCsrfOf(landingB.body);
+    expect(sessionCsrfB.length).toBeGreaterThan(20);
+    expect(sessionCsrfB).not.toBe(sessionCsrfA);
+
+    const out = await a.post("/sign-out", { csrf: sessionCsrfA });
+    expect(out.status).toBe(303);
+    expect(out.headers.get("location")).toBe("/sign-in");
+    expect(out.headers.getSetCookie().some((l) => l.startsWith("pulse_console_session=;"))).toBe(
+      true,
+    );
+    await a.get("/sign-in");
+    const metrics = await b.get("/metrics");
+    expect(metrics.status).toBe(200);
+
+    const csrfA = a.jar.get("pulse_console_csrf") ?? "";
+    const csrfB = b.jar.get("pulse_console_csrf") ?? "";
+    // The grant cookie was deleted at completion; read it from its first Set-Cookie.
+    const grantLine = a.responses
+      .flatMap((r) => r.headers.getSetCookie())
+      .find((l) => /^pulse_console_setup=[^;]/.test(l));
+    const grantA = (grantLine ?? "").slice("pulse_console_setup=".length).split(";")[0] ?? "";
+    expect(grantA.length).toBeGreaterThan(20);
+    const secretsA = [csrfA, grantA, sessionA, sessionCsrfA];
+    const secretsB = [csrfB, sessionB, sessionCsrfB];
+    for (const s of [...secretsA, ...secretsB]) expect(s.length).toBeGreaterThan(20);
+    const sentinels = [TOKEN, PASSWORD, c.code, ...secretsA, ...secretsB];
+
+    // Positive checks: each intended disclosure is present before it is removed.
+    const loginPageA = a.responses.find((r) => r.body.includes('action="/sign-in"'));
+    expect(loginPageA?.body).toContain(`<input type="hidden" name="csrf" value="${csrfA}">`);
+    expect(landingA.body).toContain(`<input type="hidden" name="csrf" value="${sessionCsrfA}">`);
+    expect(
+      signedIn.headers
+        .getSetCookie()
+        .some((l) => l.startsWith(`pulse_console_session=${sessionA};`)),
+    ).toBe(true);
+
+    const intendedA = [
+      `pulse_console_csrf=${csrfA}`,
+      `pulse_console_setup=${grantA}`,
+      `pulse_console_session=${sessionA}`,
+    ];
+    const intendedB = [`pulse_console_csrf=${csrfB}`, `pulse_console_session=${sessionB}`];
+    for (const r of a.responses) {
+      const rest = withoutIntended(r, intendedA, [csrfA, sessionCsrfA]);
+      for (const s of sentinels) expect(rest.split(s).length - 1).toBe(0);
+      for (const s of secretsB) expect(rawText(r).split(s).length - 1).toBe(0);
+    }
+    for (const r of b.responses) {
+      const rest = withoutIntended(r, intendedB, [csrfB, sessionCsrfB]);
+      for (const s of sentinels) expect(rest.split(s).length - 1).toBe(0);
+      for (const s of secretsA) expect(rawText(r).split(s).length - 1).toBe(0);
+    }
+    expect(c.logs.some((l) => l.includes('"signed in"'))).toBe(true);
+    for (const line of c.logs) {
+      for (const s of [...sentinels, OWNER_EMAIL]) expect(line).not.toContain(s);
+    }
   });
 });

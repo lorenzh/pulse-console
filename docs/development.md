@@ -41,7 +41,8 @@ Work test first. Tests sit next to the code as `src/<module>.test.ts`, use hand-
 
 - `src/settings.test.ts` and `src/admin-token.test.ts` call `readSettings` and `readAdminToken` with an env object and a fake `readFile`. They cover every rule and error text, and check that no value appears in a message.
 - `src/server.test.ts` starts the real server on `127.0.0.1` port `0` and drives it over HTTP. The path-rule cases (`//healthz`, `/%2e%2e/`, …) are written as raw request lines over `node:net`, because `fetch` normalises them before sending.
-- `src/server.setup.test.ts` drives the setup flow against a real server and a fake pulse-api, both on port `0`, with a `mkdtemp` database and an injected clock. It also scans the database file for sentinels.
+- `src/server.setup.test.ts` drives the setup flow against a real server and a fake pulse-api, both on port `0`, with a `mkdtemp` database and an injected clock. It also signs in, scans the database file for sentinels and the plain session id, compares `sessions.id_digest` with a digest from `node:crypto`, and runs a leak scan of the full flow for two clients.
+- `src/server.sign-in.test.ts` covers sign-in, the throttle, session rotation, the idle limit, the cookie refresh, `next` and sign-out.
 - `src/server.security.test.ts` covers the POST order, `Host`, `Origin`, CSRF, body limits, the CSP, cookie attributes and a leak scan.
 - `src/main.startup.test.ts` spawns `bun src/main.ts` and checks bad settings and database errors, the setup code line, the warnings, the start log, the file mode and the exit code `0` on `SIGTERM`.
 - Test helpers stay inside the `*.test.ts` file that uses them, because the image check rejects only those names.
