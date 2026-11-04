@@ -32,4 +32,6 @@ main.shell-main { max-width: 64rem; }
 .state-warning { border-left-color: #b45309; }
 .error-summary { padding: 0.75rem 1rem; border: 2px solid #a4161a; background: #fff; }
 .error-summary h2 { font-size: 1.125rem; margin: 0 0 0.5rem; }
+.confirm-target { font-weight: 600; overflow-wrap: anywhere; }
+.confirm .actions { align-items: center; }
 `;
