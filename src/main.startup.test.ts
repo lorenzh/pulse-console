@@ -199,3 +199,22 @@ test("database start errors exit 2 with their literal text and print no code", a
     assertOneLine(r, `pulse-console: ${text}`);
   }
 }, 20_000);
+
+test("bun src/main.ts serves no /__test/ route", async () => {
+  const child = spawnMain({ PULSE_API_URL: API_URL });
+  let answer: Promise<{ status: number; body: string }> | undefined;
+  const r = await collect(child, (all) => {
+    const line = all.split("\n").find((l) => l.includes("pulse-console listening"));
+    if (answer !== undefined || line === undefined) return;
+    const fields: unknown = JSON.parse(line);
+    const port: unknown =
+      typeof fields === "object" && fields !== null ? Reflect.get(fields, "port") : 0;
+    answer = fetch(`http://127.0.0.1:${String(port)}/__test/states/empty`).then(async (res) => ({
+      status: res.status,
+      body: await res.text(),
+    }));
+    void answer.finally(() => child.kill("SIGTERM"));
+  });
+  expect(r.code).toBe(0);
+  expect(await answer).toEqual({ status: 404, body: "not found\n" });
+}, 10_000);

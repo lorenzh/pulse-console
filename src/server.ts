@@ -29,6 +29,9 @@ import {
 } from "./forms.ts";
 import { paragraph } from "./html.ts";
 import type { Metrics, PathLabel } from "./metrics.ts";
+import type { NavId } from "./navigation.ts";
+import { overviewView } from "./overview.ts";
+import { readOverview } from "./overview-read.ts";
 import {
   alreadySubmittedPage,
   type ConnectionView,
@@ -44,6 +47,7 @@ import {
   type HashPassword,
   isSignInPasswordAcceptable,
 } from "./passwords.ts";
+import type { PageMethod, PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
 import {
   expectedOrigin,
   isCsrfTokenValid,
@@ -51,10 +55,17 @@ import {
   isOriginAllowed,
   safeNext,
 } from "./request-guard.ts";
+import { type ConsoleRole, hasRole } from "./roles.ts";
 import type { ConsoleMode } from "./settings.ts";
 import type { SetupGate } from "./setup-code.ts";
 import { shellPage } from "./shell.ts";
-import { formExpiredNotice, formExpiredResendNotice } from "./states.ts";
+import {
+  alreadySubmittedState,
+  forbiddenState,
+  formExpiredNotice,
+  formExpiredResendNotice,
+  notFoundState,
+} from "./states.ts";
 import { CONSOLE_CSS } from "./styles.ts";
 
 export const CONTENT_SECURITY_POLICY =
@@ -73,6 +84,7 @@ const ERROR_CODE = /^E[A-Z0-9_]+$/;
 const TOKEN_BYTES = 32;
 
 const OPS_PATHS: readonly string[] = ["/healthz", "/readyz", "/metrics"];
+const TEST_PREFIX = "/__test/";
 const ROUTES: Readonly<Record<string, readonly string[]>> = {
   "/": ["GET", "HEAD"],
   "/setup": ["GET", "HEAD", "POST"],
@@ -121,6 +133,15 @@ export interface ConsoleServerDeps {
   verifier: CredentialVerifier;
   fetch: FetchLike;
   schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
+  /** Test-only protected routes under /__test/. `main.ts` never sets them. */
+  testRoutes?: ReadonlyMap<string, ProtectedRoute> | undefined;
+  /** The role of a user. Defaults to `user.role`; only a test passes another. */
+  roleOf?: ((user: User) => ConsoleRole) | undefined;
+}
+
+/** A test route key outside /__test/ or on a production path. */
+export class TestRouteError extends Error {
+  override name = "TestRouteError";
 }
 
 type State = {
@@ -128,6 +149,7 @@ type State = {
   setupThrottle: AuthThrottle<"client">;
   signInThrottle: AuthThrottle<"account" | "client">;
   formTokens: FormTokens;
+  protectedRoutes: ReadonlyMap<string, ProtectedRoute>;
 };
 
 type SignedIn = { id: string; session: Session; user: User };
@@ -286,40 +308,59 @@ function acceptFormToken(
   return false;
 }
 
+function roleOfUser(ctx: Ctx, user: User): ConsoleRole {
+  return ctx.deps.roleOf?.(user) ?? user.role;
+}
+
+type ShellPart = {
+  title: string;
+  body: string;
+  banner?: string | undefined;
+  navId?: NavId | undefined;
+};
+
 function signedInPage(
   ctx: Ctx,
   signedIn: { id: string; user: User; csrf: string },
-  page: { title: string; body: string },
+  page: ShellPart,
 ): string {
   return shellPage({
     instanceName: ctx.deps.instanceName,
     user: signedIn.user,
-    role: signedIn.user.role,
+    role: roleOfUser(ctx, signedIn.user),
     csrf: signedIn.csrf,
     signOutToken: issueFormToken(ctx, sessionBinding(signedIn.id), "/sign-out"),
-    current: page.title === "Overview" ? "overview" : undefined,
+    current: page.navId,
+    banner: page.banner,
     title: page.title,
     body: page.body,
   });
 }
 
-function sendLanding(ctx: Ctx, isSetUp: boolean): void {
-  if (!isSetUp) {
-    redirect(ctx, "/setup");
-    return;
-  }
-  const signedIn = signedInOf(ctx);
-  if (signedIn === undefined) {
-    redirect(ctx, "/sign-in?next=%2F");
-    return;
-  }
-  const apiUrl = ctx.deps.store.instance()?.apiUrl ?? ctx.deps.defaultApiUrl;
-  const page = signedInPage(
-    ctx,
-    { id: signedIn.id, user: signedIn.user, csrf: signedIn.session.csrfToken },
-    { title: "Overview", body: paragraph(`pulse-api: ${new URL(apiUrl).origin}`) },
-  );
-  sendHtml(ctx, 200, page);
+function shellOf(signedIn: SignedIn): { id: string; user: User; csrf: string } {
+  return { id: signedIn.id, user: signedIn.user, csrf: signedIn.session.csrfToken };
+}
+
+/** The Overview at `/`: two pulse-api reads and their summary. */
+function overviewRoute(deps: ConsoleServerDeps): ProtectedRoute {
+  return {
+    path: "/",
+    methods: ["GET"],
+    requiredRole: "viewer",
+    navId: "overview",
+    handle: async () => {
+      const apiUrl = deps.store.instance()?.apiUrl ?? deps.defaultApiUrl;
+      const read = await readOverview(apiUrl, {
+        fetch: deps.fetch,
+        token: deps.adminToken,
+        schedule: deps.schedule,
+        warn: (message, fields) => deps.log.warn(message, fields),
+      });
+      const view = overviewView(new URL(apiUrl).origin, read);
+      const banner = view.banner === "" ? undefined : view.banner;
+      return { kind: "page", status: 200, title: "Overview", body: view.body, banner };
+    },
+  };
 }
 
 function hasGrant(ctx: Ctx): boolean {
@@ -342,9 +383,6 @@ function anonForm(ctx: Ctx, csrf: string): { csrf: string; formToken: string } {
 
 function handleGet(ctx: Ctx, isSetUp: boolean): void {
   switch (ctx.path) {
-    case "/":
-      sendLanding(ctx, isSetUp);
-      return;
     case "/setup":
       sendHtml(ctx, 200, setupCodePage(anonForm(ctx, ensureCsrf(ctx))));
       return;
@@ -759,28 +797,183 @@ function isClosedInPhase(path: string, method: string, isSetUp: boolean): boolea
   return path === "/sign-in" && method === "POST" && !isSetUp;
 }
 
+function allowedMethods(route: ProtectedRoute): string[] {
+  const methods: string[] = [...route.methods];
+  if (methods.includes("GET") && !methods.includes("HEAD")) methods.splice(1, 0, "HEAD");
+  return methods;
+}
+
+function isHostRefused(ctx: Ctx): boolean {
+  return ctx.deps.mode === "loopback" && !isLoopbackHost(ctx.req.headers.host);
+}
+
+function sendShell(ctx: Ctx, signedIn: SignedIn, status: number, page: ShellPart): void {
+  sendHtml(ctx, status, signedInPage(ctx, shellOf(signedIn), page));
+}
+
+function sendPageResult(ctx: Ctx, signedIn: SignedIn, route: ProtectedRoute, result: PageResult) {
+  if (result.kind === "redirect") {
+    redirect(ctx, result.location);
+    return;
+  }
+  sendShell(ctx, signedIn, result.status, { ...result, navId: route.navId });
+}
+
+/** Decision 8: back to sign-in with the raw target as `next` when it is a safe path. */
+function redirectToSignIn(ctx: Ctx): void {
+  const next = safeNext(ctx.req.url);
+  redirect(ctx, `/sign-in?next=${encodeURIComponent(next)}`);
+}
+
+function pageRequest(
+  ctx: Ctx,
+  signedIn: SignedIn,
+  method: PageMethod,
+  fields: PageRequest["fields"],
+): PageRequest {
+  return {
+    method,
+    path: ctx.path,
+    user: signedIn.user,
+    role: roleOfUser(ctx, signedIn.user),
+    csrf: signedIn.session.csrfToken,
+    fields,
+    query: ctx.query,
+    issueFormToken: (actionPath) => issueFormToken(ctx, sessionBinding(signedIn.id), actionPath),
+  };
+}
+
+/**
+ * Step 7 of the protected order. A refused token answers 409 here: "already submitted" for a
+ * replay, else the route's form again with the expired notice.
+ */
+function isProtectedTokenAccepted(
+  ctx: Ctx,
+  signedIn: SignedIn,
+  route: ProtectedRoute,
+  request: PageRequest,
+): boolean {
+  const token = request.fields.form_token ?? "";
+  const result = ctx.state.formTokens.consume(token, sessionBinding(signedIn.id), ctx.path);
+  if (result === "accepted") return true;
+  logRefusedToken(ctx, result);
+  if (result === "replayed") {
+    const reopenHref = route.methods.includes("GET") ? ctx.path : "/";
+    sendShell(ctx, signedIn, 409, {
+      title: "Already submitted",
+      body: alreadySubmittedState({ reopenHref }),
+    });
+    return false;
+  }
+  const form = route.renderForm?.(request, formExpiredNotice) ?? {
+    kind: "page",
+    status: 409,
+    title: "Form expired",
+    body: paragraph(formExpiredNotice, ' role="alert"'),
+  };
+  sendPageResult(ctx, signedIn, route, form.kind === "page" ? { ...form, status: 409 } : form);
+  return false;
+}
+
+/**
+ * Steps 2 to 8 of the protected order (Required behavior 1): phase, Host, session, the POST
+ * form with CSRF, role, form token, handler.
+ */
+async function handleProtected(
+  ctx: Ctx,
+  route: ProtectedRoute,
+  method: PageMethod,
+  isSetUp: boolean,
+): Promise<void> {
+  if (!isSetUp) {
+    if (method === "POST") sendText(ctx, 404, NOT_FOUND);
+    else redirect(ctx, "/setup");
+    return;
+  }
+  if (isHostRefused(ctx)) {
+    sendText(ctx, 421, MISDIRECTED);
+    return;
+  }
+  const signedIn = signedInOf(ctx);
+  if (signedIn === undefined) {
+    redirectToSignIn(ctx);
+    return;
+  }
+  let fields: PageRequest["fields"] = {};
+  if (method === "POST") {
+    const known = [...(route.knownFields ?? []), "form_token"];
+    const read = await readPostForm(ctx, known, signedIn.session.csrfToken);
+    if (read === undefined) return;
+    fields = read;
+  }
+  const role = roleOfUser(ctx, signedIn.user);
+  if (!hasRole(role, route.requiredRole)) {
+    sendShell(ctx, signedIn, 403, {
+      title: "Access denied",
+      body: forbiddenState({ requiredRole: route.requiredRole, role }),
+    });
+    return;
+  }
+  const request = pageRequest(ctx, signedIn, method, fields);
+  if (method === "POST" && !isProtectedTokenAccepted(ctx, signedIn, route, request)) return;
+  sendPageResult(ctx, signedIn, route, await route.handle(request));
+}
+
+/** Decision 9: the shell 404 for a signed-in GET or HEAD, else the plain text 404. */
+function sendNotFound(ctx: Ctx, method: string, isSetUp: boolean): void {
+  const isPage = (method === "GET" || method === "HEAD") && isSetUp && !isHostRefused(ctx);
+  const signedIn = isPage ? signedInOf(ctx) : undefined;
+  if (signedIn === undefined) {
+    sendText(ctx, 404, NOT_FOUND);
+    return;
+  }
+  sendShell(ctx, signedIn, 404, { title: "Page not found", body: notFoundState() });
+}
+
+function isPageMethod(method: string): method is PageMethod {
+  return method === "GET" || method === "HEAD" || method === "POST";
+}
+
 async function handleApp(ctx: Ctx): Promise<void> {
   const method = ctx.req.method ?? "GET";
-  const allowed = ROUTES[ctx.path];
+  const isSetUp = (): boolean => ctx.deps.store.instance() !== undefined;
+  const route = ctx.state.protectedRoutes.get(ctx.path);
+  const allowed = route === undefined ? ROUTES[ctx.path] : allowedMethods(route);
   if (allowed === undefined) {
-    sendText(ctx, 404, NOT_FOUND);
+    sendNotFound(ctx, method, isSetUp());
     return;
   }
   if (!allowed.includes(method)) {
     ctx.res.writeHead(405, { allow: allowed.join(", "), "content-length": 0 }).end();
     return;
   }
-  const isSetUp = ctx.deps.store.instance() !== undefined;
-  if (isClosedInPhase(ctx.path, method, isSetUp)) {
+  if (route !== undefined && isPageMethod(method)) {
+    await handleProtected(ctx, route, method, isSetUp());
+    return;
+  }
+  if (isClosedInPhase(ctx.path, method, isSetUp())) {
     sendText(ctx, 404, NOT_FOUND);
     return;
   }
-  if (ctx.deps.mode === "loopback" && !isLoopbackHost(ctx.req.headers.host)) {
+  if (isHostRefused(ctx)) {
     sendText(ctx, 421, MISDIRECTED);
     return;
   }
   if (method === "POST") await handlePost(ctx);
-  else handleGet(ctx, isSetUp);
+  else handleGet(ctx, isSetUp());
+}
+
+/** The protected routes: `/` and the test routes, whose keys must be under /__test/. */
+function protectedRoutesOf(deps: ConsoleServerDeps): Map<string, ProtectedRoute> {
+  const routes = new Map<string, ProtectedRoute>([["/", overviewRoute(deps)]]);
+  for (const [key, route] of deps.testRoutes ?? []) {
+    const isProduction = key in ROUTES || OPS_PATHS.includes(key);
+    if (!key.startsWith(TEST_PREFIX) || isProduction || route.path !== key) {
+      throw new TestRouteError(`test route ${key} must be a path under ${TEST_PREFIX}`);
+    }
+    routes.set(key, route);
+  }
+  return routes;
 }
 
 function handleOpsRoute(req: IncomingMessage, res: ServerResponse, ops: OpsHandlers): void {
@@ -808,6 +1001,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Server {
       clearsOnSuccess: ["account"],
     }),
     formTokens: createFormTokens({ now: deps.now, randomBytes: deps.randomBytes }),
+    protectedRoutes: protectedRoutesOf(deps),
   };
   return createServer((req, res) => {
     const path = rawPath(req);

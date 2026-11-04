@@ -4,6 +4,13 @@ import { request as httpRequest, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@lorenzh/pulse-kit";
+import {
+  getPage,
+  postForm,
+  type Reply,
+  type SignedInConsole,
+  startSignedInConsole,
+} from "../test/signed-in-console.ts";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
 import { createMetrics } from "./metrics.ts";
@@ -385,5 +392,71 @@ describe("leak scan of the setup flow", () => {
     }
     for (const line of c.logs) for (const s of sentinels) expect(line).not.toContain(s);
     for (const s of sentinels) expect(c.metricsText()).not.toContain(s);
+  });
+});
+
+describe("signed-in unknown paths and the Overview", () => {
+  const CSP =
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+
+  async function signedIn(): Promise<SignedInConsole> {
+    const c = await startSignedInConsole({
+      apiUrl: "http://127.0.0.1:9",
+      adminToken: "security-admin-token",
+    });
+    cleanups.push(() => c.close());
+    return c;
+  }
+
+  function expectShell(res: Reply): void {
+    expect(res.headers.get("content-security-policy")).toBe(CSP);
+    expect(res.headers.get("referrer-policy")).toBe("same-origin");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.body.match(/<script/g)).toEqual(["<script"]);
+    expect(res.body).toContain('<script src="/console.js" defer></script>');
+    expect(res.body).not.toContain("style=");
+    expect(res.body).not.toMatch(/\son[a-z]+=/);
+  }
+
+  test("GET of an unknown path with a session is the shell 404", async () => {
+    const c = await signedIn();
+    const res = await getPage(c, "/no-such-page");
+    expect(res.status).toBe(404);
+    expect(res.body).toContain("<h2>Page not found</h2>");
+    expect(res.body).toContain('<a href="/">Go to the overview</a>');
+    expectShell(res);
+    const head = await fetch(`${c.base}/no-such-page`, {
+      method: "HEAD",
+      headers: { cookie: c.cookie },
+    });
+    expect(head.status).toBe(404);
+    expect(await head.text()).toBe("");
+  });
+
+  test("other unknown-path requests keep the plain 404", async () => {
+    const c = await signedIn();
+    const post = await postForm(c, "/no-such-page", {});
+    expect(post.status).toBe(404);
+    expect(post.body).toBe("not found\n");
+    const anonymous = await getPage(c, "/no-such-page", "");
+    expect(anonymous.status).toBe(404);
+    expect(anonymous.body).toBe("not found\n");
+  });
+
+  test("the Overview carries the shell headers and one script", async () => {
+    const c = await signedIn();
+    const res = await getPage(c, "/");
+    expect(res.status).toBe(200);
+    expectShell(res);
+    expect(res.body).toContain("pulse-api cannot be reached at http://127.0.0.1:9.");
+  });
+
+  test("GET / without a session redirects to sign-in with next=/", async () => {
+    const c = await signedIn();
+    const res = await getPage(c, "/", "");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/sign-in?next=%2F");
   });
 });

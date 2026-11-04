@@ -114,6 +114,11 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
   size, repeated fields, CSRF before any other check of the form).
 - Every POST form carries a hidden `form_token` directly after `csrf` (`src/form-tokens.ts`);
   the route uses it up at its commit point, after every other check.
+- A signed-in page is a `ProtectedRoute` (`src/protected-route.ts`) with a `requiredRole`; the
+  dispatcher in `src/server.ts` checks session, POST form, role and form token before its
+  handler. Navigation visibility is never authorization. Test-only routes live in
+  `test/fixture-routes.ts` under `/__test/` and reach only a test-created server through
+  `testRoutes`; `main.ts` never sets `testRoutes` or `roleOf`.
 - The server compares the raw request path (`req.url` up to the first `?`) byte for byte. Never
   route on a parsed `URL.pathname`: it turns `//healthz` or `/%2e%2e/` into `/`.
 - The admin token, passwords and the setup code never appear in a log line, an error, `/metrics` or a response (the code's one stdout line excepted).

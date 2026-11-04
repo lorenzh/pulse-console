@@ -36,7 +36,7 @@ export function checkWithState(id: string, state: string): Record<string, unknow
     lastReason: null,
     locations: [],
     ...(state === "maintenance"
-      ? { maintenance: { id: "m", title: "Window", start: 0, end: 4102444800000 } }
+      ? { maintenance: { checkId: id, start: 0, end: 4102444800000, note: "Window" } }
       : {}),
   };
 }

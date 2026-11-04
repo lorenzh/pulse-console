@@ -5,6 +5,16 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@lorenzh/pulse-kit";
+import { createFixtureRoutes, type Recorder } from "../test/fixture-routes.ts";
+import {
+  START as FIXTURE_START,
+  formTokenOf,
+  getPage,
+  postForm,
+  SESSION_CSRF,
+  type SignedInConsole,
+  startSignedInConsole,
+} from "../test/signed-in-console.ts";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
 import { createMetrics, type Metrics } from "./metrics.ts";
@@ -103,7 +113,11 @@ async function startConsole(isSetUp: boolean): Promise<Console> {
       verify: (pw, hash) => Bun.password.verify(pw, hash),
       dummySecret: "dummy secret for tests",
     }),
-    fetch,
+    // The Overview reads of the saved api.example URL must not reach the network.
+    fetch: (input, init) =>
+      String(input).startsWith("http://api.example")
+        ? Promise.reject(new Error("no network in this test"))
+        : fetch(input, init),
   });
   const port = await listen(server, "127.0.0.1", 0);
   cleanups.push(
@@ -512,5 +526,191 @@ describe("setup form token", () => {
     expect(answers.map((a) => a.status).sort((x, y) => x - y)).toEqual([303, 409]);
     expect(answers.find((a) => a.status === 409)?.body).toContain("Setup is already complete");
     expect(userRows(c)).toBe(1);
+  });
+});
+
+describe("form tokens on protected routes", () => {
+  const BUSY = "/__test/states/busy";
+  type Fixture = {
+    c: SignedInConsole;
+    recorder: Recorder;
+    setRole: (r: "viewer" | "owner") => void;
+  };
+
+  async function fixtures(): Promise<Fixture> {
+    const recorder: Recorder = { actions: [] };
+    let role: "viewer" | "owner" = "owner";
+    const c = await startSignedInConsole({
+      apiUrl: "http://127.0.0.1:9",
+      testRoutes: createFixtureRoutes({ recorder }),
+      roleOf: () => role,
+    });
+    cleanups.push(() => c.close());
+    return { c, recorder, setRole: (r) => (role = r) };
+  }
+
+  async function busyToken(c: SignedInConsole, cookie = c.cookie): Promise<string> {
+    return formTokenOf((await getPage(c, BUSY, cookie)).body, BUSY);
+  }
+
+  function busyBody(token: string): Record<string, string> {
+    return { csrf: SESSION_CSRF, form_token: token, choice: "kept-choice", action: "go" };
+  }
+
+  test("the same body twice: 200 Submitted: go, then 409 Already submitted", async () => {
+    const { c, recorder } = await fixtures();
+    const token = await busyToken(c);
+    const first = await postForm(c, BUSY, busyBody(token));
+    expect(first.status).toBe(200);
+    expect(first.body).toContain("Submitted: go");
+    expect(formTokenOf(first.body, BUSY)).not.toBe(token);
+    const second = await postForm(c, BUSY, busyBody(token));
+    expect(second.status).toBe(409);
+    expect(second.body).toContain("<h2>Already submitted</h2>");
+    expect(second.body).toContain(`<a href="${BUSY}">Open the page again</a>`);
+    expect(recorder.actions).toEqual([{ action: "go", choice: "kept-choice" }]);
+    const refused = c.logs.filter((l) => l.includes("form token refused"));
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toContain('"reason":"replayed","path":"/__test/states/busy"');
+    for (const line of c.logs) expect(line).not.toContain(token);
+  });
+
+  test("two concurrent POSTs with one token give one 200 and one 409", async () => {
+    const { c, recorder } = await fixtures();
+    const token = await busyToken(c);
+    const answers = await Promise.all([
+      postForm(c, BUSY, busyBody(token)),
+      postForm(c, BUSY, busyBody(token)),
+    ]);
+    expect(answers.map((a) => a.status).sort((x, y) => x - y)).toEqual([200, 409]);
+    expect(recorder.actions).toHaveLength(1);
+  });
+
+  const refusals: Array<[string, (f: Fixture) => Promise<string>]> = [
+    ["missing", () => Promise.resolve("")],
+    ["empty", () => Promise.resolve("")],
+    [
+      "wrong session",
+      async ({ c }) => {
+        const owner = c.store.userByEmail("owner@example.com");
+        if (owner === undefined) throw new Error("owner missing");
+        c.store.createSession(
+          "other-session-id-0123456789abcdefghijklmno",
+          owner.id,
+          "x",
+          FIXTURE_START,
+        );
+        return busyToken(c, "pulse_console_session=other-session-id-0123456789abcdefghijklmno");
+      },
+    ],
+    [
+      "wrong path",
+      async ({ c }) => {
+        const path = "/__test/states/conflict-409";
+        return formTokenOf((await getPage(c, path)).body, path);
+      },
+    ],
+    [
+      "expired",
+      async ({ c }) => {
+        const token = await busyToken(c);
+        c.setNow(FIXTURE_START + 43_200_000);
+        return token;
+      },
+    ],
+    [
+      "evicted",
+      async ({ c }) => {
+        const token = await busyToken(c);
+        for (let i = 0; i < 100; i++) await busyToken(c);
+        return token;
+      },
+    ],
+  ];
+  for (const [name, tokenFor] of refusals) {
+    test(`a ${name} token gives 409 with the form again and no action`, async () => {
+      const f = await fixtures();
+      const token = await tokenFor(f);
+      const body = busyBody(token);
+      if (name === "missing") delete body.form_token;
+      const res = await postForm(f.c, BUSY, body);
+      expect(res.status).toBe(409);
+      expect(res.body).toContain("This form has expired. Your input is kept below. Send it again.");
+      expect(res.body).toContain('value="kept-choice"');
+      expect(formTokenOf(res.body, BUSY)).toHaveLength(43);
+      expect(f.recorder.actions).toHaveLength(0);
+      const refused = f.c.logs.filter((l) => l.includes("form token refused"));
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toContain('"reason":"invalid"');
+      if (token !== "") for (const line of f.c.logs) expect(line).not.toContain(token);
+    });
+  }
+
+  test("expiry boundary: 43_199_999 ms is still accepted", async () => {
+    const { c, recorder } = await fixtures();
+    const token = await busyToken(c);
+    c.setNow(FIXTURE_START + 43_199_999);
+    expect((await postForm(c, BUSY, busyBody(token))).status).toBe(200);
+    expect(recorder.actions).toHaveLength(1);
+  });
+
+  test("a re-rendered form submits with its fresh token", async () => {
+    const { c, recorder } = await fixtures();
+    const stale = await postForm(c, BUSY, busyBody("unknown-token"));
+    expect(stale.status).toBe(409);
+    const res = await postForm(c, BUSY, busyBody(formTokenOf(stale.body, BUSY)));
+    expect(res.status).toBe(200);
+    expect(recorder.actions).toHaveLength(1);
+  });
+
+  test("a wrong CSRF or Origin 403 leaves the token usable", async () => {
+    const { c, recorder } = await fixtures();
+    const token = await busyToken(c);
+    const wrongCsrf = await postForm(c, BUSY, { ...busyBody(token), csrf: "wrong" });
+    expect(wrongCsrf.status).toBe(403);
+    expect(wrongCsrf.body).toContain("Request refused");
+    const badOrigin = await postForm(c, BUSY, busyBody(token), { origin: "http://evil.example" });
+    expect(badOrigin.status).toBe(403);
+    expect(recorder.actions).toHaveLength(0);
+    expect((await postForm(c, BUSY, busyBody(token))).status).toBe(200);
+    expect(recorder.actions).toHaveLength(1);
+  });
+
+  test("a role 403 runs after CSRF and leaves the token usable", async () => {
+    const recorder: Recorder = { actions: [] };
+    const routes = createFixtureRoutes({ recorder });
+    const busy = routes.get(BUSY);
+    if (busy === undefined) throw new Error("busy fixture missing");
+    const ADMIN = "/__test/admin-busy";
+    let role: "viewer" | "admin" = "viewer";
+    const c = await startSignedInConsole({
+      apiUrl: "http://127.0.0.1:9",
+      testRoutes: new Map([[ADMIN, { ...busy, path: ADMIN, requiredRole: "admin" }]]),
+      roleOf: () => role,
+    });
+    cleanups.push(() => c.close());
+    role = "admin";
+    const token = formTokenOf((await getPage(c, ADMIN)).body, ADMIN);
+    role = "viewer";
+    const crossSite = await postForm(c, ADMIN, { ...busyBody(token), csrf: "wrong" });
+    expect(crossSite.status).toBe(403);
+    expect(crossSite.body).toContain("Request refused");
+    const forged = await postForm(c, ADMIN, { ...busyBody(token), role: "owner" });
+    expect(forged.status).toBe(403);
+    expect(forged.body).toContain("This page needs the Admin role or higher. Your role is Viewer.");
+    expect(recorder.actions).toHaveLength(0);
+    role = "admin";
+    expect((await postForm(c, ADMIN, busyBody(token))).status).toBe(200);
+    expect(recorder.actions).toHaveLength(1);
+  });
+
+  test("2001 anonymous sign-in views do not evict a session form token", async () => {
+    const { c, recorder } = await fixtures();
+    const token = await busyToken(c);
+    for (let i = 0; i < 2001; i++) {
+      await fetch(`${c.base}/sign-in`, { headers: { cookie: "pulse_console_csrf=same-anon" } });
+    }
+    expect((await postForm(c, BUSY, busyBody(token))).status).toBe(200);
+    expect(recorder.actions).toHaveLength(1);
   });
 });
