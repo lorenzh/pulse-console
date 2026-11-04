@@ -20,7 +20,9 @@ Open <http://127.0.0.1:8082>. Bun runs the TypeScript source directly (no build 
 - `src/setup-code.ts` makes the setup code and the grant; `src/auth-throttle.ts` is the failure limiter; `src/passwords.ts` holds the password rules and hash parameters; `src/cookies.ts` names and serializes cookies; `src/connection-test.ts` calls pulse-api.
 - `src/request-guard.ts` holds the loopback `Host`, `Origin`, CSRF and `next` rules; `src/forms.ts` the content type, repeated-field and field rules.
 - `src/server.ts` is the HTTP server: security headers and CSP, the raw path rule, routes, phases and the POST order, the ops routes through pulse-kit's `handleOps`, and `404`. `listen` reports a bind failure with the error code only.
-- `src/pages.ts` holds the HTML templates; `src/styles.ts` the stylesheet served at `/console.css`.
+- `src/pages.ts` holds the setup and sign-in templates; `src/html.ts` the shared document head and form helpers (`csrfField`, `formTokenField`, `field`, `textareaField`, `submitButton`, `formErrorSummary`); `src/styles.ts` the stylesheet served at `/console.css`.
+- `src/shell.ts` renders the signed-in shell (skip link, header, sign-out form, navigation, banner slot, `main`); `src/navigation.ts` holds the nine-entry registry and `visibleNavigation`; `src/roles.ts` the `ConsoleRole` order, `hasRole` and role labels.
+- `src/states.ts` holds the shared UI state renderers; `src/api-failure.ts` maps a contract `fetchJson` error to an `ApiFailure` and its fixed texts.
 - `src/metrics.ts` holds `pulse_up`, the request and auth counters and the readiness state.
 
 ## Checks

@@ -8,6 +8,7 @@ import {
   WIRE_VERSION,
   WIRE_VERSION_HEADER,
 } from "@lorenzh/pulse-contract";
+import { wireLabel } from "./api-failure.ts";
 
 export type FetchLike = FetchJsonOptions<unknown>["fetch"];
 
@@ -36,13 +37,6 @@ const TIMEOUT_MS = 5000;
 type Call = "config" | "tokens";
 
 const failed = (text: string): ConnectionResult => ({ isOk: false, text });
-
-function wireLabel(header: string | null): string {
-  const text = (header ?? "").trim();
-  return text.length > 0 && text.length <= 16 && /^[0-9A-Za-z.-]+$/.test(text)
-    ? text
-    : "an unknown version";
-}
 
 function statusText(call: Call, status: number): string {
   if (status >= 300 && status < 400) {

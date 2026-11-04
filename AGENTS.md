@@ -100,8 +100,10 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 
 ## This repository
 
-- Pages are server-rendered HTML from template strings in `src/pages.ts`; every value goes
-  through kit `escapeHtml`. The only asset is the stylesheet in `src/styles.ts`, served at
+- Pages are server-rendered HTML from template strings in `src/pages.ts` (setup, sign-in),
+  `src/shell.ts` (signed-in shell) and `src/states.ts` (shared states), with the helpers of
+  `src/html.ts`; every value goes through kit `escapeHtml`. Only the shell head carries the
+  one script element `<script src="/console.js" defer></script>`. The only asset is the stylesheet in `src/styles.ts`, served at
   `/console.css`. The CSP in `src/server.ts` is `default-src 'none'; script-src 'self';
   style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors
   'none'`: no inline script or style and no external asset. A change that needs more widens the
