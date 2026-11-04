@@ -574,7 +574,13 @@ async function postSignIn(ctx: Ctx): Promise<void> {
     sendHtml(ctx, 401, signInPage({ csrf, next, error: WRONG_CREDENTIALS }));
     return;
   }
-  startSession(ctx, user.id);
+  try {
+    startSession(ctx, user.id);
+  } catch (err) {
+    // A failed session write must not hold the reservation: it would lock the owner out.
+    admission.attempt.release();
+    throw err;
+  }
   admission.attempt.succeed();
   deps.log.info("signed in", { userId: user.id });
   deps.metrics.recordAuthAttempt("sign-in", "success");

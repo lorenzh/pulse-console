@@ -45,14 +45,32 @@ type Console = {
 };
 
 async function startConsole(
-  opts: { dbPath?: string; clock?: { now: number } } = {},
+  opts: {
+    dbPath?: string;
+    clock?: { now: number };
+    failing?: { method: keyof AccountStore | undefined };
+  } = {},
 ): Promise<Console> {
   const dbPath = opts.dbPath ?? tempDb();
   const db = openDatabase(dbPath, {
     createFile: (path, mode) => closeSync(openSync(path, "wx", mode)),
     chmod: chmodSync,
   });
-  const store = createAccountStore(db);
+  const realStore = createAccountStore(db);
+  const failing = opts.failing;
+  const store: AccountStore =
+    failing === undefined
+      ? realStore
+      : new Proxy(realStore, {
+          get(target, key, receiver) {
+            if (typeof key === "string" && key === String(failing.method)) {
+              return () => {
+                throw new Error("database is locked");
+              };
+            }
+            return Reflect.get(target, key, receiver);
+          },
+        });
   if (store.instance() === undefined) {
     const passwordHash = await hashOnce();
     store.completeSetup(
@@ -229,6 +247,21 @@ describe("credentials", () => {
 });
 
 describe("throttle", () => {
+  for (const method of ["deleteSession", "deleteExpiredSessions", "createSession"] as const) {
+    test(`a failed ${method} releases the reservation and never locks the owner`, async () => {
+      const failing: { method: keyof AccountStore | undefined } = { method };
+      const c = await startConsole({ failing });
+      const client = new Client(c);
+      await client.get("/sign-in");
+      client.jar.set(SESSION, "stale-session-id");
+      for (let i = 0; i < 6; i += 1) {
+        expect((await client.signIn()).status).toBe(500);
+      }
+      failing.method = undefined;
+      expect((await client.signIn()).status).toBe(303);
+    });
+  }
+
   test("five failures lock the account for 900 s, also for correct credentials", async () => {
     const c = await startConsole();
     const client = new Client(c);
