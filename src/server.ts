@@ -58,7 +58,7 @@ const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "content-security-policy": CONTENT_SECURITY_POLICY,
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
-  "referrer-policy": "no-referrer",
+  "referrer-policy": "same-origin",
 };
 const NOT_FOUND = "not found\n";
 const MISDIRECTED = "misdirected request: set PULSE_CONSOLE_PUBLIC_URL to serve this host\n";

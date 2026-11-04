@@ -129,6 +129,6 @@ Every response, including ops routes, `404` and `405`, carries:
 - `content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`
 - `x-content-type-options: nosniff`
 - `x-frame-options: DENY`
-- `referrer-policy: no-referrer`
+- `referrer-policy: same-origin`: a browser sends the real `Origin` on a same-origin form POST, and no referrer to another origin. With `no-referrer` a browser sends `Origin: null`, which the Origin check refuses.
 
 Pages also carry `cache-control: no-store`. They load only `/console.css`: no script, no inline style and no external asset.
