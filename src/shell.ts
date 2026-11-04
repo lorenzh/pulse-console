@@ -45,11 +45,13 @@ ${documentHead({ title: view.title, instanceName: view.instanceName, hasScript: 
 <header class="shell-header">
 <p class="instance">${escapeHtml(view.instanceName)}</p>
 <p class="account">Signed in as ${escapeHtml(view.user.name)} (${escapeHtml(view.user.email)})<br>Role: ${roleLabel(view.role)}</p>
-<form method="post" action="/sign-out" class="sign-out">
+<div class="sign-out">
+<form method="post" action="/sign-out">
 ${csrfField(view.csrf)}
 ${formTokenField(view.signOutToken)}
 ${submitButton({ label: "Sign out", busyLabel: "Signing out…", variant: "secondary" })}
 </form>
+</div>
 </header>
 ${navigationHtml(view)}
 ${banner}<main id="main" class="shell-main">

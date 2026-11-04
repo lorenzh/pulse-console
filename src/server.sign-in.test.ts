@@ -92,6 +92,7 @@ async function startConsole(
   const logs: string[] = [];
   const metrics = createMetrics();
   const server: Server = createConsoleServer({
+    instanceName: "pulse Console",
     metrics,
     log: createLogger({ level: "debug", write: (_level, line) => logs.push(line) }),
     mode: "loopback",
@@ -131,6 +132,12 @@ async function startConsole(
 
 type Reply = { status: number; headers: Headers; body: string };
 
+// The cookies that the page of each form needs; every other form needs only the CSRF cookie.
+const FORM_COOKIES: Record<string, string[]> = {
+  "/sign-out": ["pulse_console_session"],
+  "/setup/owner": ["pulse_console_csrf", "pulse_console_setup"],
+};
+
 class Client {
   readonly jar = new Map<string, string>();
   readonly c: Console;
@@ -160,12 +167,29 @@ class Client {
     return { status: res.status, headers: res.headers, body: await res.text() };
   }
 
+  /** A fresh form token from the page of that form, sent with only the cookies it needs. */
+  private async freshFormToken(path: string): Promise<string | undefined> {
+    const page = path === "/sign-out" ? "/" : path;
+    const names = FORM_COOKIES[path] ?? ["pulse_console_csrf"];
+    const cookie = names
+      .filter((n) => this.jar.has(n))
+      .map((n) => `${n}=${this.jar.get(n)}`)
+      .join("; ");
+    const res = await fetch(this.c.base + page, { redirect: "manual", headers: { cookie } });
+    return /name="form_token" value="([^"]+)"/.exec(await res.text())?.[1];
+  }
+
   async post(
     path: string,
     fields: Record<string, string>,
     extra: Record<string, string> = {},
   ): Promise<Reply> {
-    const body = new URLSearchParams({ csrf: this.jar.get("pulse_console_csrf") ?? "", ...fields });
+    const token = await this.freshFormToken(path);
+    const body = new URLSearchParams({
+      csrf: this.jar.get("pulse_console_csrf") ?? "",
+      ...(token === undefined ? {} : { form_token: token }),
+      ...fields,
+    });
     const res = await fetch(this.c.base + path, {
       method: "POST",
       redirect: "manual",
@@ -188,7 +212,9 @@ class Client {
 }
 
 function withoutCsrf(html: string): string {
-  return html.replace(/name="csrf" value="[^"]*"/, "");
+  return html
+    .replace(/name="csrf" value="[^"]*"/, "")
+    .replace(/name="form_token" value="[^"]*"/, "");
 }
 
 function sessionRows(dbPath: string): string[] {

@@ -1,15 +1,21 @@
 import { escapeHtml } from "@lorenzh/pulse-kit";
-import { csrfField, field, paragraph, plainDocument } from "./html.ts";
+import { csrfField, field, formTokenField, paragraph, plainDocument } from "./html.ts";
+import { alreadySubmittedState } from "./states.ts";
 
 // Every value goes through escapeHtml. The CSP allows only the /console.css stylesheet.
 
 /** The setup code form. */
-export function setupCodePage(view: { csrf: string; error?: string | undefined }): string {
+export function setupCodePage(view: {
+  csrf: string;
+  formToken: string;
+  error?: string | undefined;
+}): string {
   return plainDocument(
     "Set up pulse Console",
     `<p>Enter the setup code from the console log. It is the line that starts with "pulse-console setup code:".</p>
 <form method="post" action="/setup">
 ${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
 ${field({ label: "Setup code", name: "code", type: "text", autocomplete: "one-time-code", error: view.error })}
 <div class="actions"><button type="submit">Unlock setup</button></div>
 </form>`,
@@ -34,6 +40,7 @@ function connectionHtml(view: ConnectionView | undefined): string {
 /** The owner and API form of setup. Password fields are never filled in. */
 export function setupOwnerPage(view: {
   csrf: string;
+  formToken: string;
   values: OwnerValues;
   errors?: OwnerErrors | undefined;
   connection?: ConnectionView | undefined;
@@ -45,6 +52,7 @@ export function setupOwnerPage(view: {
     `${paragraph(view.message, ' role="alert"')}${connectionHtml(view.connection)}<p>The console needs a pulse-api token with the read or checks scope and the admin scope. If pulse-api answers that it is throttling, wait a minute before the next test.</p>
 <form method="post" action="/setup/owner">
 ${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
 ${field({ label: "pulse-api URL", name: "api_url", type: "url", autocomplete: "url", value: view.values.apiUrl, error: errors.apiUrl })}
 ${field({ label: "Owner email", name: "email", type: "email", autocomplete: "username", value: view.values.email, error: errors.email })}
 ${field({ label: "Owner name", name: "name", type: "text", autocomplete: "name", value: view.values.name, error: errors.name })}
@@ -61,6 +69,7 @@ ${field({ label: "Confirm password", name: "password_confirm", type: "password",
 /** The sign-in form. */
 export function signInPage(view: {
   csrf: string;
+  formToken: string;
   next: string;
   notice?: string | undefined;
   error?: string | undefined;
@@ -69,6 +78,7 @@ export function signInPage(view: {
     "Sign in",
     `${paragraph(view.notice, ' class="notice"')}${paragraph(view.error, ' role="alert" class="error"')}<form method="post" action="/sign-in">
 ${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
 <input type="hidden" name="next" value="${escapeHtml(view.next)}">
 ${field({ label: "Email", name: "email", type: "email", autocomplete: "username" })}
 ${field({ label: "Password", name: "password", type: "password", autocomplete: "current-password" })}
@@ -77,22 +87,9 @@ ${field({ label: "Password", name: "password", type: "password", autocomplete: "
   );
 }
 
-/** The signed-in landing page with the sign-out form. */
-export function landingPage(view: {
-  csrf: string;
-  name: string;
-  email: string;
-  apiOrigin: string;
-}): string {
-  return plainDocument(
-    "pulse Console",
-    `<p>Signed in as ${escapeHtml(view.name)} (${escapeHtml(view.email)}).</p>
-<p>pulse-api: ${escapeHtml(view.apiOrigin)}</p>
-<form method="post" action="/sign-out">
-${csrfField(view.csrf)}
-<div class="actions"><button type="submit">Sign out</button></div>
-</form>`,
-  );
+/** The "already submitted" state in the plain document of setup and sign-in. */
+export function alreadySubmittedPage(reopenHref: string): string {
+  return plainDocument("Already submitted", alreadySubmittedState({ reopenHref }));
 }
 
 /** A page with one message and an optional link. */

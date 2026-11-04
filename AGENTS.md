@@ -103,13 +103,17 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 - Pages are server-rendered HTML from template strings in `src/pages.ts` (setup, sign-in),
   `src/shell.ts` (signed-in shell) and `src/states.ts` (shared states), with the helpers of
   `src/html.ts`; every value goes through kit `escapeHtml`. Only the shell head carries the
-  one script element `<script src="/console.js" defer></script>`. The only asset is the stylesheet in `src/styles.ts`, served at
-  `/console.css`. The CSP in `src/server.ts` is `default-src 'none'; script-src 'self';
+  one script element `<script src="/console.js" defer></script>`. The assets are the stylesheet in `src/styles.ts`, served at
+  `/console.css`, and the one script `CONSOLE_JS` in `src/console-script.ts`, served at
+  `/console.js`. The script holds only the busy button now; later the copy buttons and the
+  preview extend it instead of adding another script. The CSP in `src/server.ts` is `default-src 'none'; script-src 'self';
   style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors
   'none'`: no inline script or style and no external asset. A change that needs more widens the
   CSP in the same change.
 - Every form POST follows the fixed order in `docs/configuration.md` (Origin, content type, body
   size, repeated fields, CSRF before any other check of the form).
+- Every POST form carries a hidden `form_token` directly after `csrf` (`src/form-tokens.ts`);
+  the route uses it up at its commit point, after every other check.
 - The server compares the raw request path (`req.url` up to the first `?`) byte for byte. Never
   route on a parsed `URL.pathname`: it turns `//healthz` or `/%2e%2e/` into `/`.
 - The admin token, passwords and the setup code never appear in a log line, an error, `/metrics` or a response (the code's one stdout line excepted).

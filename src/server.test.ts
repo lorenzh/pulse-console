@@ -47,6 +47,7 @@ function depsFor(metrics: Metrics): Parameters<typeof createConsoleServer>[0] {
   });
   const bytes = (size: number): Uint8Array => new Uint8Array(size).fill(7);
   return {
+    instanceName: "pulse Console",
     metrics,
     log: createLogger({ level: "error", write: () => undefined }),
     mode: "loopback",
@@ -267,6 +268,43 @@ describe("other paths and methods", () => {
       'pulse_console_http_requests_total{path="/readyz",code="200"} 1',
       'pulse_console_http_requests_total{path="/setup",code="200"} 1',
       'pulse_console_http_requests_total{path="other",code="404"} 1',
+    ]);
+  });
+});
+
+describe("/console.js", () => {
+  test("GET serves the busy-button script with the security headers", async () => {
+    const { base } = await start();
+    const res = await fetch(`${base}/console.js`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("content-security-policy")).toBe(
+      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    );
+    expectSecurityHeaders(res);
+    const js = await res.text();
+    for (const part of ["data-busy-label", "aria-busy", "pageshow", "setTimeout"]) {
+      expect(js).toContain(part);
+    }
+    for (const part of ["eval", "innerHTML", "fetch(", "XMLHttpRequest", "localStorage"]) {
+      expect(js).not.toContain(part);
+    }
+  });
+
+  test("HEAD has no body, POST is 405, and GET is counted under its own path", async () => {
+    const { base } = await start();
+    const head = await fetch(`${base}/console.js`, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    expect(await head.text()).toBe("");
+    const post = await fetch(`${base}/console.js`, { method: "POST" });
+    expect(post.status).toBe(405);
+    expect(post.headers.get("allow")).toBe("GET, HEAD");
+    const { base: other } = await start();
+    await fetch(`${other}/console.js`);
+    expect(requestSeries(await metricsText(other))).toEqual([
+      'pulse_console_http_requests_total{path="/console.js",code="200"} 1',
     ]);
   });
 });

@@ -60,6 +60,7 @@ async function startConsole(
     void api.stop(true);
   });
   const server: Server = createConsoleServer({
+    instanceName: "pulse Console",
     metrics,
     log: createLogger({ level: "debug", write: (_l, line) => logs.push(line) }),
     mode,
@@ -131,6 +132,12 @@ function send(
   });
 }
 
+/** A fresh form token from a GET /setup with the same Host and cookie. */
+async function setupFormToken(port: number, host: string, cookie: string): Promise<string> {
+  const page = await send(port, "GET", "/setup", { host, cookie });
+  return /name="form_token" value="([^"]+)"/.exec(page.body)?.[1] ?? "";
+}
+
 function formHeaders(port: number, extra: Record<string, string> = {}): Record<string, string> {
   return {
     host: `127.0.0.1:${port}`,
@@ -176,6 +183,8 @@ describe("headers and pages", () => {
     expect(page.headers["set-cookie"]?.[0]).toMatch(
       /^__Host-pulse_console_csrf=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; SameSite=Strict; Secure$/,
     );
+    const strictCookie = `__Host-pulse_console_csrf=${CSRF}`;
+    const strictToken = await setupFormToken(c.port, "console.example.com", strictCookie);
     const unlock = await send(
       c.port,
       "POST",
@@ -186,7 +195,7 @@ describe("headers and pages", () => {
         "content-type": "application/x-www-form-urlencoded",
         cookie: `__Host-pulse_console_csrf=${CSRF}`,
       },
-      `csrf=${CSRF}&code=${c.code}`,
+      `csrf=${CSRF}&code=${c.code}&form_token=${strictToken}`,
     );
     expect(unlock.status).toBe(303);
     expect(unlock.headers["set-cookie"]?.[0]).toMatch(
@@ -283,7 +292,14 @@ describe("POST order", () => {
   test("owner form: format 422, connection 502 and commit 303 follow the grant", async () => {
     const c = await startConsole();
     const p = c.port;
-    const unlock = await send(p, "POST", "/setup", formHeaders(p), `csrf=${CSRF}&code=${c.code}`);
+    const unlockToken = await setupFormToken(p, `127.0.0.1:${p}`, `pulse_console_csrf=${CSRF}`);
+    const unlock = await send(
+      p,
+      "POST",
+      "/setup",
+      formHeaders(p),
+      `csrf=${CSRF}&code=${c.code}&form_token=${unlockToken}`,
+    );
     const grant = String(unlock.headers["set-cookie"]?.[0]).split(";")[0];
     const headers = formHeaders(p, { cookie: `pulse_console_csrf=${CSRF}; ${grant}` });
     const fields = new URLSearchParams({
@@ -318,7 +334,14 @@ describe("leak scan of the setup flow", () => {
     const csrf = csrfCookie.slice("pulse_console_csrf=".length).split(";")[0] ?? "";
     const base = formHeaders(p, { cookie: `pulse_console_csrf=${csrf}` });
     answers.push(await send(p, "POST", "/setup", base, `csrf=${csrf}&code=0000`));
-    const unlock = await send(p, "POST", "/setup", base, `csrf=${csrf}&code=${c.code}`);
+    const unlockToken = await setupFormToken(p, `127.0.0.1:${p}`, `pulse_console_csrf=${csrf}`);
+    const unlock = await send(
+      p,
+      "POST",
+      "/setup",
+      base,
+      `csrf=${csrf}&code=${c.code}&form_token=${unlockToken}`,
+    );
     answers.push(unlock);
     const grantCookie = String(unlock.headers["set-cookie"]?.[0]);
     expect(grantCookie.startsWith("pulse_console_setup=")).toBe(true);

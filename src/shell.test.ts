@@ -17,7 +17,7 @@ test("renders the instance, account, role and sign-out form", () => {
   expect(html).toContain("pulse Console");
   expect(html).toContain("Signed in as Owner &lt;Sentinel&gt; (o@example.com)");
   expect(html).toContain("Role: Admin");
-  expect(html).toContain('<form method="post" action="/sign-out" class="sign-out">');
+  expect(html).toContain('<div class="sign-out">\n<form method="post" action="/sign-out">');
   expect(html).toContain(
     '<input type="hidden" name="csrf" value="csrf-value">\n<input type="hidden" name="form_token" value="form-token-value">',
   );

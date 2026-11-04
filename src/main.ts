@@ -64,6 +64,7 @@ async function start(): Promise<void> {
   const server = createConsoleServer({
     metrics,
     log,
+    instanceName: "pulse Console",
     mode: settings.mode,
     publicOrigin: settings.publicOrigin,
     defaultApiUrl: settings.apiUrl,
