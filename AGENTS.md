@@ -25,7 +25,7 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 
 ## Repository boundaries
 
-- `pulse-contract` holds shared types, plain runtime validators and the wire version. It depends on no other repo. The console does not depend on it yet: it reads no API shape.
+- `pulse-contract` holds shared types, plain runtime validators and the wire version. It depends on no other repo. The console pins it and reads the pulse-api admin API through its `fetchJson`, validators and `WIRE_VERSION`.
 - Import contract types with `import type`; import its validators and wire version as values. A service never imports another service.
 - Services talk to each other only over HTTP at run time, in the shapes the contract defines.
 - Pin the contract dependency to a full commit SHA on its `main`; update the pin when the spec needs a newer contract.
