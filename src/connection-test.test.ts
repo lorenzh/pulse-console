@@ -20,6 +20,61 @@ const configBody = (count: number): string =>
     maintenance: [],
   });
 
+// Counterexamples 40-42: literal `GET /admin/config` answers of a 1.x and a 2.0.0 api.
+const config1x = {
+  revision: `sha256-${"1".repeat(64)}`,
+  checks: [
+    {
+      id: "a",
+      name: "A",
+      url: "https://a.test",
+      intervalMs: 1000,
+      method: "POST",
+      headers: ["authorization"],
+      hasBody: true,
+    },
+    { id: "b", name: "B", url: "https://b.test", intervalMs: 1000 },
+  ],
+  components: [],
+  maintenance: [],
+};
+const config200 = {
+  revision: `sha256-${"2".repeat(64)}`,
+  checks: [
+    {
+      id: "a",
+      name: "A",
+      url: "https://a.test",
+      intervalMs: 1000,
+      method: "POST",
+      headers: { authorization: { keep: true } },
+      body: { keep: true },
+      source: "database",
+    },
+    { id: "b", name: "B", url: "https://b.test", intervalMs: 1000, source: "file" },
+    {
+      id: "h",
+      name: "H",
+      type: "heartbeat",
+      period: 1000,
+      grace: 0,
+      hasSecret: true,
+      source: "file",
+    },
+  ],
+  shadowed: [
+    { id: "b", name: "B db", url: "https://b.test", intervalMs: 1000, source: "database" },
+  ],
+  components: [],
+  maintenance: [],
+  file: { state: "invalid", message: "checks[0].url: is required", lastAppliedAt: 7 },
+};
+const literalConfig = (body: unknown): Reply => ({
+  status: 200,
+  body: JSON.stringify(body),
+  headers: wire1,
+});
+
 type Reply = { status: number; body?: string; headers?: Record<string, string> };
 type Seen = { path: string; authorization: string | null };
 
@@ -101,6 +156,26 @@ describe("testConnection success", () => {
     ]);
     expect(calls.map((c) => c.redirect)).toEqual(["manual", "manual"]);
     expect(timeouts).toEqual([5000, 5000]);
+  });
+
+  test("a 1.x answer with header names and hasBody counts 2 checks", async () => {
+    api.set(literalConfig(config1x));
+    expect(await testConnection(api.url, recordingDeps().deps)).toEqual({
+      isOk: true,
+      wireVersion: 1,
+      checkCount: 2,
+      adminScope: "confirmed",
+    });
+  });
+
+  test("a 2.0.0 answer counts 3 effective checks, not the shadowed entry", async () => {
+    api.set(literalConfig(config200));
+    expect(await testConnection(api.url, recordingDeps().deps)).toEqual({
+      isOk: true,
+      wireVersion: 1,
+      checkCount: 3,
+      adminScope: "confirmed",
+    });
   });
 
   test("zero checks is a success", async () => {
@@ -218,6 +293,22 @@ describe("testConnection failures", () => {
       okTokens,
       "pulse-api sent an invalid answer.",
     ],
+    ...(
+      [
+        ["revision missing", { ...config1x, revision: undefined }],
+        ["revision sha256-abc", { ...config1x, revision: "sha256-abc" }],
+        ["checks a string", { ...config1x, checks: SENTINEL }],
+        ["check entry a string", { ...config1x, checks: [SENTINEL] }],
+        ["check entry without id", { ...config1x, checks: [{ name: SENTINEL }] }],
+        ["check id empty", { ...config1x, checks: [{ id: "", name: SENTINEL }] }],
+        ["check id a number", { ...config1x, checks: [{ id: 7, name: SENTINEL }] }],
+      ] as const
+    ).map(([name, body]): [string, Reply, Reply, string] => [
+      `summary: ${name}`,
+      literalConfig(body),
+      okTokens,
+      "pulse-api sent an invalid answer.",
+    ]),
     [
       "tokens fails validation",
       okConfig(),
