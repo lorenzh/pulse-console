@@ -194,6 +194,8 @@ describe("PULSE_CONSOLE_PUBLIC_URL and the mode", () => {
         `${NAME}: must be an http(s) URL without credentials, query or fragment`,
       ],
       ["http://console.example/secret", `${NAME}: must not have a path other than /`],
+      ["https://console.example//", `${NAME}: must not have a path other than /`],
+      ["https://console.example/a/", `${NAME}: must not have a path other than /`],
     ];
     for (const [value, text] of cases) {
       const message = failure({ PULSE_API_URL: API, [NAME]: value });

@@ -47,13 +47,19 @@ describe("setup transaction", () => {
     expect(count(db, "instance")).toBe(1);
     const user = store.userByEmail("owner@example.com");
     expect(user).toEqual({
-      id: user?.id ?? -1,
+      id: 1,
       email: OWNER.email,
       name: "Owner",
       passwordHash: OWNER.passwordHash,
       role: "owner",
     });
-    expect(store.userById(user?.id ?? -1)).toEqual(user);
+    expect(store.userById(1)).toEqual({
+      id: 1,
+      email: "owner@example.com",
+      name: "Owner",
+      passwordHash: "$argon2id$fake",
+      role: "owner",
+    });
     expect(store.userByEmail("other@example.com")).toBeUndefined();
   });
 

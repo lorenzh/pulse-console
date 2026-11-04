@@ -50,7 +50,8 @@ function readPublicOrigin(env: Env): string | undefined {
   const name = "PULSE_CONSOLE_PUBLIC_URL";
   const href = readCheckedUrl(env, name);
   if (href === undefined) return undefined;
-  const url = new URL(href);
+  // readUrl drops a trailing slash, so the path is checked on the value as written.
+  const url = new URL(readString(env, name) ?? href);
   if (url.pathname !== "/") {
     throw new StartupError(`${name}: must not have a path other than /`, { setting: name });
   }
