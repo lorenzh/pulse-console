@@ -23,6 +23,7 @@ Open <http://127.0.0.1:8082>. Bun runs the TypeScript source directly (no build 
 - `src/pages.ts` holds the setup and sign-in templates; `src/html.ts` the shared document head and form helpers (`csrfField`, `formTokenField`, `field`, `textareaField`, `submitButton`, `formErrorSummary`); `src/styles.ts` the stylesheet served at `/console.css`.
 - `src/shell.ts` renders the signed-in shell (skip link, header, sign-out form, navigation, banner slot, `main`); `src/navigation.ts` holds the nine-entry registry and `visibleNavigation`; `src/roles.ts` the `ConsoleRole` order, `hasRole` and role labels.
 - `src/states.ts` holds the shared UI state renderers; `src/api-failure.ts` maps a contract `fetchJson` error to an `ApiFailure` and its fixed texts.
+- `src/overview-read.ts` reads `GET /admin/config` (with the token) and `GET /checks` (without it) at the same time; `src/overview.ts` counts the check states, picks the overall state and renders the Overview body.
 - `src/metrics.ts` holds `pulse_up`, the request and auth counters and the readiness state.
 
 ## Checks
@@ -47,7 +48,7 @@ Work test first. Tests sit next to the code as `src/<module>.test.ts`, use hand-
 - `src/server.sign-in.test.ts` covers sign-in, the throttle, session rotation, the idle limit, the cookie refresh, `next` and sign-out.
 - `src/server.security.test.ts` covers the POST order, `Host`, `Origin`, CSRF, body limits, the CSP, cookie attributes and a leak scan.
 - `src/main.startup.test.ts` spawns `bun src/main.ts` and checks bad settings and database errors, the setup code line, the warnings, the start log, the file mode and the exit code `0` on `SIGTERM`.
-- Test helpers stay inside the `*.test.ts` file that uses them, because the image check rejects only those names.
+- Test helpers used by one test file stay inside it. Helpers shared by several test files, such as the fake pulse-api in `test/fake-api.ts`, live in `test/`. The image copies only `src`, so `test/` never ships; `tsconfig.json` includes `test` so it is typechecked and linted.
 
 ## Lefthook
 
