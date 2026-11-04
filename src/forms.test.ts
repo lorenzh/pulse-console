@@ -55,6 +55,12 @@ describe("API URL", () => {
   });
   test("one trailing slash is dropped and a path prefix stays", () => {
     expect(checkApiUrl("http://api:3000/")).toEqual({ isOk: true, url: "http://api:3000" });
+    expect(checkApiUrl(" http://api:3000/pulse/ ")).toEqual({
+      isOk: true,
+      url: "http://api:3000/pulse",
+    });
+    expect(checkApiUrl("\thttp://api:3000\n")).toEqual({ isOk: true, url: "http://api:3000" });
+    expect(checkApiUrl("   ")).toEqual({ isOk: false, text: "Enter the pulse-api URL." });
     expect(checkApiUrl("http://api:3000/pulse/")).toEqual({
       isOk: true,
       url: "http://api:3000/pulse",

@@ -34,7 +34,9 @@ export function parseForm<K extends string>(body: string, known: readonly K[]): 
 export type ApiUrlCheck = { isOk: true; url: string } | { isOk: false; text: string };
 
 /** The PULSE_API_URL rules plus a length cap. One trailing `/` is dropped; a path prefix stays. */
-export function checkApiUrl(raw: string | undefined): ApiUrlCheck {
+export function checkApiUrl(input: string | undefined): ApiUrlCheck {
+  // Surrounding whitespace is trimmed first, as the PULSE_API_URL rules do.
+  const raw = input?.trim();
   const fail: ApiUrlCheck = {
     isOk: false,
     text: "Enter an http(s) URL without credentials, query or fragment.",

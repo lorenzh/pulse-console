@@ -11,7 +11,7 @@ import {
 } from "@lorenzh/pulse-kit";
 import type { AccountStore } from "./account-store.ts";
 import { type AuthThrottle, createAuthThrottle } from "./auth-throttle.ts";
-import { type FetchLike, testConnection } from "./connection-test.ts";
+import { type FetchLike, NO_TOKEN_TEXT, testConnection } from "./connection-test.ts";
 import { readCookie, serializeCookie, serializeCookieDeletion } from "./cookies.ts";
 import {
   checkApiUrl,
@@ -200,6 +200,11 @@ function ownerDefaults(ctx: Ctx): OwnerValues {
   return { apiUrl: ctx.deps.defaultApiUrl, email: "", name: "" };
 }
 
+// Without a token no setup can complete, so the first owner page already says why.
+function missingTokenView(ctx: Ctx): ConnectionView | undefined {
+  return ctx.deps.adminToken === undefined ? { isOk: false, text: NO_TOKEN_TEXT } : undefined;
+}
+
 function handleGet(ctx: Ctx, isSetUp: boolean): void {
   switch (ctx.path) {
     case "/":
@@ -211,7 +216,15 @@ function handleGet(ctx: Ctx, isSetUp: boolean): void {
     case "/setup/owner":
       if (!hasGrant(ctx)) redirect(ctx, "/setup");
       else
-        sendHtml(ctx, 200, setupOwnerPage({ csrf: ensureCsrf(ctx), values: ownerDefaults(ctx) }));
+        sendHtml(
+          ctx,
+          200,
+          setupOwnerPage({
+            csrf: ensureCsrf(ctx),
+            values: ownerDefaults(ctx),
+            connection: missingTokenView(ctx),
+          }),
+        );
       return;
     case "/sign-in":
       sendSignInForm(ctx, isSetUp);
@@ -317,23 +330,18 @@ async function postSetupCode(ctx: Ctx): Promise<void> {
 type OwnerForm = FormFields<(typeof OWNER_FIELDS)[number]>;
 type ValidOwner = { apiUrl: string; email: string; name: string; password: string };
 
-function validateOwner(
-  fields: OwnerForm,
-  isComplete: boolean,
-): { owner: ValidOwner; errors: OwnerErrors } {
+function validateOwner(fields: OwnerForm): { owner: ValidOwner; errors: OwnerErrors } {
   const errors: OwnerErrors = {};
   const apiUrl = checkApiUrl(fields.api_url);
   const email = checkEmail(fields.email);
   const name = checkName(fields.name);
   const password = fields.password ?? "";
   if (!apiUrl.isOk) errors.apiUrl = apiUrl.text;
-  // A test needs only the URL; the account fields are checked when setup completes.
-  if (isComplete) {
-    if (!email.isOk) errors.email = email.text;
-    if (!name.isOk) errors.name = name.text;
-    const text = passwordText(password, fields.password_confirm ?? "");
-    if (text !== undefined) errors.password = text;
-  }
+  // Every field is checked before the connection test, for both actions.
+  if (!email.isOk) errors.email = email.text;
+  if (!name.isOk) errors.name = name.text;
+  const text = passwordText(password, fields.password_confirm ?? "");
+  if (text !== undefined) errors.password = text;
   return {
     owner: {
       apiUrl: apiUrl.isOk ? apiUrl.url : "",
@@ -365,7 +373,7 @@ async function postSetupOwner(ctx: Ctx): Promise<void> {
   const csrf = csrfOf(fields);
   const action = fields.action;
   const isComplete = action === "complete";
-  const { owner, errors } = validateOwner(fields, isComplete);
+  const { owner, errors } = validateOwner(fields);
   const values = keptValues(fields);
   if (action !== "test" && !isComplete) {
     sendHtml(ctx, 422, setupOwnerPage({ csrf, values, errors, message: "Choose an action." }));

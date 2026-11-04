@@ -349,6 +349,38 @@ describe("owner form", () => {
     expect(ok.body).not.toContain(emoji);
   });
 
+  test("invalid account fields are 422 for both actions before any API request", async () => {
+    const api = startApi();
+    const c = await startConsole();
+    const client = new Client(c);
+    await client.unlock();
+    const short = "elevenchars";
+    for (const action of ["test", "complete"] as const) {
+      for (const [fields, text] of [
+        [{ email: "not-an-email" }, "Enter a valid email address."],
+        [{ name: "" }, "Enter a name of 1 to 100 characters."],
+        [{ password: short, password_confirm: short }, "at least 12 characters"],
+        [{ password_confirm: `${PASSWORD}x` }, "The passwords do not match."],
+      ] as const) {
+        const r = await client.post("/setup/owner", { ...ownerFields(api.url, action), ...fields });
+        expect(r.status).toBe(422);
+        expect(r.body).toContain(text);
+      }
+    }
+    expect(api.requests).toHaveLength(0);
+  });
+
+  test("the first owner page shows the missing-token instruction only without a token", async () => {
+    const text =
+      "The console has no pulse-api token. Set PULSE_CONSOLE_ADMIN_TOKEN_FILE and restart the console.";
+    const without = new Client(await startConsole({ adminToken: undefined }));
+    await without.unlock();
+    expect((await without.get("/setup/owner")).body).toContain(text);
+    const withToken = new Client(await startConsole());
+    await withToken.unlock();
+    expect((await withToken.get("/setup/owner")).body).not.toContain(text);
+  });
+
   test("the form defaults to PULSE_API_URL and holds the exact CSRF field", async () => {
     const c = await startConsole({ defaultApiUrl: "http://api:3000" });
     const client = new Client(c);
