@@ -1029,3 +1029,87 @@ describe("GET /checks/shadowed", () => {
     expect(text).not.toContain("dns-a");
   });
 });
+
+describe("editor GET routes", () => {
+  const probeText =
+    "Every probe runs this check. It is down when at least two locations report down; with one reporting location, that location decides. Choosing locations or a quorum per check is not available yet.";
+  const heartbeatText =
+    "Heartbeat checks are not run by probes and have no quorum; your job pings pulse-api. With no ping for longer than the period plus the grace time, the check is down at once.";
+  const editable = {
+    ...checkConfig,
+    checks: checkConfig.checks.map((check) => ({ ...check, source: "database" })),
+    shadowed: [],
+  };
+  const cases: Array<[string, string, boolean]> = [
+    ["/checks/new?type=http", "create http", false],
+    ["/checks/new?type=tls", "create tls", false],
+    ["/checks/new?type=tcp", "create tcp", false],
+    ["/checks/new?type=dns", "create dns", false],
+    ["/checks/new?type=domain", "create domain", false],
+    ["/checks/new?type=heartbeat", "create heartbeat", true],
+    ["/checks/edit?id=web", "edit http", false],
+    ["/checks/edit?id=cert", "edit tls", false],
+    ["/checks/edit?id=db-port", "edit tcp", false],
+    ["/checks/edit?id=dns-a", "edit dns", false],
+    ["/checks/edit?id=domain-exp", "edit domain", false],
+    ["/checks/edit?id=nightly-backup", "edit heartbeat", true],
+  ];
+  for (const [path, label, isHeartbeat] of cases) {
+    test(`${label} shows its quorum paragraph above Submit and no quorum input`, async () => {
+      const c = await consoleFor(fakeApi(editable), { role: "member" });
+      const res = await getPage(c, path);
+      expect(res.status).toBe(200);
+      const shown = isHeartbeat ? heartbeatText : probeText;
+      const at = res.body.indexOf(escapeHtml(shown));
+      expect(at).toBeGreaterThan(-1);
+      expect(res.body.indexOf('type="submit"', at)).toBeGreaterThan(at);
+      if (isHeartbeat) expect(res.body).not.toContain(escapeHtml(probeText));
+      expect(res.body).not.toMatch(/name="[^"]*(quorum|location)[^"]*"/);
+    });
+  }
+
+  test("the edit page of the hostile-host check shows the quoted host line, no stored values", async () => {
+    const c = await consoleFor(fakeApi(), { role: "member" });
+    const res = await getPage(c, "/checks/edit?id=web");
+    expect(res.status).toBe(200);
+    expect(res.body).toContain(escapeHtml(HOST_LINE));
+    expect(res.body).toContain("Value: set");
+    expect(res.body).not.toContain("&quot;keep&quot;");
+    expect(res.body).not.toContain(TOKEN);
+  });
+});
+
+describe("Edit and Delete visibility", () => {
+  for (const id of [".", ".."]) {
+    test(`id ${id}: the list and detail pages hide Edit and Delete`, async () => {
+      const config = {
+        ...checkConfig,
+        checks: [...checkConfig.checks, { ...checkConfig.checks[0], id }],
+      };
+      const c = await consoleFor(fakeApi(config), { role: "owner" });
+      const list = await getPage(c, "/checks");
+      const row = rowOf(list.body, id);
+      expect(row).toContain("View");
+      expect(row).not.toContain(">Edit<");
+      expect(row).not.toContain(">Delete<");
+      const detail = await getPage(c, `/checks/check?id=${encodeURIComponent(id)}`);
+      expect(detail.body).not.toContain("/checks/edit?");
+      expect(detail.body).not.toContain("/checks/delete?");
+    });
+  }
+
+  for (const state of ["invalid", "unreadable", "written-not-applied"]) {
+    test(`a ${state} checks.json keeps Add, Edit and Delete for database checks`, async () => {
+      const config = {
+        ...checkConfig,
+        file: { state, message: "bad", lastAppliedAt: LAST_RESULT_AT },
+      };
+      const c = await consoleFor(fakeApi(config), { role: "admin" });
+      const list = await getPage(c, "/checks");
+      expect(list.body).toContain('<a href="/checks/new">Add a check</a>');
+      const row = rowOf(list.body, "web");
+      expect(row).toContain('<a href="/checks/edit?id=web">Edit</a>');
+      expect(row).toContain('<a href="/checks/delete?id=web">Delete</a>');
+    });
+  }
+});

@@ -160,7 +160,7 @@ or `equals`) and `assert_<i>_equals`, which must be JSON (`"ok"`, `200`, `true`)
 
 ## Editor pages
 
-`src/check-editor-page.ts` renders the create and edit forms. Create is served at `/checks/new`; edit comes later.
+`src/check-editor-page.ts` renders the create and edit forms. Create is served at `/checks/new`, edit at `/checks/edit?id=<id>`.
 
 - Create shows an `id` input and a hidden `type`. Edit shows the id and the type as text and
   has neither input: both come from the stored view.
@@ -208,6 +208,54 @@ A saved check answers `303` to `/checks/check?id=<encoded id>&saved=1`, which sa
 `Check saved.` An expired form token renders the form of the posted type with the kept
 non-secret input (the choice page for an unknown type), `409`. A replayed token answers `409`
 `Already submitted` with a link to `/checks/new`.
+
+## Edit
+
+`GET /checks/edit?id=<id>` (Member and higher) reads `GET /admin/config` once and shows the form
+of the stored type, filled from that entry, with the read's revision as hidden `revision`. The
+id and the type are fixed.
+
+`POST /checks/edit?id=<id>` accepts up to 524288 bytes. After the dispatcher it runs:
+
+1. `GET /admin/config`. A failed read answers `502` with the state, the heading `Not saved: the
+   current version could not be read.`, the kept non-secret input as text and a link to open
+   the page again. Nothing is sent.
+2. The target, in this order: an id in `shadowed` answers `409` `Shadowed by checks.json: only
+   Delete and Export are possible.` with Delete (Admin+) and Export links; an id missing from
+   `checks` answers `404`; a file check answers `409` `This check comes from checks.json. Edit
+   the file to change it.`; the ids `.` and `..` answer `409` (see below). The shadowed test
+   comes first, because a shadowed id always also has an effective file entry.
+3. A posted `revision` other than the read's answers `409` with the stale state, the kept input
+   as text and a `Reload` link. No form is shown.
+4. Field checks against that entry only (its type, stored header names and order, kept body,
+   secret): `422` with the form and the same revision.
+5. The 1 MiB JSON size, then the session and role recheck.
+6. One `PUT /admin/checks/<encoded id>` with `If-Match: "<form revision>"`.
+
+A save answers `303` to `/checks/check?id=<encoded id>&saved=1`.
+
+## Delete
+
+`GET /checks/delete?id=<id>` (Admin and higher) reads `GET /admin/config` and shows a typed
+confirmation of the check's name (trimmed), with hidden `revision` and `target` (`database` or
+`shadowed`). A database check says `The check stops running. Its results stay in pulse-api and
+its open incidents are resolved.`; a shadowed definition says `Only the database definition is
+removed. The check from checks.json keeps running.` A file check answers `409` `This check
+comes from checks.json.`
+
+`POST /checks/delete?id=<id>` reads `GET /admin/config` (a failure says `Not deleted: the
+current version could not be read.`), derives the target from it, answers `409` stale when the
+posted `target` or `revision` differs, checks the typed name against the read's name (both
+trimmed and NFC-normalized; `422` with the confirmation), rechecks the session and role, and
+sends one `DELETE /admin/checks/<encoded id>` with `If-Match: "<form revision>"`. A save answers
+`303` to `/checks?deleted=1`, which says `Check deleted.`
+
+On edit and delete, the ids `.` and `..` answer `409` `pulse-api cannot address the id "<id>" in
+a URL path, so the Console cannot change or delete it.` after the config read and without a
+write. An expired form token answers `409` `This form has expired. Nothing was sent. Open it
+again to see the current version.` with a link to the same route and `?id=<encoded id>`; it
+keeps no input and reads nothing. A replayed token answers `409` `Already submitted` with that
+same link.
 
 ## Write outcomes
 
