@@ -274,6 +274,11 @@ ${items}
 `;
 }
 
+/** A refused page before the write still shows the kept non-secret input (Decision 7). */
+function withKeptInput(page: PageResult, input: RetainedInput): PageResult {
+  return page.kind === "page" ? { ...page, body: page.body + keptInputHtml(input) } : page;
+}
+
 /** The page of a write answer that is not `saved`; `form` re-renders through `formOf`. */
 function writeAnswerPage(
   answer: Exclude<WriteAnswer, { kind: "saved" }>,
@@ -343,7 +348,7 @@ async function createCheck(deps: CheckRouteDeps, request: PageRequest): Promise<
   const read = await readCheckConfig(apiUrl, readDeps(deps));
   if (read.kind !== "ok") {
     const view = checkProblemView(read, `${CREATE_PATH}?type=${type}`);
-    return problemPage(view, "New check");
+    return problemPage({ ...view, body: view.body + keptInputHtml(input) }, "New check");
   }
   const { id } = parsed.input;
   const all = [...read.config.checks, ...read.config.shadowed];
@@ -351,7 +356,7 @@ async function createCheck(deps: CheckRouteDeps, request: PageRequest): Promise<
     return formOf([{ field: "id", message: CHECK_EXISTS_TEXT }], 409);
   }
   const guard = writeGuardProblem(writeDeps(deps), request, routeRole("check.write"), CREATE_PATH);
-  if (guard !== undefined) return guard;
+  if (guard !== undefined) return withKeptInput(guard, input);
   const answer = await sendCheckWrite(
     writeDeps(deps),
     {

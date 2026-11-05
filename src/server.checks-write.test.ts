@@ -490,6 +490,65 @@ describe("request guards of POST /checks/new", () => {
   });
 });
 
+describe("kept input on create failures before the write", () => {
+  const gated = (): { api: ReturnType<typeof fakeApi>; open: () => void } => {
+    const api = fakeApi();
+    let open = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    api.replyTo("GET", "/admin/config", { ...jsonReply(checkConfig), gate });
+    return { api, open: () => open() };
+  };
+  const cases: { name: string; status: number; run: () => Promise<Reply> }[] = [
+    {
+      name: "config read fails",
+      status: 502,
+      run: async () => {
+        const api = fakeApi();
+        api.replyTo("GET", "/admin/config", { status: 503, headers: WIRE_HEADERS });
+        return create(await teamConsole(api), HTTP_FIELDS);
+      },
+    },
+    {
+      name: "session removed",
+      status: 409,
+      run: async () => {
+        const { api, open } = gated();
+        const c = await teamConsole(api);
+        const pending = create(c, HTTP_FIELDS);
+        await api.received("/admin/config");
+        c.db.run("DELETE FROM sessions WHERE user_id = ?", [c.ids.member]);
+        open();
+        return pending;
+      },
+    },
+    {
+      name: "role lowered",
+      status: 403,
+      run: async () => {
+        const { api, open } = gated();
+        const c = await teamConsole(api);
+        const pending = create(c, HTTP_FIELDS);
+        await api.received("/admin/config");
+        c.db.run("UPDATE users SET role = 'viewer' WHERE id = ?", [c.ids.member]);
+        open();
+        return pending;
+      },
+    },
+  ];
+  for (const item of cases) {
+    test(`${item.name}: ${item.status} keeps id, name and url`, async () => {
+      const res = await item.run();
+      expect(res.status).toBe(item.status);
+      expect(res.body).toContain("<h2>Your input</h2>");
+      expect(res.body).toContain("<dt>id</dt><dd>new-web</dd>");
+      expect(res.body).toContain("<dt>name</dt><dd>New web</dd>");
+      expect(res.body).toContain("<dt>url</dt><dd>https://example.com/</dd>");
+    });
+  }
+});
+
 const BIG = 5 * 1024 * 1024 + 1;
 
 type OutcomeCase = {
