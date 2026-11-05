@@ -25,7 +25,7 @@ export type PageRequest = {
   issueFormToken: (actionPath: string) => string;
 };
 
-/** A page inside the shell, or a redirect. */
+/** A page inside the shell, a redirect, or a download. */
 export type PageResult =
   | {
       kind: "page";
@@ -39,6 +39,12 @@ export type PageResult =
       location: string;
       /** The change ended the request's own session: the answer deletes the session cookie. */
       isSessionCleared?: boolean | undefined;
+    }
+  | {
+      /** A JSON attachment: `200`, `no-store`, the security headers; HEAD sends no body. */
+      kind: "download";
+      filename: "checks.json" | "check.json";
+      body: string;
     };
 
 export type ProtectedRoute = {

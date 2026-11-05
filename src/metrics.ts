@@ -28,6 +28,8 @@ export type PathLabel =
   | "/team/reset-link"
   | "/team/transfer"
   | "/team/require-2fa"
+  | "/checks"
+  | "/checks/export"
   | "/invite/:token"
   | "/reset/:token"
   | "other";

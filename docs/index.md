@@ -3,6 +3,7 @@
 pulse-console is the web console of pulse. It is a small web server that will manage pulse through the pulse-api admin API. Today it serves first-run setup with a local owner account, password sign-in with sessions, sign-out and the ops routes. Two-factor sign-in follows in [#563](https://github.com/lorenzh/pulse-meta/issues/563).
 
 - [configuration.md](configuration.md): every environment variable, the modes, setup, the database, routes, sign-in and sessions, cookies, the image defaults and the security headers.
+- [checks.md](checks.md): the Checks list, its filters, the export and the shell lines.
 - [team.md](team.md): roles, the permission matrix, target rules, the two-factor requirement and the People log.
 - [development.md](development.md): local run, layout, tests, lint and CI.
 

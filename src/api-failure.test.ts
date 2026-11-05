@@ -55,6 +55,14 @@ const cases: Array<[string, FetchJsonError, ApiCall, string | null, string, stri
     UNREACHABLE,
   ],
   [
+    "403 export",
+    { kind: "http", status: 403, wire: { status: "ok" } },
+    "export",
+    null,
+    "The console token lacks the read or checks scope.",
+    UNREACHABLE,
+  ],
+  [
     "403 checks",
     { kind: "http", status: 403, wire: { status: "ok" } },
     "checks",
