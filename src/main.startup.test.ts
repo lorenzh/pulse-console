@@ -103,6 +103,30 @@ test("an invalid PULSE_API_URL prints kit's line without the value and exits 2",
   assert.ok(!r.stderr.includes("not-a-url-secret"));
 });
 
+test("an invalid PULSE_CONSOLE_PROBE_* setting exits 2 with its rule and no value", async () => {
+  for (const [name, value, rule] of [
+    [
+      "PULSE_CONSOLE_PROBE_API_URL",
+      "ftp://probe-value-secret",
+      "must be an http(s) URL of at most 2048 characters without whitespace, credentials, query or fragment",
+    ],
+    [
+      "PULSE_CONSOLE_PROBE_IMAGE",
+      "-probe-value-secret",
+      "must hold 1 to 255 characters of A-Z a-z 0-9 . _ / : @ - and start with a letter or digit",
+    ],
+    [
+      "PULSE_CONSOLE_PROBE_NETWORK",
+      "-probe-value-secret",
+      "must start with a letter or digit and hold at most 128 characters of A-Z a-z 0-9 _ . -",
+    ],
+  ] as const) {
+    const r = await collect(spawnMain({ PULSE_API_URL: API_URL, [name]: value }));
+    assertOneLine(r, `pulse-console: ${name}: ${rule}`);
+    expect(r.stderr).not.toContain("probe-value-secret");
+  }
+}, 20_000);
+
 test("a valid start listens, never logs the token and exits 0 on SIGTERM", async () => {
   const sentinel = "startup-sentinel-token-0123456789";
   const child = spawnMain({

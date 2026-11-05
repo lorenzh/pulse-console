@@ -1,6 +1,7 @@
 /**
- * The only builders of the two lines that a person pastes into a POSIX shell. Every value from
- * data goes through `shellQuote`; HTML escaping protects only the page, not the copied text.
+ * The check lines that a person pastes into a POSIX shell, and `shellQuote`, which every shell
+ * line of the console uses (also the probe snippets of `probe-snippet.ts`). Every value from data
+ * goes through `shellQuote`; HTML escaping protects only the page, not the copied text.
  */
 
 /** `value` as one single-quoted POSIX shell word; each `'` becomes `'\''`. Always quoted. */

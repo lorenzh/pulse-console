@@ -1,6 +1,6 @@
 # Configuration
 
-The console reads its settings from the environment once at start. An invalid setting stops the start with exit code 2 and one line on stderr, prefixed `pulse-console: `. The checks run in this order, and the first failure stops the start: `PULSE_LOG_LEVEL`, `PULSE_API_URL`, `PULSE_CONSOLE_PORT`, `PULSE_CONSOLE_HOST`, `PULSE_CONSOLE_PUBLIC_URL`, `PULSE_CONSOLE_DB`, the admin token, `PULSE_CONSOLE_SECRET_KEY_FILE`. `DATABASE_URL` is not read. A value that is blank or only whitespace counts as unset.
+The console reads its settings from the environment once at start. An invalid setting stops the start with exit code 2 and one line on stderr, prefixed `pulse-console: `. The checks run in this order, and the first failure stops the start: `PULSE_LOG_LEVEL`, `PULSE_API_URL`, `PULSE_CONSOLE_PORT`, `PULSE_CONSOLE_HOST`, `PULSE_CONSOLE_PUBLIC_URL`, `PULSE_CONSOLE_DB`, the admin token, `PULSE_CONSOLE_SECRET_KEY_FILE`, `PULSE_CONSOLE_PROBE_API_URL`, `PULSE_CONSOLE_PROBE_IMAGE`, `PULSE_CONSOLE_PROBE_NETWORK`. `DATABASE_URL` is not read. A value that is blank or only whitespace counts as unset.
 
 ## Settings
 
@@ -14,6 +14,9 @@ The console reads its settings from the environment once at start. An invalid se
 | `PULSE_CONSOLE_ADMIN_TOKEN`      | unset                 | Optional. The token rules below.                                                                                                                                                                                                       |
 | `PULSE_CONSOLE_ADMIN_TOKEN_FILE` | unset                 | Optional. Path to a file with the token; the content is trimmed, then the token rules apply.                                                                                                                                           |
 | `PULSE_CONSOLE_SECRET_KEY_FILE`  | unset                 | Optional. Path to the key that encrypts TOTP seeds, see "Secret key" below.                                                                                                                                                            |
+| `PULSE_CONSOLE_PROBE_API_URL`    | unset                 | Optional. Prefill of the probe API URL, see "Probe prefills" below.                                                                                                                                                                    |
+| `PULSE_CONSOLE_PROBE_IMAGE`      | unset                 | Optional. Prefill of the probe image, see "Probe prefills" below.                                                                                                                                                                      |
+| `PULSE_CONSOLE_PROBE_NETWORK`    | unset                 | Optional. Prefill of the Docker network, see "Probe prefills" below.                                                                                                                                                                   |
 | `PULSE_LOG_LEVEL`                | `info`                | `debug`, `info`, `warn` or `error`.                                                                                                                                                                                                    |
 
 ### Error texts
@@ -35,6 +38,9 @@ The console reads its settings from the environment once at start. An invalid se
 | `PULSE_CONSOLE_SECRET_KEY_FILE` | file cannot be read | `pulse-console: PULSE_CONSOLE_SECRET_KEY_FILE=<path>: cannot read (<code>)` |
 | `PULSE_CONSOLE_SECRET_KEY_FILE` | not 64 lowercase hex characters after dropping one trailing `\n` | `pulse-console: PULSE_CONSOLE_SECRET_KEY_FILE=<path>: must hold 64 lowercase hex characters` |
 | `PULSE_CONSOLE_SECRET_KEY_FILE` | equal to the admin token | `pulse-console: PULSE_CONSOLE_SECRET_KEY_FILE=<path>: must differ from the admin token` |
+| `PULSE_CONSOLE_PROBE_API_URL` | not an http(s) URL, whitespace or control character, credentials, query or fragment, over 2048 characters | `pulse-console: PULSE_CONSOLE_PROBE_API_URL: must be an http(s) URL of at most 2048 characters without whitespace, credentials, query or fragment` |
+| `PULSE_CONSOLE_PROBE_IMAGE` | not 1 to 255 characters of `[A-Za-z0-9._/:@-]` starting with a letter or digit | `pulse-console: PULSE_CONSOLE_PROBE_IMAGE: must hold 1 to 255 characters of A-Z a-z 0-9 . _ / : @ - and start with a letter or digit` |
+| `PULSE_CONSOLE_PROBE_NETWORK` | not `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}` | `pulse-console: PULSE_CONSOLE_PROBE_NETWORK: must start with a letter or digit and hold at most 128 characters of A-Z a-z 0-9 _ . -` |
 
 The URL texts are fixed: the value is never printed, so a password in the URL stays out of the output. Whitespace inside is refused before the URL parser runs, because the parser drops tabs and newlines and would accept `http://api\t:3000` as `http://api:3000`.
 
@@ -212,3 +218,8 @@ Pages also carry `cache-control: no-store`. They load `/console.css`; setup and 
 ## Owner recovery command
 
 `bun --no-env-file src/owner-reset.ts` reads only `PULSE_CONSOLE_DB` (default `./console.db`) and `PULSE_CONSOLE_PUBLIC_URL`, with the rules and error texts of the console; it needs neither `PULSE_API_URL`, the admin token nor the secret key. It opens the database with the same file mode and migrations. Before setup, or without an Owner row, it exits `2` with `pulse-console: no owner account: finish setup first`; a setting or database error exits `2` with `pulse-console: <message>`. Otherwise one transaction deletes the unused `owner-recovery` links, inserts a new one (`expires_at = created_at + 900000`, `issued_by` null, stored only as its SHA-256 digest) and writes `owner.recovery-link` with actor `container`; then it prints `pulse-console owner reset link: <link> (valid 15 minutes, one use)` and exits `0`. Without a public URL `<link>` is `/reset/<token>` and the line ends `(valid 15 minutes, one use; open it on the console address)`. The link is redeemed at `/reset/<token>` in the order above; it also deletes the Owner's authenticators, recovery codes and pending setup keys, ends every Owner session and writes `owner.recover` (value `owner-recovery`).
+
+
+## Probe prefills
+
+`PULSE_CONSOLE_PROBE_API_URL`, `PULSE_CONSOLE_PROBE_IMAGE` and `PULSE_CONSOLE_PROBE_NETWORK` are read after `PULSE_CONSOLE_SECRET_KEY_FILE`, in that order. They use the rules of the add-location fields `api_url`, `image` and `network`. A blank value counts as unset, and the API URL loses one trailing `/`. An invalid value stops the start with exit code 2; the line names the setting and its rule, never the value. They are prefills only: the person sees and can change every value before a probe token is created. The console never copies its own `PULSE_API_URL` into a probe snippet.

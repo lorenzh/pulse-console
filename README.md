@@ -71,17 +71,20 @@ The image listens on `0.0.0.0:8082` inside the container and runs as the non-roo
 
 ## Settings
 
-| Setting                          | Default                        | Meaning                                                                                          |
-| -------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `PULSE_API_URL`                  | none, required                 | Base URL of pulse-api, `http` or `https`, without credentials, query or fragment.                |
-| `PULSE_CONSOLE_PORT`             | `8082`                         | Listen port.                                                                                     |
-| `PULSE_CONSOLE_HOST`             | `127.0.0.1` (image: `0.0.0.0`) | Listen address.                                                                                  |
-| `PULSE_CONSOLE_PUBLIC_URL`       | unset (loopback mode)          | Public origin of the console; selects the mode `loopback`, `strict-https` or `strict-http`.      |
-| `PULSE_CONSOLE_DB`               | `./console.db`                 | Path of the SQLite database file; the image sets `/data/console.db`. `DATABASE_URL` is not read. |
-| `PULSE_CONSOLE_ADMIN_TOKEN`      | unset                          | Optional pulse-api admin token, at least 32 characters. Never logged.                            |
-| `PULSE_CONSOLE_ADMIN_TOKEN_FILE` | unset                          | File with the admin token (at least 32 characters), instead of the env var.                      |
-| `PULSE_CONSOLE_SECRET_KEY_FILE`  | unset                          | File with the 32-byte seed key as 64 lowercase hex characters. Without it TOTP answers `503`.    |
-| `PULSE_LOG_LEVEL`                | `info`                         | `debug`, `info`, `warn` or `error`.                                                              |
+| Setting                          | Default                        | Meaning                                                                                                                                      |
+| -------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PULSE_API_URL`                  | none, required                 | Base URL of pulse-api, `http` or `https`, without credentials, query or fragment.                                                            |
+| `PULSE_CONSOLE_PORT`             | `8082`                         | Listen port.                                                                                                                                 |
+| `PULSE_CONSOLE_HOST`             | `127.0.0.1` (image: `0.0.0.0`) | Listen address.                                                                                                                              |
+| `PULSE_CONSOLE_PUBLIC_URL`       | unset (loopback mode)          | Public origin of the console; selects the mode `loopback`, `strict-https` or `strict-http`.                                                  |
+| `PULSE_CONSOLE_DB`               | `./console.db`                 | Path of the SQLite database file; the image sets `/data/console.db`. `DATABASE_URL` is not read.                                             |
+| `PULSE_CONSOLE_ADMIN_TOKEN`      | unset                          | Optional pulse-api admin token, at least 32 characters. Never logged.                                                                        |
+| `PULSE_CONSOLE_ADMIN_TOKEN_FILE` | unset                          | File with the admin token (at least 32 characters), instead of the env var.                                                                  |
+| `PULSE_CONSOLE_SECRET_KEY_FILE`  | unset                          | File with the 32-byte seed key as 64 lowercase hex characters. Without it TOTP answers `503`.                                                |
+| `PULSE_CONSOLE_PROBE_API_URL`    | unset                          | Prefill of the probe API URL in Add location. http(s), no credentials, query or fragment, at most 2048 characters; one trailing `/` dropped. |
+| `PULSE_CONSOLE_PROBE_IMAGE`      | unset                          | Prefill of the probe image. 1 to 255 characters of `[A-Za-z0-9._/:@-]`, first a letter or digit.                                             |
+| `PULSE_CONSOLE_PROBE_NETWORK`    | unset                          | Prefill of the Docker network. `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`.                                                                           |
+| `PULSE_LOG_LEVEL`                | `info`                         | `debug`, `info`, `warn` or `error`.                                                                                                          |
 
 An invalid setting stops the start with exit code 2 and one line on stderr. Every rule and error text is in [docs/configuration.md](docs/configuration.md).
 
