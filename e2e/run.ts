@@ -5,6 +5,16 @@ import { randomBytes } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
 import type { ConsoleRole } from "../src/roles.ts";
+import {
+  checkConfig,
+  checkExport,
+  checkStates,
+  checkUptime,
+  webLatency,
+  webLocationUptime,
+  webResults,
+  webState,
+} from "../test/check-fixtures.ts";
 import { checkWithState, emptyConfig, jsonReply, startFakeApi } from "../test/fake-api.ts";
 import {
   type ConfirmTargetHolder,
@@ -965,6 +975,144 @@ async function checkResetAndPassword(env: Env, browser: Browser): Promise<void> 
   }
 }
 
+const HOST_LINE = String.raw`PULSE_PROBE_HEADER_HOSTS='{"PULSE_HEADER_TOKEN":["a'\'';id;'\''b"]}'`;
+const PROBE_QUORUM =
+  "Every probe runs this check. It is down when at least two locations report down; with one reporting location, that location decides. Choosing locations or a quorum per check is not available yet.";
+const HEARTBEAT_RULE =
+  "Heartbeat checks are not run by probes and have no quorum; your job pings pulse-api. With no ping for longer than the period plus the grace time, the check is down at once.";
+const EDITORS: [string, boolean][] = [
+  ...["http", "tls", "tcp", "dns", "domain"].map((t): [string, boolean] => [
+    `/checks/new?type=${t}`,
+    false,
+  ]),
+  ["/checks/new?type=heartbeat", true],
+  ["/checks/edit?id=web", false],
+  ["/checks/edit?id=cert", false],
+  ["/checks/edit?id=domain-exp", false],
+  ["/checks/edit?id=nightly-backup", true],
+];
+
+/** The paragraph above Submit is the fixed rule; no editor has a quorum or location input. */
+async function assertQuorumText(page: Page, url: string, isHeartbeat: boolean): Promise<void> {
+  await page.goto(url);
+  const found = await page.evaluate(() => {
+    const texts = [...document.querySelectorAll("form p")]
+      .filter((p) => {
+        const submit = p.closest("form")?.querySelector('button[type="submit"]');
+        return submit != null && (p.compareDocumentPosition(submit) & 4) !== 0;
+      })
+      .map((p) => p.textContent?.trim() ?? "");
+    const names = [...document.querySelectorAll("input, select, textarea")].map(
+      (el) => el.getAttribute("name") ?? "",
+    );
+    return { texts, names };
+  });
+  const expected = isHeartbeat ? HEARTBEAT_RULE : PROBE_QUORUM;
+  const other = isHeartbeat ? PROBE_QUORUM : HEARTBEAT_RULE;
+  assert(found.texts.includes(expected), `${url}: rule paragraph above Submit`);
+  assert(!found.texts.includes(other), `${url}: no other rule paragraph`);
+  assert(
+    !found.names.some((n) => /quorum|location/i.test(n)),
+    `${url}: no quorum or location input`,
+  );
+}
+
+function startChecksApi(): ReturnType<typeof startFakeApi> {
+  const api = startFakeApi();
+  api.reply("/admin/config", jsonReply(checkConfig));
+  api.reply("/checks", jsonReply([webState, ...checkStates.slice(1)]));
+  api.reply("/admin/config/export", jsonReply(checkExport));
+  api.reply("/uptime", jsonReply(checkUptime));
+  api.reply("/checks/web/results", jsonReply(webResults));
+  api.reply("/checks/web/location-uptime", jsonReply(webLocationUptime));
+  api.reply("/checks/web/latency", jsonReply(webLatency));
+  return api;
+}
+
+async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const env = await startEnv(0);
+  env.api.stop();
+  const api = startChecksApi();
+  const server = await startSignedInConsole({
+    apiUrl: api.url,
+    ownerEmail: env.ownerEmail,
+    adminToken: ADMIN_TOKEN,
+  });
+  await env.console.close();
+  const local: Env = { ...env, console: server, api };
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    javaScriptEnabled: hasScript,
+  });
+  await context.addInitScript(() => {
+    const copied: string[] = [];
+    Object.assign(window, { copied });
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: (text: string) => (copied.push(text), Promise.resolve()) },
+    });
+  });
+  const page = await newPage(context, violations);
+  const base = server.base;
+  try {
+    await signIn(page, local);
+    const nav = page.locator('nav[aria-label="Main"]');
+    await Promise.all([
+      page.waitForURL(`${base}/checks`),
+      nav.getByRole("link", { name: "Checks", exact: true }).click(),
+    ]);
+    assert(
+      (await page.getByText("6 checks, 1 shadowed definition").count()) === 1,
+      `${label}: counts`,
+    );
+    await assertFits(page, 390, `${label} list`);
+    await page.goto(`${base}/checks/check?id=web`);
+    await assertFits(page, 390, `${label} detail`);
+    const pre = await page.locator("pre").first().textContent();
+    assert(pre === HOST_LINE, `${label}: detail host line is the literal`);
+    const copy = page.locator("button[data-copy]").first();
+    assert((await copy.isVisible()) === hasScript, `${label}: copy button visible ${hasScript}`);
+    if (hasScript) {
+      await copy.click();
+      const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
+      assert(copied[0] === HOST_LINE, `${label}: copied host line is the literal`);
+      await page.goto(`${base}/checks/check?id=nightly-backup`);
+      const line = `curl -fsS -X POST -H 'Authorization: Bearer <secret>' '${api.url}/heartbeat/nightly-backup'`;
+      assert(
+        (await page.locator("pre").first().textContent()) === line,
+        `${label}: heartbeat line`,
+      );
+      await page.locator("button[data-copy]").first().click();
+      const beat = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
+      assert(beat[0] === line, `${label}: copied heartbeat line is the literal`);
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+    for (const [url, isHeartbeat] of EDITORS) await assertQuorumText(page, base + url, isHeartbeat);
+    await page.goto(`${base}/checks/edit?id=web`);
+    const editorPre = await page.locator("#editor-host-binding-line").textContent();
+    assert(editorPre === HOST_LINE, `${label}: editor host line is the literal`);
+    if (hasScript) {
+      const pages = [
+        "/checks",
+        "/checks/check?id=web",
+        "/checks/shadowed?id=dns-a",
+        "/checks/delete?id=web",
+      ];
+      for (const path of [...pages, ...EDITORS.map(([url]) => url)])
+        await axeOn(page, base + path, path);
+    }
+    assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
+    ok(
+      `Checks, ${label}: entered through the Checks nav link, list and detail fit 390 px, literal host-binding${hasScript ? " and heartbeat copy" : " line selectable, copy hidden"}, fixed quorum or heartbeat rule on ${EDITORS.length} editors${hasScript ? ", axe 0 on list/detail/shadowed/delete/editors" : ""}, 0 CSP violations`,
+    );
+  } finally {
+    await context.close();
+    await server.close();
+    api.stop();
+  }
+}
+
 async function runChecks(): Promise<void> {
   const env = await startEnv(0);
   const browser = await chromium.launch();
@@ -980,6 +1128,8 @@ async function runChecks(): Promise<void> {
     await checkAccountNoScript(env, browser);
     await checkResetAndPassword(env, browser);
     await checkLongEmail(browser);
+    await checkScreensWith(browser, true);
+    await checkScreensWith(browser, false);
     // A console of its own: each check signs in with a fixture recovery code.
     const shellEnv = await startEnv(0);
     try {
