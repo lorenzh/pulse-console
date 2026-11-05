@@ -439,6 +439,8 @@ async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
     await owner.getByRole("button", { name: "Create new recovery codes" }).click();
     const codes = await owner.locator("#recovery-codes li").allTextContents();
     assert(codes.length === 10, "new recovery codes confirmation shows ten codes");
+    // The old fixture codes stop working; later checks sign in with the new ones.
+    env.console.recoveryCodes.splice(0, env.console.recoveryCodes.length, ...codes);
     await assertFits(owner, 390, "recovery codes");
     await owner.goto(`${base}/account/authenticator`);
     await owner.fill('input[name="password"]', OWNER_PASSWORD);
@@ -577,6 +579,66 @@ async function checkTeamActions(env: Env, browser: Browser): Promise<void> {
   }
 }
 
+/** At 390 px: the reset link page, the reset form, the invalid reset link and the own password form. */
+async function checkResetAndPassword(env: Env, browser: Browser): Promise<void> {
+  const violations: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  const owner = await browser.newContext({ viewport });
+  const person = await browser.newContext({ viewport });
+  try {
+    watchCsp(owner, violations);
+    watchCsp(person, violations);
+    const page = await newPage(owner, violations);
+    const base = env.console.base;
+    await signIn(page, env);
+    await page.goto(`${base}/team`);
+    await page.fill('input[name="email"]', "resettable@example.com");
+    await page.selectOption('select[name="role"]', "member");
+    await Promise.all([
+      page.waitForURL(`${base}/team/invites`),
+      page.getByRole("button", { name: "Create invite link" }).click(),
+    ]);
+    const invite = await page.inputValue("#invite-link");
+    const anon = await newPage(person, violations);
+    await anon.goto(invite);
+    await anon.fill('input[name="name"]', "Re Settable");
+    await anon.fill('input[name="password"]', "resettable-person-password");
+    await anon.fill('input[name="password_confirm"]', "resettable-person-password");
+    await Promise.all([
+      anon.waitForURL((url) => !url.pathname.startsWith("/invite/")),
+      anon.getByRole("button", { name: "Create account" }).click(),
+    ]);
+    await axeOn(anon, `${base}/account/password`, "own password form");
+    await assertFits(anon, 390, "390px own password form");
+    await page.goto(`${base}/team`);
+    const href = await page
+      .getByRole("link", { name: "Reset link for Re Settable" })
+      .getAttribute("href");
+    await axeOn(page, `${base}${href ?? ""}`, "reset link confirmation");
+    await assertFits(page, 390, "390px reset link confirmation");
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === "/team/reset-link"),
+      page.getByRole("button", { name: "Make reset link" }).click(),
+    ]);
+    await assertFits(page, 390, "390px reset link page");
+    const link = await page.inputValue("#reset-link");
+    assert(/\/reset\/[A-Za-z0-9_-]{43}$/.test(link), "the link page shows the reset link");
+    const linkResult = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+    assert(linkResult.violations.length === 0, "axe on the reset link page");
+    await axeOn(anon, link, "reset form");
+    await assertFits(anon, 390, "390px reset form");
+    await axeOn(anon, `${base}/reset/${"A".repeat(43)}`, "invalid reset link");
+    await assertFits(anon, 390, "390px invalid reset link");
+    assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
+    ok(
+      "390px: own password form, reset link confirmation and page, reset form and invalid link fit",
+    );
+  } finally {
+    await owner.close();
+    await person.close();
+  }
+}
+
 async function runChecks(): Promise<void> {
   const env = await startEnv(0);
   const browser = await chromium.launch();
@@ -590,6 +652,7 @@ async function runChecks(): Promise<void> {
     await checkNoScript(env, browser);
     await checkBusyScript(env, browser);
     await checkAccountNoScript(env, browser);
+    await checkResetAndPassword(env, browser);
   } finally {
     await browser.close();
     await env.console.close();

@@ -1103,3 +1103,149 @@ describe("the field format comes before the target lookup", () => {
     expect(everyRow(c)).toEqual(before);
   });
 });
+
+describe("acceptance 5b: the four held team commits and the control", () => {
+  const NOT_SAVED = "Your password or session changed while this was saved. Nothing was changed.";
+
+  /** The Owner makes a reset link for `id` and it is used. */
+  async function resetPasswordOf(c: TeamConsole, id: number): Promise<void> {
+    const made = await submit(c, "owner", "/team/reset-link", id, {}, SECOND_OWNER);
+    expect(made.status).toBe(200);
+    const token = /\/reset\/([A-Za-z0-9_-]{43})/.exec(made.body)?.[1] ?? "";
+    const page = await getPage(c, `/reset/${token}`, "");
+    const csrf =
+      /pulse_console_csrf=([A-Za-z0-9_-]+)/.exec(page.headers.get("set-cookie") ?? "")?.[1] ?? "";
+    const password = "a-reset-password-for-5b";
+    const used = await postForm(
+      c,
+      `/reset/${token}`,
+      {
+        csrf,
+        form_token: formTokenOf(page.body, `/reset/${token}`),
+        password,
+        password_confirm: password,
+      },
+      { cookie: `pulse_console_csrf=${csrf}` },
+    );
+    expect(used.status).toBe(303);
+  }
+
+  async function heldMemberPost(
+    c: TeamConsole,
+    as: "admin" | "owner",
+    path: string,
+    id: number,
+    fields: Record<string, string>,
+  ): ReturnType<typeof heldPost> {
+    const action = `${path}?user=${id}`;
+    const page = await getPage(c, action, c.cookies[as]);
+    return heldPost(c, action, c.cookies[as], {
+      csrf: c.csrfs[as],
+      form_token: formTokenOf(page.body, action),
+      revision: revision(c, id),
+      ...fields,
+    });
+  }
+
+  /** No team change log line of the refused action. */
+  function noTeamChangeLog(c: TeamConsole, action: string): void {
+    expect(c.logs.some((l) => l.includes('"msg":"team change"') && l.includes(`"${action}"`))).toBe(
+      false,
+    );
+  }
+
+  test("an Admin invite held during the Admin's 2FA reset is 409 with 0 invites", async () => {
+    const c = await actions();
+    const page = await getPage(c, "/team", c.cookies.admin);
+    const held = await heldPost(c, "/team/invites", c.cookies.admin, {
+      csrf: c.csrfs.admin,
+      form_token: formTokenOf(page.body, "/team/invites"),
+      email: "new@example.com",
+      role: "member",
+    });
+    expect(
+      (await submit(c, "owner", "/team/reset-2fa", c.ids.admin, {}, SECOND_OWNER)).status,
+    ).toBe(303);
+    const r = await held.finish();
+    expect(r.status).toBe(409);
+    expect(r.body).toContain(NOT_SAVED);
+    expect(r.body).not.toContain("/invite/");
+    expect(count(c, "invites")).toBe(0);
+    expect(events(c).map((e) => e.action)).toEqual(["user.2fa-reset"]);
+    noTeamChangeLog(c, "invite.create");
+  });
+
+  test("a reset link held during the actor's demotion is 409, not 403, with 0 links", async () => {
+    const c = await actions();
+    const held = await heldMemberPost(c, "admin", "/team/reset-link", c.ids.member, {});
+    expect(
+      (await submit(c, "owner", "/team/role", c.ids.admin, { role: "member" }, SECOND_OWNER))
+        .status,
+    ).toBe(303);
+    const r = await held.finish();
+    expect(r.status).toBe(409);
+    expect(r.body).toContain(NOT_SAVED);
+    expect(r.body).not.toContain("/reset/");
+    expect(count(c, "reset_links WHERE user_id = ?", c.ids.member)).toBe(0);
+    noTeamChangeLog(c, "user.reset-link");
+  });
+
+  test("a removal held during the actor's password reset is 409 and the Viewer stays", async () => {
+    const c = await actions();
+    const held = await heldMemberPost(c, "admin", "/team/remove", c.ids.viewer, {
+      confirm_name: "Vi Viewer",
+    });
+    await resetPasswordOf(c, c.ids.admin);
+    const r = await held.finish();
+    expect(r.status).toBe(409);
+    expect(r.body).toContain(NOT_SAVED);
+    expect(count(c, "users WHERE id = ?", c.ids.viewer)).toBe(1);
+    expect(count(c, "sessions WHERE user_id = ?", c.ids.viewer)).toBe(1);
+    expect(count(c, "people_events WHERE action = 'user.remove'")).toBe(0);
+    noTeamChangeLog(c, "user.remove");
+  });
+
+  test("the switch held during the Owner's sign out all is 409 and stays off", async () => {
+    const c = await actions();
+    const page = await getPage(c, "/team", c.cookies.owner);
+    const held = await heldPost(c, "/team/require-2fa", c.cookies.owner, {
+      csrf: c.csrfs.owner,
+      form_token: formTokenOf(page.body, "/team/require-2fa"),
+      value: "on",
+    });
+    const confirm = await getPage(c, "/account/sessions/sign-out-all", SECOND_OWNER);
+    const out = await postForm(
+      c,
+      "/account/sessions/sign-out-all",
+      {
+        csrf: "owner-csrf-2",
+        form_token: formTokenOf(confirm.body, "/account/sessions/sign-out-all"),
+      },
+      { cookie: SECOND_OWNER },
+    );
+    expect(out.status).toBe(303);
+    const r = await held.finish();
+    expect(r.status).toBe(409);
+    expect(r.body).toContain(NOT_SAVED);
+    expect(
+      c.db.query<{ v: number }, []>("SELECT require_2fa_all AS v FROM instance").get()?.v,
+    ).toBe(0);
+    expect(count(c, "people_events WHERE action = 'team.require-2fa'")).toBe(0);
+    noTeamChangeLog(c, "team.require-2fa");
+  });
+
+  test("control: a held invite with no change in between is 200 with 1 invite", async () => {
+    const c = await actions();
+    const page = await getPage(c, "/team", c.cookies.admin);
+    const held = await heldPost(c, "/team/invites", c.cookies.admin, {
+      csrf: c.csrfs.admin,
+      form_token: formTokenOf(page.body, "/team/invites"),
+      email: "new@example.com",
+      role: "member",
+    });
+    const r = await held.finish();
+    expect(r.status).toBe(200);
+    expect(r.body).toContain("/invite/");
+    expect(count(c, "invites")).toBe(1);
+  });
+});

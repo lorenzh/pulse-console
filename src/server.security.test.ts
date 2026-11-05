@@ -690,3 +690,65 @@ describe("invite link tokens", () => {
     }
   });
 });
+
+describe("reset link tokens", () => {
+  test("a reset token and the new password never reach logs, metrics, events or other pages", async () => {
+    const c = await startTeamConsole({ apiUrl: "http://127.0.0.1:9" });
+    try {
+      const path = `/team/reset-link?user=${c.ids.member}`;
+      const confirm = await getPage(c, path, c.cookies.admin);
+      const row = c.db
+        .query<{ created_at: number; role: string }, [number]>(
+          "SELECT created_at, role FROM users WHERE id = ?",
+        )
+        .get(c.ids.member);
+      const made = await postForm(
+        c,
+        path,
+        {
+          csrf: c.csrfs.admin,
+          form_token: formTokenOf(confirm.body, path),
+          revision: `${row?.created_at}-${row?.role}`,
+        },
+        { cookie: c.cookies.admin },
+      );
+      const token = /\/reset\/([A-Za-z0-9_-]{43})/.exec(made.body)?.[1] ?? "";
+      expect(token).toHaveLength(43);
+      const form = await getPage(c, `/reset/${token}`, "");
+      const csrf =
+        /pulse_console_csrf=([A-Za-z0-9_-]+)/.exec(form.headers.get("set-cookie") ?? "")?.[1] ?? "";
+      const secret = "reset-sentinel-password-1";
+      const used = await postForm(
+        c,
+        `/reset/${token}`,
+        {
+          csrf,
+          form_token: formTokenOf(form.body, `/reset/${token}`),
+          password: secret,
+          password_confirm: secret,
+        },
+        { cookie: `pulse_console_csrf=${csrf}` },
+      );
+      expect(used.status).toBe(303);
+      expect(used.headers.get("location")).toBe("/sign-in?reset=done");
+      for (const r of [
+        await getPage(c, "/team", c.cookies.admin),
+        await getPage(c, `/reset/${token}`, ""),
+      ]) {
+        expect(r.body).not.toContain(token);
+      }
+      const logs = c.logs.join("\n");
+      expect(logs).not.toContain(token);
+      expect(logs).not.toContain(secret);
+      expect(c.metrics.render()).not.toContain(token);
+      const stored = JSON.stringify([
+        c.db.query("SELECT * FROM people_events").all(),
+        c.db.query("SELECT * FROM reset_links").all(),
+      ]);
+      expect(stored).not.toContain(token);
+      expect(stored).not.toContain(secret);
+    } finally {
+      await c.close();
+    }
+  });
+});

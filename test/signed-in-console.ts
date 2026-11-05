@@ -13,7 +13,12 @@ import { type AccountStore, createAccountStore } from "../src/account-store.ts";
 import { openDatabase } from "../src/database.ts";
 import { createFactorStore } from "../src/factor-store.ts";
 import { createMetrics, type Metrics } from "../src/metrics.ts";
-import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "../src/passwords.ts";
+import {
+  type CredentialVerifier,
+  createCredentialVerifier,
+  type HashPassword,
+  PASSWORD_HASH_OPTIONS,
+} from "../src/passwords.ts";
 import type { ProtectedRoute } from "../src/protected-route.ts";
 import type { ConsoleRole } from "../src/roles.ts";
 import { createConsoleServer, listen } from "../src/server.ts";
@@ -45,6 +50,9 @@ export type SignedInOptions = {
   schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
   testRoutes?: ReadonlyMap<string, ProtectedRoute> | undefined;
   roleOf?: ((user: User) => ConsoleRole) | undefined;
+  /** Replace the real argon2id hash and verifier, for the gated fakes of the race tests. */
+  hashPassword?: HashPassword | undefined;
+  verifier?: CredentialVerifier | undefined;
   /** Adds rows (more people, sessions) after setup, before the server starts. */
   prepare?: ((db: Database) => void) | undefined;
 };
@@ -99,12 +107,14 @@ export async function startSignedInConsole(options: SignedInOptions): Promise<Si
     gate: undefined,
     now: () => now,
     randomBytes: (size) => crypto.getRandomValues(new Uint8Array(size)),
-    hashPassword: (pw) => Bun.password.hash(pw, PASSWORD_HASH_OPTIONS),
-    verifier: await createCredentialVerifier({
-      hash: (pw) => Bun.password.hash(pw, PASSWORD_HASH_OPTIONS),
-      verify: (pw, hash) => Bun.password.verify(pw, hash),
-      dummySecret: "dummy secret for tests",
-    }),
+    hashPassword: options.hashPassword ?? ((pw) => Bun.password.hash(pw, PASSWORD_HASH_OPTIONS)),
+    verifier:
+      options.verifier ??
+      (await createCredentialVerifier({
+        hash: (pw) => Bun.password.hash(pw, PASSWORD_HASH_OPTIONS),
+        verify: (pw, hash) => Bun.password.verify(pw, hash),
+        dummySecret: "dummy secret for tests",
+      })),
     fetch: options.fetch ?? fetch,
     schedule: options.schedule,
     testRoutes: options.testRoutes,

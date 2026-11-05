@@ -277,34 +277,38 @@ test("bun src/main.ts serves no /__test/ route", async () => {
   expect(await answer).toEqual({ status: 404, body: "not found\n" });
 }, 10_000);
 
-test("the production server answers an unknown invite link with 404 Link not valid", async () => {
-  const dbPath = join(tempDir(), "console.db");
-  // The first start creates and migrates the file; setup is then marked complete.
-  await runUntilListening({ PULSE_API_URL: API_URL, PULSE_CONSOLE_DB: dbPath });
-  completeSetup(dbPath, API_URL);
-  const child = spawnMain({ PULSE_API_URL: API_URL, PULSE_CONSOLE_DB: dbPath });
-  let answer: Promise<{ status: number; body: string }> | undefined;
-  const r = await collect(child, (all) => {
-    const line = all.split("\n").find((l) => l.includes("pulse-console listening"));
-    if (answer !== undefined || line === undefined) return;
-    const fields: unknown = JSON.parse(line);
-    const port: unknown =
-      typeof fields === "object" && fields !== null ? Reflect.get(fields, "port") : 0;
-    answer = fetch(`http://127.0.0.1:${String(port)}/invite/${"A".repeat(43)}`).then(
-      async (res) => ({ status: res.status, body: await res.text() }),
+test.each(["invite", "reset"])(
+  "the production server answers an unknown %s link with 404 Link not valid",
+  async (kind) => {
+    const dbPath = join(tempDir(), "console.db");
+    // The first start creates and migrates the file; setup is then marked complete.
+    await runUntilListening({ PULSE_API_URL: API_URL, PULSE_CONSOLE_DB: dbPath });
+    completeSetup(dbPath, API_URL);
+    const child = spawnMain({ PULSE_API_URL: API_URL, PULSE_CONSOLE_DB: dbPath });
+    let answer: Promise<{ status: number; body: string }> | undefined;
+    const r = await collect(child, (all) => {
+      const line = all.split("\n").find((l) => l.includes("pulse-console listening"));
+      if (answer !== undefined || line === undefined) return;
+      const fields: unknown = JSON.parse(line);
+      const port: unknown =
+        typeof fields === "object" && fields !== null ? Reflect.get(fields, "port") : 0;
+      answer = fetch(`http://127.0.0.1:${String(port)}/${kind}/${"A".repeat(43)}`).then(
+        async (res) => ({ status: res.status, body: await res.text() }),
+      );
+      void answer.finally(() => child.kill("SIGTERM"));
+    });
+    expect(r.code).toBe(0);
+    const reply = await answer;
+    expect(reply?.status).toBe(404);
+    expect(reply?.body).toContain("Link not valid");
+    expect(reply?.body).toContain(
+      "This link is not valid. It may have expired or been used. Ask an admin for a new one.",
     );
-    void answer.finally(() => child.kill("SIGTERM"));
-  });
-  expect(r.code).toBe(0);
-  const reply = await answer;
-  expect(reply?.status).toBe(404);
-  expect(reply?.body).toContain("Link not valid");
-  expect(reply?.body).toContain(
-    "This link is not valid. It may have expired or been used. Ask an admin for a new one.",
-  );
-  const db = new Database(dbPath);
-  expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()).toEqual({
-    user_version: 3,
-  });
-  db.close();
-}, 20_000);
+    const db = new Database(dbPath);
+    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()).toEqual({
+      user_version: 3,
+    });
+    db.close();
+  },
+  20_000,
+);

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { emptyConfig, type FakeApi, jsonReply, startFakeApi } from "../test/fake-api.ts";
-import { formTokenOf, getPage, postForm } from "../test/signed-in-console.ts";
+import { formTokenOf, getPage, OWNER_PASSWORD, postForm } from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import type { ConsoleRole } from "./roles.ts";
 
@@ -373,6 +373,76 @@ describe("rows 16 to 19 and 23 to 25 and team.require-2fa at HTTP level", () => 
       () => act(c, "admin", "/team/remove", "owner", { confirm_name: "Owner" }, "viewer"),
       text,
     );
+  });
+
+  test("row 20: Admin reset link for a Member 200; Member 403", async () => {
+    const { c, api } = await team();
+    await denied(
+      c,
+      api,
+      () => act(c, "member", "/team/reset-link", "viewer"),
+      "needs the Admin role",
+    );
+    const r = await act(c, "admin", "/team/reset-link", "member");
+    expect(r.status).toBe(200);
+    expect(r.body).toContain("/reset/");
+  });
+
+  test("row 21: Owner reset link for an Admin 200; Admin 403", async () => {
+    const { c, api } = await team();
+    await denied(
+      c,
+      api,
+      () => act(c, "admin", "/team/reset-link", "admin", {}, "member"),
+      "needs the Owner role",
+    );
+    expect((await act(c, "owner", "/team/reset-link", "admin")).status).toBe(200);
+  });
+
+  test("row 22: Owner and Admin reset link for the Owner 403 with the Owner-target text", async () => {
+    const { c, api } = await team();
+    const text = "No one can change the owner account in the console.";
+    for (const as of ["owner", "admin"] as const) {
+      await denied(c, api, () => act(c, as, "/team/reset-link", "owner", {}, "member"), text);
+    }
+  });
+
+  test("row 27: each role changes its own password 303; without a session 303 and no change", async () => {
+    const { c } = await team();
+    c.db.run(
+      "UPDATE users SET password_hash = (SELECT password_hash FROM users WHERE role = 'owner')",
+    );
+    const fresh = "a-fresh-password-for-row-27";
+    for (const as of ROLES) {
+      const page = await getPage(c, "/account/password", c.cookies[as]);
+      const r = await postForm(
+        c,
+        "/account/password",
+        {
+          csrf: c.csrfs[as],
+          form_token: formTokenOf(page.body, "/account/password"),
+          password: OWNER_PASSWORD,
+          new_password: fresh,
+          new_password_confirm: fresh,
+        },
+        { cookie: c.cookies[as] },
+      );
+      expect([as, r.status, r.headers.get("location")]).toEqual([
+        as,
+        303,
+        "/account/password?changed=1",
+      ]);
+    }
+    const before = c.db.query("SELECT password_hash FROM users ORDER BY id").all();
+    const anon = await postForm(
+      c,
+      "/account/password",
+      { password: fresh, new_password: "x".repeat(20), new_password_confirm: "x".repeat(20) },
+      { cookie: "" },
+    );
+    expect(anon.status).toBe(303);
+    expect(anon.headers.get("location")).toBe("/sign-in?next=%2Faccount%2Fpassword");
+    expect(c.db.query("SELECT password_hash FROM users ORDER BY id").all()).toEqual(before);
   });
 
   test("team.require-2fa: Owner 303; Admin 403", async () => {

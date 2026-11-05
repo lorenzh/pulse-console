@@ -749,12 +749,22 @@ async function postSignIn(ctx: Ctx): Promise<void> {
     return;
   }
   const stage = passwordStage(ctx, user);
+  let isStarted: boolean;
   try {
-    startSession(ctx, user.id, stage === "full" ? { stage } : { stage, nextPath: next });
+    const options: NewSessionOptions = stage === "full" ? { stage } : { stage, nextPath: next };
+    isStarted = startVerifiedSession(ctx, user.id, user.passwordHash, options);
   } catch (err) {
     // A failed session write must not hold the reservation: it would lock the owner out.
     admission.attempt.release();
     throw err;
+  }
+  if (!isStarted) {
+    // The password changed or the user went while the hash was verified.
+    admission.attempt.fail();
+    deps.log.warn("sign-in failed", { client, reason: "credentials" });
+    deps.metrics.recordAuthAttempt("sign-in", "failure");
+    sendHtml(ctx, 401, formPage(WRONG_CREDENTIALS));
+    return;
   }
   // Only the password throttle succeeds here; the factor throttle is untouched.
   admission.attempt.succeed();
@@ -783,6 +793,45 @@ function stageTarget(stage: SessionStage, next: string): string {
       return never;
     }
   }
+}
+
+/**
+ * The rotation of `startSession` in one transaction that inserts the session only when the user
+ * still has the verified hash (section 17). Otherwise it rolls back and writes nothing.
+ */
+function startVerifiedSession(
+  ctx: Ctx,
+  userId: number,
+  verifiedHash: string,
+  options: NewSessionOptions,
+): boolean {
+  const { now } = ctx.deps;
+  const old = cookieOf(ctx, "session");
+  const id = newToken(ctx);
+  const csrf = newToken(ctx);
+  try {
+    ctx.deps.store.inImmediateTransaction(() => {
+      const { store } = ctx.deps;
+      if (old !== undefined) store.deleteSession(old);
+      const time = now();
+      store.deleteExpiredSessions(time, SESSION_IDLE_MS);
+      if (store.userById(userId)?.passwordHash !== verifiedHash) {
+        throw new StaleCredentialError();
+      }
+      store.createSession(id, userId, csrf, time, options);
+    });
+  } catch (err) {
+    // The throw only rolls back the deletions; the caller answers 401.
+    if (err instanceof StaleCredentialError) return false;
+    throw err;
+  }
+  pushSessionCookie(ctx, id, options.stage);
+  return true;
+}
+
+/** Rolls back the sign-in transaction when the verified hash is no longer stored. */
+class StaleCredentialError extends Error {
+  override name = "StaleCredentialError";
 }
 
 /** Rotation: the old session row goes, expired rows go, then a new id is made. */

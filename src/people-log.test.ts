@@ -167,3 +167,42 @@ test("a failed insert rolls back the change of its transaction", () => {
   expect(db.query("SELECT require_2fa_all AS v FROM instance").get()).toEqual({ v: 0 });
   expect(rows(db)).toHaveLength(0);
 });
+
+test("password events keep their literal action, target and value", () => {
+  const db = fresh();
+  appendPeopleEvent(db, {
+    at: 20,
+    actor: { kind: "user", person: OWNER },
+    action: "user.reset-link",
+    target: { kind: "user", person: MEMBER },
+  });
+  appendPeopleEvent(db, {
+    at: 21,
+    actor: { kind: "user", person: MEMBER },
+    action: "user.password-reset",
+    target: { kind: "user", person: MEMBER },
+    value: "team",
+  });
+  appendPeopleEvent(db, {
+    at: 22,
+    actor: { kind: "user", person: MEMBER },
+    action: "user.password-change",
+    target: { kind: "user", person: MEMBER },
+  });
+  appendPeopleEvent(db, {
+    at: 23,
+    actor: { kind: "container" },
+    action: "owner.recover",
+    target: { kind: "user", person: OWNER },
+  });
+  expect(
+    db
+      .query("SELECT at, actor_user_id, action, target_id, value FROM people_events ORDER BY id")
+      .all(),
+  ).toEqual([
+    { at: 20, actor_user_id: 1, action: "user.reset-link", target_id: 2, value: null },
+    { at: 21, actor_user_id: 2, action: "user.password-reset", target_id: 2, value: "team" },
+    { at: 22, actor_user_id: 2, action: "user.password-change", target_id: 2, value: null },
+    { at: 23, actor_user_id: null, action: "owner.recover", target_id: 1, value: null },
+  ]);
+});
