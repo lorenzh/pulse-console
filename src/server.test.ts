@@ -170,7 +170,10 @@ describe("app routes", () => {
       "@media (max-width: 900px) {\n  dl.settings, .settings { grid-template-columns: minmax(0, 1fr); }\n  .grid-2, .grid-4, .form-grid { grid-template-columns: minmax(0, 1fr); }",
       "@media (max-width: 719px) {\n  .shell { grid-template-columns: minmax(0, 1fr); }",
       "main.shell-main { padding: 20px 16px 40px; }",
-      ".sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px;",
+      ".sidebar nav { display: flex; flex-wrap: wrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px;",
+      ".sidebar nav ul { flex-direction: row; flex-wrap: wrap;",
+      ".account { flex: 1 0 auto; max-width: 100%;",
+      ".account-email { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }",
       ".shell { display: grid; grid-template-columns: 236px minmax(0, 1fr);",
     ]) {
       expect(css).toContain(part);

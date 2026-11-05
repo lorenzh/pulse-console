@@ -400,7 +400,7 @@ async function checkNotFound(env: Env, browser: Browser): Promise<void> {
   const base = env.console.base;
   await signIn(page, env);
   await page.goto(`${base}/does-not-exist`);
-  const titles = page.getByText("Page not found", { exact: true });
+  const titles = page.locator("h1").getByText("Page not found", { exact: true });
   assert((await titles.count()) === 1 && (await titles.isVisible()), "404: one visible title");
   const sentence = "There is no page at this address; go to the overview.";
   assert(await page.getByText(sentence, { exact: true }).isVisible(), "404: sentence");
@@ -600,6 +600,41 @@ async function tabTo(page: Page, text: string): Promise<void> {
     if ((await focusedOutline(page)).text === text) return;
   }
   throw new CheckError(`Tab never reached ${text}`);
+}
+
+/** R9: at 390 px every nav item reached by Tab keeps its whole outline inside the row. */
+async function checkMobileNavFocus(env: Env, browser: Browser): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  await signIn(page, env);
+  await page.goto(`${env.console.base}/`);
+  await page.keyboard.press("Tab");
+  for (const text of ["Overview", "Checks", "Tokens", "Probes", "Team"]) {
+    await page.keyboard.press("Tab");
+    const got = await page.evaluate(() => {
+      const el = document.activeElement;
+      const row = document.querySelector(".sidebar nav");
+      if (!(el instanceof HTMLElement) || !(row instanceof HTMLElement)) return undefined;
+      const s = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      const box = row.getBoundingClientRect();
+      const left = box.left + row.clientLeft;
+      const right = left + row.clientWidth;
+      return {
+        text: el.textContent?.trim() ?? "",
+        outline: `${s.outlineStyle} ${s.outlineWidth} ${s.outlineOffset}`,
+        inside: r.left - 5 >= left - 0.5 && r.right + 5 <= right + 0.5,
+        where: `${r.left}-${r.right} in ${left}-${right}`,
+      };
+    });
+    if (got === undefined || got.text !== text) {
+      throw new CheckError(`mobile nav: Tab reached ${got?.text}`);
+    }
+    assert(got.outline === "solid 2px 3px", `mobile nav ${text}: outline ${got.outline}`);
+    assert(got.inside, `mobile nav ${text}: outline clipped (${got.where})`);
+  }
+  await context.close();
+  ok("mobile nav: every focused item keeps its 2px outline at offset 3px inside the row");
 }
 
 async function checkNoScript(env: Env, browser: Browser): Promise<void> {
@@ -1997,6 +2032,7 @@ async function runChecks(): Promise<void> {
     try {
       await checkEmail(shellEnv, browser);
       await checkNotFound(shellEnv, browser);
+      await checkMobileNavFocus(shellEnv, browser);
       await checkGaps(shellEnv, browser);
       await checkLinks(shellEnv, browser);
     } finally {
