@@ -18,7 +18,10 @@ export type PeopleAction =
   | "team.require-2fa"
   | "check.create"
   | "check.replace"
-  | "check.delete";
+  | "check.delete"
+  | "token.create"
+  | "token.rotate"
+  | "token.revoke";
 
 /** Email and name as they were at the time of the change. */
 export type PeoplePerson = { id: number; email: string; name: string };
@@ -33,7 +36,9 @@ export type PeopleEvent = {
     | { kind: "invite"; id: number; email: string }
     | { kind: "instance" }
     /** A pulse-api check: `target_name` is the check id, `target_id` stays NULL. */
-    | { kind: "check"; id: string };
+    | { kind: "check"; id: string }
+    /** A pulse-api token: `target_name` is its id, or `unknown` when the answer had none. */
+    | { kind: "token"; id: string | undefined };
   fromRole?: ConsoleRole | undefined;
   toRole?: ConsoleRole | undefined;
   value?: string | undefined;
@@ -75,6 +80,8 @@ function targetColumns(
       return ["instance", null, null, null];
     case "check":
       return ["check", null, null, target.id];
+    case "token":
+      return ["token", null, null, target.id ?? "unknown"];
     default: {
       const unknown: never = target;
       return unknown;

@@ -7,6 +7,7 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@lorenzh/pulse-kit";
+import { SELF_ID, selfToken } from "../test/token-fixtures.ts";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
 import { createFactorStore } from "./factor-store.ts";
@@ -60,9 +61,14 @@ function startApi(
   return { url: `http://127.0.0.1:${server.port}`, requests, stop };
 }
 
-function okFor(path: string, checks: number, tokensStatus = 200): Response {
+function okFor(path: string, checks: number, tokensStatus = 200, selfStatus = 200): Response {
   const headers = { "content-type": "application/json", "x-pulse-contract": "1" };
   if (path.endsWith("/admin/config")) return Response.json(config(checks), { headers });
+  if (path.endsWith("/admin/tokens/self")) {
+    return selfStatus === 200
+      ? Response.json(selfToken(), { headers })
+      : new Response("no", { status: selfStatus, headers });
+  }
   if (tokensStatus !== 200) return new Response("no", { status: tokensStatus, headers });
   return Response.json({ tokens: [] }, { headers });
 }
@@ -457,9 +463,9 @@ describe("connection test", () => {
     );
     expect(api.requests.map((r) => r.path)).toEqual([
       "/admin/config",
-      "/admin/tokens",
+      "/admin/tokens/self",
       "/admin/config",
-      "/admin/tokens",
+      "/admin/tokens/self",
     ]);
     expect(api.requests[0]?.authorization).toBe(`Bearer ${TOKEN}`);
     expect(c.store.instance()).toBeUndefined();
@@ -467,8 +473,37 @@ describe("connection test", () => {
     for (const r of client.responses) expect(r.body).not.toContain(TOKEN);
   });
 
-  test("tokens 404 adds the scope notice", async () => {
-    const api = startApi((path) => okFor(path, 2, 404));
+  test("self 404 falls back to the token list; its 200 confirms the admin scope", async () => {
+    const api = startApi((path) => okFor(path, 2, 200, 404));
+    const c = await startConsole();
+    const client = new Client(c);
+    await client.unlock();
+    const res = await client.post("/setup/owner", ownerFields(api.url, "test"));
+    expect(res.status).toBe(200);
+    expect(res.body).toContain(
+      '<p id="connection-result">Connected. Wire version: 1. Checks: 2.</p>',
+    );
+    expect(res.body).not.toContain("admin scope was not checked");
+    expect(api.requests.map((r) => r.path)).toEqual([
+      "/admin/config",
+      "/admin/tokens/self",
+      "/admin/tokens",
+    ]);
+  });
+
+  test("a valid self answer never reaches the browser", async () => {
+    const api = startApi((path) => okFor(path, 1));
+    const c = await startConsole();
+    const client = new Client(c);
+    await client.unlock();
+    const res = await client.post("/setup/owner", ownerFields(api.url, "test"));
+    expect(res.status).toBe(200);
+    expect(res.body).not.toContain(SELF_ID);
+    expect(res.body).not.toContain(TOKEN);
+  });
+
+  test("self 404 and tokens 404 add the scope notice", async () => {
+    const api = startApi((path) => okFor(path, 2, 404, 404));
     const c = await startConsole();
     const client = new Client(c);
     await client.unlock();
@@ -494,6 +529,21 @@ describe("connection test", () => {
       [
         (p) => (p.endsWith("/config") ? okFor(p, 1) : new Response("x", { status: 403 })),
         "The console token lacks the admin scope.",
+      ],
+      [
+        (p) =>
+          p.endsWith("/self")
+            ? new Response("upstream-body-sentinel", { status: 403 })
+            : okFor(p, 1),
+        "The console token lacks the admin scope.",
+      ],
+      [
+        (p) => (p.endsWith("/tokens") ? new Response("x", { status: 403 }) : okFor(p, 1, 200, 404)),
+        "The console token lacks the admin scope.",
+      ],
+      [
+        (p) => (p.endsWith("/self") ? Response.json(selfToken()) : okFor(p, 1)),
+        "pulse-api sent no x-pulse-contract header.",
       ],
       [() => Response.json(config(1)), "pulse-api sent no x-pulse-contract header."],
       [
@@ -650,9 +700,7 @@ describe("completion", () => {
     };
     const headers = { "content-type": "application/json", "x-pulse-contract": "1" };
     const api = startApi((path) =>
-      path.endsWith("/admin/config")
-        ? Response.json(config200, { headers })
-        : Response.json({ tokens: [] }, { headers }),
+      path.endsWith("/admin/config") ? Response.json(config200, { headers }) : okFor(path, 0),
     );
     const c = await startConsole();
     const client = new Client(c);

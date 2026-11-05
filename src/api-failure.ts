@@ -8,7 +8,11 @@ export type ApiCall =
   | "uptime"
   | "results"
   | "latency"
-  | "location-uptime";
+  | "location-uptime"
+  | "tokens"
+  | "self"
+  | "token"
+  | "locations";
 
 /** A failed pulse-api read, without any upstream body, exception text or token. */
 export type ApiFailure =
@@ -90,6 +94,9 @@ function httpText(call: ApiCall, status: number): string {
   }
   if (status === 403 && (call === "config" || call === "export")) {
     return "The console token lacks the read or checks scope.";
+  }
+  if (status === 403 && (call === "tokens" || call === "self" || call === "token")) {
+    return "The console token lacks the admin scope.";
   }
   if (status === 429) {
     return "pulse-api is throttling the console. Try again in a minute.";

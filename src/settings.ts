@@ -1,5 +1,11 @@
 import { type Env, readPort, readString, readUrl, StartupError } from "@lorenzh/pulse-kit";
 import { readAdminToken } from "./admin-token.ts";
+import {
+  checkProbeApiUrl,
+  checkProbeImage,
+  checkProbeNetwork,
+  type FieldCheck,
+} from "./probe-snippet.ts";
 import { readSecretKey } from "./secret-key.ts";
 
 export const DEFAULT_PORT = 8082;
@@ -20,7 +26,16 @@ export interface Settings {
   dbPath: string;
   /** The 32 bytes of PULSE_CONSOLE_SECRET_KEY_FILE, or undefined when unset. */
   secretKey: Uint8Array | undefined;
+  /** Prefills of the add-location form; never used without the person seeing them. */
+  probePrefill: ProbePrefill;
 }
+
+/** PULSE_CONSOLE_PROBE_API_URL, _IMAGE and _NETWORK; undefined when unset or blank. */
+export type ProbePrefill = {
+  apiUrl: string | undefined;
+  image: string | undefined;
+  network: string | undefined;
+};
 
 // The URL parser drops tabs and newlines inside a value, so they are refused before it runs.
 // \p{Cc} covers \x00-\x1f, \x7f and the C1 controls \x80-\x9f.
@@ -61,6 +76,25 @@ function readPublicOrigin(env: Env): string | undefined {
   return url.origin;
 }
 
+function readProbeSetting(
+  env: Env,
+  name: string,
+  check: (raw: string) => FieldCheck,
+): string | undefined {
+  const raw = readString(env, name);
+  if (raw === undefined) return undefined;
+  const result = check(raw);
+  if (!result.isValid) throw new StartupError(`${name}: ${result.rule}`, { setting: name });
+  return result.value;
+}
+
+function readProbePrefill(env: Env): ProbePrefill {
+  const apiUrl = readProbeSetting(env, "PULSE_CONSOLE_PROBE_API_URL", checkProbeApiUrl);
+  const image = readProbeSetting(env, "PULSE_CONSOLE_PROBE_IMAGE", checkProbeImage);
+  const network = readProbeSetting(env, "PULSE_CONSOLE_PROBE_NETWORK", checkProbeNetwork);
+  return { apiUrl, image, network };
+}
+
 /** The mode that a public origin selects. Pure. */
 export function consoleMode(publicOrigin: string | undefined): ConsoleMode {
   if (publicOrigin === undefined) return "loopback";
@@ -71,7 +105,8 @@ export function consoleMode(publicOrigin: string | undefined): ConsoleMode {
 
 /**
  * Reads and validates the console settings in this order: PULSE_API_URL, PULSE_CONSOLE_PORT,
- * PULSE_CONSOLE_HOST, PULSE_CONSOLE_PUBLIC_URL, PULSE_CONSOLE_DB, admin token, PULSE_CONSOLE_SECRET_KEY_FILE. DATABASE_URL is
+ * PULSE_CONSOLE_HOST, PULSE_CONSOLE_PUBLIC_URL, PULSE_CONSOLE_DB, admin token, PULSE_CONSOLE_SECRET_KEY_FILE,
+ * PULSE_CONSOLE_PROBE_API_URL, PULSE_CONSOLE_PROBE_IMAGE, PULSE_CONSOLE_PROBE_NETWORK. DATABASE_URL is
  * not read. The first failure throws a StartupError. Pure: the token
  * file is read through `readFile`.
  */
@@ -83,8 +118,9 @@ export function readSettings(env: Env, readFile: (path: string) => string): Sett
   const dbPath = readString(env, "PULSE_CONSOLE_DB") ?? DEFAULT_DB;
   const adminToken = readAdminToken(env, readFile);
   const secretKey = readSecretKey(env, readFile, adminToken);
+  const probePrefill = readProbePrefill(env);
   const mode = consoleMode(publicOrigin);
-  return { apiUrl, port, host, adminToken, publicOrigin, mode, dbPath, secretKey };
+  return { apiUrl, port, host, adminToken, publicOrigin, mode, dbPath, secretKey, probePrefill };
 }
 
 /** The settings of the owner recovery command: the database and the public origin only. Pure. */

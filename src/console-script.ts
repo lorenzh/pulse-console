@@ -4,7 +4,11 @@
  * browser has built the form data set, so the submitter's name and value are still sent. A page
  * restored from the back/forward cache is made usable again. A `button[data-copy]` is shown and
  * copies the `textContent` of the element it names (Decision 12); without the script the text
- * stays selectable in its `<pre>`. Plain ES2020, no page data, no request and no storage.
+ * stays selectable in its `<pre>`. On `pagehide` and on a persisted `pageshow` every
+ * `[data-secret]` element loses its text, so a back/forward cache restore shows no secret. Every
+ * `time[data-countdown]` counts down once a second from its `datetime`; one interval serves all
+ * of them, it starts only while one is above zero and stops when all reach zero or on `pagehide`.
+ * Plain ES2020, no page data, no request and no storage.
  */
 export const CONSOLE_JS = `"use strict";
 (function () {
@@ -50,8 +54,42 @@ export const CONSOLE_JS = `"use strict";
       );
     });
   });
+  var HIDDEN = "Hidden: the secret was shown once.";
+  function clearSecrets() {
+    document.querySelectorAll("[data-secret]").forEach(function (element) {
+      element.textContent = HIDDEN;
+    });
+  }
+  var timer = null;
+  function stopTimer() {
+    if (timer === null) return;
+    clearInterval(timer);
+    timer = null;
+  }
+  function pad(n) {
+    return (n < 10 ? "0" : "") + n;
+  }
+  function tick() {
+    var running = 0;
+    document.querySelectorAll("time[data-countdown]").forEach(function (element) {
+      var until = Date.parse(element.getAttribute("datetime") || "");
+      var left = isNaN(until) ? 0 : Math.max(0, Math.floor((until - Date.now()) / 1000));
+      element.textContent = left > 0 ? pad(Math.floor(left / 60)) + ":" + pad(left % 60) : "ended";
+      if (left > 0) running += 1;
+    });
+    if (running === 0) stopTimer();
+    return running;
+  }
+  if (document.querySelector("time[data-countdown]") && tick() > 0) {
+    timer = setInterval(tick, 1000);
+  }
+  window.addEventListener("pagehide", function () {
+    clearSecrets();
+    stopTimer();
+  });
   window.addEventListener("pageshow", function (event) {
     if (!event.persisted) return;
+    clearSecrets();
     saved.forEach(function (entry) {
       entry.button.textContent = entry.text;
     });

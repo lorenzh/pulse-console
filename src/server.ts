@@ -74,6 +74,7 @@ import {
 } from "./pages.ts";
 import { isSignInPasswordAcceptable } from "./passwords.ts";
 import { routeRole } from "./permissions.ts";
+import { probeRoutes } from "./probe-routes.ts";
 import type { PageMethod, PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
 import { isLoopbackHost, safeNext } from "./request-guard.ts";
 import { hasRole } from "./roles.ts";
@@ -88,6 +89,7 @@ import {
 } from "./states.ts";
 import { CONSOLE_CSS } from "./styles.ts";
 import { teamRoutes } from "./team-routes.ts";
+import { tokenRoutes } from "./token-routes.ts";
 import { isSecondFactorRequired, signInStage } from "./two-factor-policy.ts";
 
 export type { ConsoleServerDeps };
@@ -1118,6 +1120,8 @@ function protectedRoutesOf(deps: ConsoleServerDeps): Map<string, ProtectedRoute>
   const routes = new Map<string, ProtectedRoute>([["/", overviewRoute(deps)]]);
   for (const route of teamRoutes(deps)) routes.set(route.path, route);
   for (const route of checkRoutes(deps)) routes.set(route.path, route);
+  for (const route of tokenRoutes(deps)) routes.set(route.path, route);
+  for (const route of probeRoutes(deps)) routes.set(route.path, route);
   for (const [key, route] of deps.testRoutes ?? []) {
     const isProduction = key in ROUTES || OPS_PATHS.includes(key);
     if (!key.startsWith(TEST_PREFIX) || isProduction || route.path !== key) {

@@ -21,7 +21,7 @@ import type { CredentialVerifier, HashPassword } from "./passwords.ts";
 import type { ProtectedRoute } from "./protected-route.ts";
 import { expectedOrigin, isCsrfTokenValid, isOriginAllowed } from "./request-guard.ts";
 import type { ConsoleRole } from "./roles.ts";
-import type { ConsoleMode } from "./settings.ts";
+import type { ConsoleMode, ProbePrefill } from "./settings.ts";
 import type { SetupGate } from "./setup-code.ts";
 import { shellPage } from "./shell.ts";
 import type { TeamStore } from "./team-store.ts";
@@ -55,6 +55,8 @@ export interface ConsoleServerDeps {
   schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
   testRoutes?: ReadonlyMap<string, ProtectedRoute> | undefined;
   roleOf?: ((user: User) => ConsoleRole) | undefined;
+  /** Prefills of the add-location form from the PULSE_CONSOLE_PROBE_* settings. */
+  probePrefill?: ProbePrefill | undefined;
 }
 
 export type State = {

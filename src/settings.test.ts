@@ -78,6 +78,7 @@ describe("PULSE_CONSOLE_PORT and PULSE_CONSOLE_HOST", () => {
       mode: "loopback",
       dbPath: "./console.db",
       secretKey: undefined,
+      probePrefill: { apiUrl: undefined, image: undefined, network: undefined },
     });
     const blank = readSettings(
       { PULSE_API_URL: API, PULSE_CONSOLE_PORT: "", PULSE_CONSOLE_HOST: " " },
@@ -287,5 +288,80 @@ describe("PULSE_CONSOLE_SECRET_KEY_FILE", () => {
         PULSE_CONSOLE_SECRET_KEY_FILE: "/run/short",
       }),
     ).toBe("PULSE_CONSOLE_ADMIN_TOKEN must hold at least 32 characters");
+  });
+});
+
+describe("PULSE_CONSOLE_PROBE_* prefills", () => {
+  const IMAGE_RULE =
+    "must hold 1 to 255 characters of A-Z a-z 0-9 . _ / : @ - and start with a letter or digit";
+  const NETWORK_RULE =
+    "must start with a letter or digit and hold at most 128 characters of A-Z a-z 0-9 _ . -";
+  const API_URL_RULE =
+    "must be an http(s) URL of at most 2048 characters without whitespace, credentials, query or fragment";
+
+  test("set values are read, one trailing slash dropped, the console URL never copied", () => {
+    const settings = readSettings(
+      {
+        PULSE_API_URL: API,
+        PULSE_CONSOLE_PROBE_API_URL: " https://pulse.example/api/ ",
+        PULSE_CONSOLE_PROBE_IMAGE: "ghcr.io/lorenzh/pulse-probe:1.2.3",
+        PULSE_CONSOLE_PROBE_NETWORK: "pulse_default",
+      },
+      noFile,
+    );
+    expect(settings.probePrefill).toEqual({
+      apiUrl: "https://pulse.example/api",
+      image: "ghcr.io/lorenzh/pulse-probe:1.2.3",
+      network: "pulse_default",
+    });
+  });
+
+  test("blank counts as unset", () => {
+    const settings = readSettings(
+      {
+        PULSE_API_URL: API,
+        PULSE_CONSOLE_PROBE_API_URL: " ",
+        PULSE_CONSOLE_PROBE_IMAGE: "",
+        PULSE_CONSOLE_PROBE_NETWORK: "  ",
+      },
+      noFile,
+    );
+    expect(settings.probePrefill).toEqual({
+      apiUrl: undefined,
+      image: undefined,
+      network: undefined,
+    });
+  });
+
+  test("an invalid value stops the start with its rule and without the value", () => {
+    for (const [name, value, rule] of [
+      ["PULSE_CONSOLE_PROBE_API_URL", "ftp://secret-host", API_URL_RULE],
+      ["PULSE_CONSOLE_PROBE_API_URL", "http://u:secret@api", API_URL_RULE],
+      ["PULSE_CONSOLE_PROBE_API_URL", "http://api/?secret=1", API_URL_RULE],
+      ["PULSE_CONSOLE_PROBE_IMAGE", "-secret", IMAGE_RULE],
+      ["PULSE_CONSOLE_PROBE_IMAGE", "secret image", IMAGE_RULE],
+      ["PULSE_CONSOLE_PROBE_NETWORK", "-secret", NETWORK_RULE],
+    ] as const) {
+      const message = failure({ PULSE_API_URL: API, [name]: value });
+      expect(message).toBe(`${name}: ${rule}`);
+      expect(message).not.toContain("secret");
+    }
+  });
+
+  test("they are read after the key file, in URL, image, network order", () => {
+    const allBad = {
+      PULSE_API_URL: API,
+      PULSE_CONSOLE_PROBE_API_URL: "ftp://x",
+      PULSE_CONSOLE_PROBE_IMAGE: "-x",
+      PULSE_CONSOLE_PROBE_NETWORK: "-x",
+    };
+    expect(failure(allBad)).toBe(`PULSE_CONSOLE_PROBE_API_URL: ${API_URL_RULE}`);
+    const imageAndNetwork = { ...allBad, PULSE_CONSOLE_PROBE_API_URL: "" };
+    expect(failure(imageAndNetwork)).toBe(`PULSE_CONSOLE_PROBE_IMAGE: ${IMAGE_RULE}`);
+    const network = { ...imageAndNetwork, PULSE_CONSOLE_PROBE_IMAGE: "" };
+    expect(failure(network)).toBe(`PULSE_CONSOLE_PROBE_NETWORK: ${NETWORK_RULE}`);
+    expect(() =>
+      readSettings({ ...allBad, PULSE_CONSOLE_SECRET_KEY_FILE: "/missing/key" }, noFile),
+    ).toThrow("PULSE_CONSOLE_SECRET_KEY_FILE=/missing/key: cannot read");
   });
 });

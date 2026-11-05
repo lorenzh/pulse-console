@@ -79,6 +79,7 @@ async function start(): Promise<void> {
     factorStore: createFactorStore(db),
     teamStore: createTeamStore(db),
     secretKey: settings.secretKey,
+    probePrefill: settings.probePrefill,
     gate,
     now: Date.now,
     randomBytes,

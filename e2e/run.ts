@@ -3,6 +3,7 @@
 // fixture console for a manual check and runs until stopped.
 import { randomBytes } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
+import type { TokenMetadata } from "@lorenzh/pulse-contract";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
 import type { ConsoleRole } from "../src/roles.ts";
 import {
@@ -66,6 +67,13 @@ async function startEnv(waitMs: number, ownerEmail = DEMO_EMAIL): Promise<Env> {
   const api = startFakeApi();
   api.reply("/admin/config", jsonReply(emptyConfig));
   api.reply("/checks", jsonReply([checkWithState("web", "up")]));
+  // The Tokens list of the manual `--serve` console: its own token and one other.
+  api.reply("/admin/tokens/self", jsonReply(E2E_SELF));
+  api.replyTo("GET", "/admin/tokens", jsonReply({ tokens: [E2E_SELF, E2E_OPS, E2E_PROBE] }));
+  for (const row of [E2E_SELF, E2E_OPS, E2E_PROBE]) {
+    api.replyTo("GET", `/admin/tokens/${row.id}`, jsonReply(row));
+  }
+  api.reply("/locations", jsonReply([]));
   const recorder: Recorder = { actions: [] };
   const target: ConfirmTargetHolder = { current: { name: "Checkout API", revision: "rev-1" } };
   const role: { current: ConsoleRole } = { current: "owner" };
@@ -1376,6 +1384,550 @@ async function checkWriteFlowsWith(browser: Browser, hasScript: boolean): Promis
   }
 }
 
+const E2E_SELF = adminTokenRow({
+  id: "tok_5e1f00000000000000000001",
+  name: "console",
+  scopes: ["read", "checks", "incidents", "admin"],
+  source: "file",
+});
+const E2E_OPS = adminTokenRow({ id: "tok_ad0000000000000000000002", name: "ops" });
+const E2E_NEW = adminTokenRow({
+  id: "tok_0e4e00000000000000000004",
+  name: "browser ci",
+  scopes: ["read"],
+});
+const E2E_SECRET = "pulse_e2eCreatedSecret0123456789abcdef";
+const E2E_ROTATED = "pulse_e2eRotatedSecret9876543210fedcba";
+const OVERLAP_MS = 2000;
+
+function adminTokenRow(overrides: Partial<TokenMetadata>): TokenMetadata {
+  return {
+    id: "tok_ad0000000000000000000002",
+    name: "ops",
+    scopes: ["read", "checks", "admin"],
+    location: null,
+    source: "api",
+    createdAt: Date.UTC(2026, 0, 1),
+    lastUsedAt: null,
+    expiresAt: null,
+    revokedAt: null,
+    rotatedAt: null,
+    previousValidUntil: null,
+    ...overrides,
+  };
+}
+
+type TokensApi = {
+  api: ReturnType<typeof startFakeApi>;
+  setTokens: (rows: TokenMetadata[]) => void;
+  rows: () => TokenMetadata[];
+};
+
+function startTokensApi(): TokensApi {
+  const api = startFakeApi();
+  let rows = [E2E_SELF, E2E_OPS];
+  const setTokens = (next: TokenMetadata[]): void => {
+    rows = next;
+    api.replyTo("GET", "/admin/tokens", jsonReply({ tokens: rows }));
+    for (const row of rows) api.replyTo("GET", `/admin/tokens/${row.id}`, jsonReply(row));
+  };
+  api.reply("/admin/tokens/self", jsonReply(E2E_SELF));
+  setTokens(rows);
+  api.replyTo("POST", "/admin/tokens", {
+    status: 201,
+    body: JSON.stringify({ token: E2E_NEW, secret: E2E_SECRET, previousValidUntil: null }),
+    headers: WIRE,
+    after: () => setTokens([...rows, E2E_NEW]),
+  });
+  api.replyTo("POST", `/admin/tokens/${E2E_NEW.id}/revoke`, {
+    status: 200,
+    body: JSON.stringify({ token: { ...E2E_NEW, revokedAt: Date.now() } }),
+    headers: WIRE,
+    after: () =>
+      setTokens(rows.map((r) => (r.id === E2E_NEW.id ? { ...r, revokedAt: Date.now() } : r))),
+  });
+  return { api, setTokens, rows: () => rows };
+}
+
+/** Wraps setInterval and clearInterval before any page script, to count the countdown timer. */
+const INTERVAL_PROBE = `(() => {
+  const set = window.setInterval.bind(window);
+  const clear = window.clearInterval.bind(window);
+  const live = new Set();
+  window.__intervals = { set: 0, active: 0 };
+  window.setInterval = (fn, ms, ...rest) => {
+    const id = set(fn, ms, ...rest);
+    live.add(id);
+    window.__intervals.set += 1;
+    window.__intervals.active = live.size;
+    return id;
+  };
+  window.clearInterval = (id) => {
+    live.delete(id);
+    window.__intervals.active = live.size;
+    clear(id);
+  };
+})();`;
+
+type Intervals = { set: number; active: number };
+
+function intervalsOf(page: Page): Promise<Intervals> {
+  return page.evaluate(() => (window as unknown as { __intervals: Intervals }).__intervals);
+}
+
+async function secretCount(page: Page): Promise<number> {
+  // A Back to a no-store answer may still be navigating to Chromium's error page: retry.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await page.waitForLoadState("load");
+      return (await page.content()).split("pulse_").length - 1;
+    } catch (error) {
+      if (!(error instanceof Error && /navigat/i.test(error.message))) throw error;
+      await page.waitForTimeout(100);
+    }
+  }
+  throw new CheckError("the page never settled after Back");
+}
+
+async function createInBrowser(page: Page, base: string, label: string): Promise<void> {
+  await page.goto(`${base}/tokens/new`);
+  await page.fill('input[name="name"]', "browser ci");
+  await page.check('input[name="preset"][value="read"]');
+  await submitForm(page);
+  const secret = await page.locator("#token-secret").textContent();
+  assert(secret === E2E_SECRET, `${label}: create shows the secret in #token-secret`);
+}
+
+async function checkCopy(page: Page, label: string): Promise<string> {
+  const button = page.locator('button[data-copy="token-secret"]');
+  if (!(await button.isVisible())) return "copy button hidden";
+  await button.click();
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  assert(copied === E2E_SECRET, `${label}: the copy button copies the secret`);
+  return "copy works";
+}
+
+/** Back to a no-store POST answer: Chromium either re-requests it or shows ERR_CACHE_MISS. */
+async function goBackToAnswer(page: Page): Promise<string> {
+  try {
+    await page.goBack();
+    await page.waitForLoadState("load");
+    return "re-requested";
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("ERR_CACHE_MISS")) return "cache miss";
+    throw error;
+  }
+}
+
+/** Sends the create POST again with its used form token, as a reload or a copied request does. */
+async function replayCreate(page: Page, base: string, form: string): Promise<string> {
+  const res = await page.request.post(`${base}/tokens/new`, {
+    headers: { origin: base, "content-type": "application/x-www-form-urlencoded" },
+    data: form,
+    maxRedirects: 0,
+  });
+  return `${res.status()} ${await res.text()}`;
+}
+
+async function checkBackAndReload(page: Page, base: string, label: string): Promise<string> {
+  await page.goto(`${base}/checks`);
+  const back = await goBackToAnswer(page);
+  assert((await secretCount(page)) === 0, `${label}: Back leaves 0 pulse_ in the DOM`);
+  const posted = page.waitForRequest(
+    (r) => r.method() === "POST" && r.url().endsWith("/tokens/new"),
+  );
+  await createInBrowser(page, base, label);
+  const form = (await posted).postData() ?? "";
+  const replay = await replayCreate(page, base, form);
+  assert(
+    replay.startsWith("409 ") && replay.includes("Already submitted"),
+    `${label}: resubmit shows Already submitted`,
+  );
+  assert(!replay.includes("pulse_"), `${label}: the replay holds no secret`);
+  return back;
+}
+
+async function revokeInBrowser(page: Page, base: string, state: TokensApi, label: string) {
+  await page.goto(`${base}/tokens/revoke?id=${E2E_NEW.id}`);
+  await page.fill('input[name="confirm_name"]', "Browser ci");
+  await submitForm(page);
+  assert(
+    state.api.seen.every((s) => !s.path.endsWith("/revoke")),
+    `${label}: a wrong typed name sends no revoke`,
+  );
+  await page.goto(`${base}/tokens/revoke?id=${E2E_NEW.id}`);
+  await page.fill('input[name="confirm_name"]', "browser ci");
+  await submitForm(page);
+  assert(page.url().startsWith(`${base}/tokens?revoked=`), `${label}: revoke redirects`);
+  const notice = `Revoked browser ci (${E2E_NEW.id}).`;
+  assert((await page.getByText(notice).count()) === 1, `${label}: revoke notice`);
+}
+
+async function checkCountdown(page: Page, base: string, state: TokensApi): Promise<void> {
+  await page.goto(`${base}/tokens`);
+  assert((await intervalsOf(page)).set === 0, "no interval on /tokens");
+  await createInBrowser(page, base, "countdown");
+  assert((await intervalsOf(page)).set === 0, "no interval on the create result");
+  await page.goto(`${base}/tokens/rotate?id=${E2E_OPS.id}`);
+  const until = Date.now() + OVERLAP_MS;
+  const rotated = { ...E2E_OPS, rotatedAt: Date.now(), previousValidUntil: until };
+  state.api.replyTo("POST", `/admin/tokens/${E2E_OPS.id}/rotate`, {
+    status: 200,
+    body: JSON.stringify({ token: rotated, secret: E2E_ROTATED, previousValidUntil: until }),
+    headers: WIRE,
+  });
+  await submitForm(page);
+  const time = page.locator("time[data-countdown]");
+  const first = await time.textContent();
+  const started = await intervalsOf(page);
+  assert(
+    started.set === 1 && started.active === 1,
+    `rotate result starts 1 interval, got ${JSON.stringify(started)}`,
+  );
+  await page.waitForTimeout(1100);
+  assert((await time.textContent()) !== first, "the countdown text changes after 1100 ms");
+  await page.waitForTimeout(3500 - 1100);
+  const ended = await intervalsOf(page);
+  assert((await time.textContent()) === "ended", "the countdown shows ended");
+  assert(
+    ended.active === 0 && ended.set === 1,
+    `the interval is cleared, got ${JSON.stringify(ended)}`,
+  );
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
+  assert((await secretCount(page)) === 0, "pagehide clears every data-secret block");
+  await page.evaluate(() => {
+    document.querySelectorAll("[data-secret]").forEach((el) => {
+      el.textContent = "pulse_restored";
+    });
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+  });
+  assert((await secretCount(page)) === 0, "a persisted pageshow clears every data-secret block");
+  ok(
+    `Tokens countdown: set=0 on /tokens and the create result, set=1 on the rotate result, text changed after 1100 ms, ended with active=0 after 3500 ms; pagehide and persisted pageshow leave 0 pulse_`,
+  );
+}
+
+async function checkPagehideStopsTimer(page: Page, base: string, state: TokensApi) {
+  await page.goto(`${base}/tokens/rotate?id=${E2E_OPS.id}`);
+  const until = Date.now() + 600_000;
+  state.api.replyTo("POST", `/admin/tokens/${E2E_OPS.id}/rotate`, {
+    status: 200,
+    body: JSON.stringify({
+      token: { ...E2E_OPS, previousValidUntil: until },
+      secret: E2E_ROTATED,
+      previousValidUntil: until,
+    }),
+    headers: WIRE,
+  });
+  await submitForm(page);
+  assert((await intervalsOf(page)).active === 1, "a long overlap keeps 1 interval");
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
+  assert((await intervalsOf(page)).active === 0, "pagehide clears the interval");
+  ok("Tokens countdown: pagehide clears the running interval");
+}
+
+async function checkTokenFocus(page: Page, base: string): Promise<void> {
+  await page.goto(`${base}/tokens/new`);
+  await page.focus('input[name="name"]');
+  const order: string[] = [];
+  for (let i = 0; i < 3; i += 1) {
+    await page.keyboard.press("Tab");
+    order.push(
+      await page.evaluate(() => {
+        const el = document.activeElement;
+        if (el instanceof HTMLInputElement) return `${el.name}=${el.value}`;
+        return (el?.textContent ?? "").trim();
+      }),
+    );
+  }
+  assert(
+    order.join(" | ") === "preset=read | Create token | Cancel",
+    `Tokens create focus order: ${order.join(" | ")}`,
+  );
+}
+
+async function checkTokenLayout(page: Page, base: string): Promise<void> {
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto(`${base}/tokens`);
+    await assertFits(page, width, `/tokens at ${width}`);
+    await page.goto(`${base}/tokens/new`);
+    await assertFits(page, width, `/tokens/new at ${width}`);
+    await page.goto(`${base}/tokens/revoke?id=${E2E_OPS.id}`);
+    await assertFits(page, width, `/tokens/revoke at ${width}`);
+  }
+}
+
+/** Tokens in a real browser: create, copy, Back, reload, typed revoke, countdown, layout. */
+async function checkTokensWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const env = await startEnv(0);
+  env.api.stop();
+  const state = startTokensApi();
+  const server = await startSignedInConsole({
+    apiUrl: state.api.url,
+    ownerEmail: env.ownerEmail,
+    adminToken: ADMIN_TOKEN,
+  });
+  await env.console.close();
+  server.setNow(Date.now());
+  const local: Env = { ...env, console: server, api: state.api };
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+    ...(hasScript ? { permissions: ["clipboard-read", "clipboard-write"] } : {}),
+  });
+  if (hasScript) await context.addInitScript(INTERVAL_PROBE);
+  const page = await newPage(context, violations);
+  try {
+    await signIn(page, local);
+    await createInBrowser(page, server.base, label);
+    const copy = hasScript
+      ? await checkCopy(page, label)
+      : "no script: the secret stays selectable";
+    const back = await checkBackAndReload(page, server.base, label);
+    await revokeInBrowser(page, server.base, state, label);
+    const creates = state.api.seen.filter((s) => s.method === "POST" && s.path === "/admin/tokens");
+    assert(
+      creates.length === 2,
+      `${label}: 2 creates for 2 submits and 1 reload, got ${creates.length}`,
+    );
+    await checkTokenLayout(page, server.base);
+    if (hasScript) {
+      await checkTokenFocus(page, server.base);
+      await axeOn(page, `${server.base}/tokens`, "/tokens");
+      await axeOn(page, `${server.base}/tokens/new`, "/tokens/new");
+      await axeOn(page, `${server.base}/tokens/revoke?id=${E2E_OPS.id}`, "/tokens/revoke");
+      await checkCountdown(page, server.base, state);
+      await checkPagehideStopsTimer(page, server.base, state);
+    }
+    assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
+    ok(
+      `Tokens, ${label}: create shows #token-secret (${copy}), Back (${back}) leaves 0 pulse_, resubmit of the used form token shows Already submitted with no extra create, typed revoke (wrong case sent nothing), no overflow at 390 and 1280 px${hasScript ? ", focus order Name > Read > Create token > Cancel" : ""}, 0 CSP violations`,
+    );
+  } finally {
+    await context.close();
+    await server.close();
+    state.api.stop();
+  }
+}
+
+const E2E_PROBE = adminTokenRow({
+  id: "tok_b0be00000000000000000003",
+  name: "probe eu",
+  scopes: ["probe"],
+  location: "eu",
+});
+const E2E_NEW_PROBE = adminTokenRow({
+  id: "tok_b0be00000000000000abc123",
+  name: "probe eu-west",
+  scopes: ["probe"],
+  location: "eu-west",
+});
+const E2E_PROBE_SECRET = "pulse_e2eProbeSecret0123456789abcdef";
+const PROBE_PRE_IDS = [
+  "probe-env-command",
+  "probe-docker-run",
+  "probe-compose-file",
+  "probe-compose-command",
+];
+
+function startProbesApi(): TokensApi {
+  const state = startTokensApi();
+  state.setTokens([...state.rows(), E2E_PROBE]);
+  state.api.reply("/locations", jsonReply([]));
+  state.api.replyTo("POST", "/admin/tokens", {
+    status: 201,
+    body: JSON.stringify({
+      token: E2E_NEW_PROBE,
+      secret: E2E_PROBE_SECRET,
+      previousValidUntil: null,
+    }),
+    headers: WIRE,
+    after: () => state.setTokens([...state.rows(), E2E_NEW_PROBE]),
+  });
+  state.api.replyTo("POST", `/admin/tokens/${E2E_PROBE.id}/revoke`, {
+    status: 200,
+    body: JSON.stringify({ token: { ...E2E_PROBE, revokedAt: Date.now() } }),
+    headers: WIRE,
+  });
+  return state;
+}
+
+async function addProbeInBrowser(page: Page, base: string, label: string): Promise<void> {
+  await page.goto(`${base}/probes/new`);
+  const names = await page
+    .locator('form[action="/probes/new"] input:not([type="hidden"])')
+    .evaluateAll((els) => els.map((el) => (el as HTMLInputElement).name));
+  assert(
+    names.join(",") === "location,name,api_url,image,network",
+    `${label}: the add form has the five fields, got ${names.join(",")}`,
+  );
+  const text = (await page.content()).toLowerCase();
+  assert(!text.includes("private"), `${label}: the add form has 0 private-range controls`);
+  await page.fill('input[name="location"]', "eu-west");
+  await page.fill('input[name="api_url"]', "https://api.example.test");
+  await page.fill('input[name="image"]', "ghcr.io/lorenzh/pulse-probe:main");
+  await submitForm(page);
+  for (const id of PROBE_PRE_IDS) {
+    assert((await page.locator(`pre#${id}`).count()) === 1, `${label}: the result has pre#${id}`);
+  }
+  const env = await page.locator("#probe-env-command").textContent();
+  assert(env?.includes(E2E_PROBE_SECRET) === true, `${label}: the env command holds the secret`);
+  const run = (await page.locator("#probe-docker-run").textContent()) ?? "";
+  assert(
+    run.includes("-e 'PULSE_PROBE_BLOCK_PRIVATE_RANGES=false'") && !run.includes("=true"),
+    `${label}: docker run keeps the private-range default false`,
+  );
+  const explanation = "is the probe's default: its checks may connect to private, loopback";
+  assert((await page.getByText(explanation).count()) === 1, `${label}: the default-false text`);
+  const selected = await page.evaluate(() => {
+    const pre = document.getElementById("probe-docker-run");
+    const selection = window.getSelection();
+    if (pre === null || selection === null) return "";
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return selection.toString();
+  });
+  assert(selected.startsWith("docker run -d"), `${label}: the snippet text is selectable`);
+}
+
+async function revokeProbeInBrowser(page: Page, base: string, state: TokensApi, label: string) {
+  await page.goto(`${base}/probes/revoke?id=${E2E_PROBE.id}`);
+  await page.fill('input[name="confirm_name"]', "EU");
+  await submitForm(page);
+  assert(
+    state.api.seen.every((s) => !s.path.endsWith("/revoke")),
+    `${label}: a wrong typed location sends no revoke`,
+  );
+  await page.goto(`${base}/probes/revoke?id=${E2E_PROBE.id}`);
+  await page.fill('input[name="confirm_name"]', "eu");
+  await submitForm(page);
+  assert(page.url().startsWith(`${base}/probes?revoked=`), `${label}: probe revoke redirects`);
+}
+
+async function checkProbeCountdown(page: Page, base: string, state: TokensApi): Promise<void> {
+  await page.goto(`${base}/probes`);
+  assert((await intervalsOf(page)).set === 0, "no interval on /probes");
+  await page.goto(`${base}/probes/rotate?id=${E2E_NEW_PROBE.id}`);
+  const until = Date.now() + OVERLAP_MS;
+  state.api.replyTo("POST", `/admin/tokens/${E2E_NEW_PROBE.id}/rotate`, {
+    status: 200,
+    body: JSON.stringify({
+      token: { ...E2E_NEW_PROBE, rotatedAt: Date.now(), previousValidUntil: until },
+      secret: E2E_ROTATED,
+      previousValidUntil: until,
+    }),
+    headers: WIRE,
+  });
+  await submitForm(page);
+  const time = page.locator("time[data-countdown]");
+  const first = await time.textContent();
+  const started = await intervalsOf(page);
+  assert(
+    started.set === 1 && started.active === 1,
+    `probe rotate starts 1 interval, got ${JSON.stringify(started)}`,
+  );
+  await page.waitForTimeout(1100);
+  assert((await time.textContent()) !== first, "the probe countdown changes after 1100 ms");
+  await page.waitForTimeout(3500 - 1100);
+  const ended = await intervalsOf(page);
+  assert((await time.textContent()) === "ended" && ended.active === 0, "the probe countdown ended");
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
+  assert((await secretCount(page)) === 0, "pagehide clears the probe env command");
+  await page.evaluate(() => {
+    document.querySelectorAll("[data-secret]").forEach((el) => {
+      el.textContent = "pulse_restored";
+    });
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+  });
+  assert((await secretCount(page)) === 0, "a persisted pageshow clears the probe env command");
+  ok(
+    "Probes countdown: set=0 on /probes, set=1 on the rotate result, text changed after 1100 ms, ended with active=0 after 3500 ms; pagehide and persisted pageshow leave 0 pulse_",
+  );
+}
+
+async function checkProbeLayout(page: Page, base: string): Promise<void> {
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    for (const path of ["/probes", "/probes/new", `/probes/revoke?id=${E2E_NEW_PROBE.id}`]) {
+      await page.goto(`${base}${path}`);
+      await assertFits(page, width, `${path} at ${width}`);
+    }
+  }
+}
+
+async function checkProbeFocus(page: Page, base: string): Promise<void> {
+  await page.goto(`${base}/probes/new`);
+  await page.focus('input[name="location"]');
+  const order: string[] = [];
+  for (let i = 0; i < 6; i += 1) {
+    await page.keyboard.press("Tab");
+    order.push(
+      await page.evaluate(() => {
+        const el = document.activeElement;
+        if (el instanceof HTMLInputElement) return el.name;
+        return (el?.textContent ?? "").trim();
+      }),
+    );
+  }
+  assert(
+    order.join(" | ") === "name | api_url | image | network | Add location | Cancel",
+    `Probes add focus order: ${order.join(" | ")}`,
+  );
+}
+
+/** Probes in a real browser: add with four snippets, typed revoke, countdown, layout. */
+async function checkProbesWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const env = await startEnv(0);
+  env.api.stop();
+  const state = startProbesApi();
+  const server = await startSignedInConsole({
+    apiUrl: state.api.url,
+    ownerEmail: env.ownerEmail,
+    adminToken: ADMIN_TOKEN,
+  });
+  await env.console.close();
+  server.setNow(Date.now());
+  const local: Env = { ...env, console: server, api: state.api };
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+  });
+  if (hasScript) await context.addInitScript(INTERVAL_PROBE);
+  const page = await newPage(context, violations);
+  try {
+    await signIn(page, local);
+    await addProbeInBrowser(page, server.base, label);
+    if (hasScript) assert((await intervalsOf(page)).set === 0, "no interval on the add result");
+    await page.goto(`${server.base}/checks`);
+    await goBackToAnswer(page);
+    assert((await secretCount(page)) === 0, `${label}: Back leaves 0 pulse_ after the add`);
+    await revokeProbeInBrowser(page, server.base, state, label);
+    await checkProbeLayout(page, server.base);
+    if (hasScript) {
+      await checkProbeFocus(page, server.base);
+      await axeOn(page, `${server.base}/probes`, "/probes");
+      await axeOn(page, `${server.base}/probes/new`, "/probes/new");
+      await axeOn(page, `${server.base}/probes/revoke?id=${E2E_NEW_PROBE.id}`, "/probes/revoke");
+      await checkProbeCountdown(page, server.base, state);
+    }
+    assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
+    ok(
+      `Probes, ${label}: the add form has exactly 5 fields and 0 private-range controls, the result has the 4 pre blocks with the default-false text and selectable snippets, Back leaves 0 pulse_, typed revoke (wrong case sent nothing), no overflow at 390 and 1280 px${hasScript ? ", focus order Location > Name > API URL > Image > Network > Add location > Cancel, axe 0" : ""}, 0 CSP violations`,
+    );
+  } finally {
+    await context.close();
+    await server.close();
+    state.api.stop();
+  }
+}
+
 async function runChecks(): Promise<void> {
   const env = await startEnv(0);
   const browser = await chromium.launch();
@@ -1395,6 +1947,10 @@ async function runChecks(): Promise<void> {
     await checkScreensWith(browser, false);
     await checkWriteFlowsWith(browser, true);
     await checkWriteFlowsWith(browser, false);
+    await checkTokensWith(browser, true);
+    await checkTokensWith(browser, false);
+    await checkProbesWith(browser, true);
+    await checkProbesWith(browser, false);
     // A console of its own: each check signs in with a fixture recovery code.
     const shellEnv = await startEnv(0);
     try {
