@@ -882,7 +882,7 @@ describe("GET /checks/check", () => {
       const c = await consoleFor(api);
       const res = await getPage(c, `/checks/check${query}`);
       expect(res.status).toBe(404);
-      expect(res.body).toContain("There is no page at this address.");
+      expect(res.body).toContain("There is no page at this address; go to the overview.");
       expect(api.seen.every((s) => s.path === "/admin/config" || s.path === "/checks")).toBe(true);
     },
   );

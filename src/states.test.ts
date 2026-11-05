@@ -85,7 +85,7 @@ test("forbidden and not found", () => {
   const notFound = notFoundState();
   expect(notFound).not.toContain("Page not found");
   expect(notFound).toBe(
-    '<p>There is no page at this address. Check the address, or go to the overview.</p>\n<p><a href="/">Go to the overview</a></p>\n',
+    '<p>There is no page at this address; go to the overview.</p>\n<p><a href="/">Go to the overview</a></p>\n',
   );
   expect(notFound).toContain('<a href="/">Go to the overview</a>');
 });

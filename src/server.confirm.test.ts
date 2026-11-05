@@ -212,7 +212,7 @@ describe("target changes", () => {
     expect(get.status).toBe(404);
     expect(get.body).toContain("<h1>Page not found</h1>");
     expect(get.body).not.toContain("<h2>Page not found</h2>");
-    expect(get.body).toContain("There is no page at this address.");
+    expect(get.body).toContain("There is no page at this address; go to the overview.");
     const post = await postForm(c, TYPED_PATH, {
       csrf: SESSION_CSRF,
       form_token: token,
@@ -222,7 +222,7 @@ describe("target changes", () => {
     expect(post.status).toBe(404);
     expect(post.body).toContain("<h1>Page not found</h1>");
     expect(post.body).not.toContain("<h2>Page not found</h2>");
-    expect(post.body).toContain("There is no page at this address.");
+    expect(post.body).toContain("There is no page at this address; go to the overview.");
     expect(recorder.actions).toHaveLength(0);
   });
 });
