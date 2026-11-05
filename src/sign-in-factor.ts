@@ -8,6 +8,7 @@ import {
 import type { Attempt } from "./auth-throttle.ts";
 import type { FactorSignInResult, NewFullSession } from "./factor-store.ts";
 import {
+  acceptSessionForm,
   type Ctx,
   type Current,
   currentOf,
@@ -16,22 +17,24 @@ import {
   readPostForm,
   redirect,
   sendHtml,
+  sessionForm,
 } from "./http-context.ts";
 import type { AuthKind } from "./metrics.ts";
 import { messagePage } from "./pages.ts";
 import { normalizeRecoveryCode, recoveryCodeDigest } from "./recovery-codes.ts";
 import { safeNext } from "./request-guard.ts";
 import { openSecret } from "./secret-box.ts";
+import { formExpiredResendNotice } from "./states.ts";
 import { matchTotpStep, normalizeTotpInput } from "./totp.ts";
 
-const FACTOR_FIELDS = ["code", "recovery_code"] as const;
+const FACTOR_FIELDS = ["code", "recovery_code", "form_token"] as const;
 /** Each code field holds at most this many characters. */
 export const MAX_CODE_FIELD = 64;
 const WRONG_CODE = "Wrong code.";
 export const TOO_MANY = "Too many attempts. Try again later.";
 
-function throttledPage(current: Current): string {
-  return factorPage({ csrf: current.session.csrfToken, error: TOO_MANY });
+function throttledPage(ctx: Ctx): string {
+  return factorPage({ ...sessionForm(ctx), error: TOO_MANY });
 }
 
 type FactorKind = "totp" | "recovery-code" | "enrolment";
@@ -94,7 +97,7 @@ export function newFullSession(ctx: Ctx): NewFullSession {
 
 /** `GET /sign-in/factor`. */
 export function sendFactorForm(ctx: Ctx): void {
-  sendHtml(ctx, 200, factorPage({ csrf: currentOf(ctx).session.csrfToken }));
+  sendHtml(ctx, 200, factorPage(sessionForm(ctx)));
 }
 
 type Choice =
@@ -123,14 +126,14 @@ export async function postFactor(ctx: Ctx): Promise<void> {
   if (fields === undefined) return;
   const choice = choiceOf(fields.code ?? "", fields.recovery_code ?? "");
   if (choice.kind === "invalid") {
-    sendHtml(ctx, 422, factorPage({ csrf, error: FACTOR_CHOICE_TEXT }));
+    sendHtml(ctx, 422, factorPage({ ...sessionForm(ctx), error: FACTOR_CHOICE_TEXT }));
     return;
   }
-  if (choice.kind === "totp") verifyTotp(ctx, current, choice.code);
-  else verifyRecovery(ctx, current, choice.normalized);
+  if (choice.kind === "totp") verifyTotp(ctx, current, choice.code, fields.form_token);
+  else verifyRecovery(ctx, current, choice.normalized, fields.form_token);
 }
 
-function verifyTotp(ctx: Ctx, current: Current, code: string): void {
+function verifyTotp(ctx: Ctx, current: Current, code: string, token: string | undefined): void {
   const { deps } = ctx;
   const userId = current.user.id;
   const key = deps.secretKey;
@@ -138,7 +141,7 @@ function verifyTotp(ctx: Ctx, current: Current, code: string): void {
     sendNoKey(ctx);
     return;
   }
-  const attempt = admitFactor(ctx, userId, "totp", throttledPage(current));
+  const attempt = admitFactor(ctx, userId, "totp", throttledPage(ctx));
   if (attempt === undefined) return;
   const authenticator = deps.factorStore.authenticator(userId);
   if (authenticator === undefined) {
@@ -155,7 +158,15 @@ function verifyTotp(ctx: Ctx, current: Current, code: string): void {
   const step = matchTotpStep(opened.plaintext, code, now, authenticator.lastStep);
   opened.plaintext.fill(0);
   if (step === undefined) {
-    wrongFactor(ctx, current, attempt, "totp");
+    wrongFactor(ctx, attempt, "totp");
+    return;
+  }
+  if (
+    !acceptSessionForm(ctx, token, () =>
+      factorPage({ ...sessionForm(ctx), error: formExpiredResendNotice }),
+    )
+  ) {
+    attempt.release();
     return;
   }
   const session = newFullSession(ctx);
@@ -168,12 +179,17 @@ function verifyTotp(ctx: Ctx, current: Current, code: string): void {
       step,
     }),
   );
-  finishFactor(ctx, current, attempt, "totp", { result, session });
+  finishFactor(ctx, attempt, "totp", { result, session });
 }
 
-function verifyRecovery(ctx: Ctx, current: Current, normalized: string): void {
+function verifyRecovery(
+  ctx: Ctx,
+  current: Current,
+  normalized: string,
+  token: string | undefined,
+): void {
   const userId = current.user.id;
-  const attempt = admitFactor(ctx, userId, "recovery-code", throttledPage(current));
+  const attempt = admitFactor(ctx, userId, "recovery-code", throttledPage(ctx));
   if (attempt === undefined) return;
   const session = newFullSession(ctx);
   const result = settleOnThrow(attempt, () =>
@@ -183,27 +199,34 @@ function verifyRecovery(ctx: Ctx, current: Current, normalized: string): void {
       newSession: session,
       now: ctx.deps.now(),
       candidate: recoveryCodeDigest(normalized),
+      canCommit: () =>
+        acceptSessionForm(ctx, token, () =>
+          factorPage({ ...sessionForm(ctx), error: formExpiredResendNotice }),
+        ),
     }),
   );
-  finishFactor(ctx, current, attempt, "recovery-code", { result, session });
+  finishFactor(ctx, attempt, "recovery-code", { result, session });
 }
 
-function wrongFactor(ctx: Ctx, current: Current, attempt: Attempt, kind: AuthKind): void {
+function wrongFactor(ctx: Ctx, attempt: Attempt, kind: AuthKind): void {
   failFactor(ctx, attempt, kind);
-  sendHtml(ctx, 401, factorPage({ csrf: current.session.csrfToken, error: WRONG_CODE }));
+  sendHtml(ctx, 401, factorPage({ ...sessionForm(ctx), error: WRONG_CODE }));
 }
 
 function finishFactor(
   ctx: Ctx,
-  current: Current,
   attempt: Attempt,
   kind: "totp" | "recovery-code",
   outcome: { result: FactorSignInResult; session: NewFullSession },
 ): void {
   const { result, session } = outcome;
   if (!result.ok) {
+    if (result.reason === "form") {
+      attempt.release();
+      return;
+    }
     if (result.reason === "factor") {
-      wrongFactor(ctx, current, attempt, kind);
+      wrongFactor(ctx, attempt, kind);
       return;
     }
     attempt.release();
@@ -211,7 +234,7 @@ function finishFactor(
     return;
   }
   attempt.succeed();
-  const userId = current.user.id;
+  const userId = currentOf(ctx).user.id;
   if (kind === "totp") ctx.deps.log.info("signed in", { userId, factor: kind });
   else ctx.deps.log.info("signed in", { userId, factor: kind, remaining: result.remaining });
   ctx.deps.metrics.recordAuthAttempt(kind, "success");

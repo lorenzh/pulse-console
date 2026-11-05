@@ -100,6 +100,7 @@ export async function startConsole(
   const logs: string[] = [];
   const metrics = createMetrics();
   const server: Server = createConsoleServer({
+    instanceName: "pulse Console",
     metrics,
     log: createLogger({ level: "debug", write: (_level, line) => logs.push(line) }),
     mode: "loopback",
@@ -141,6 +142,7 @@ export function csrfIn(body: string): string {
 }
 
 export class Client {
+  private readonly formTokens = new Map<string, string>();
   readonly jar = new Map<string, string>();
   c: Console;
   constructor(c: Console) {
@@ -170,21 +172,34 @@ export class Client {
       ...(fields === undefined ? {} : { body: new URLSearchParams(fields).toString() }),
     });
     this.remember(res);
-    return { status: res.status, headers: res.headers, body: await res.text() };
+    const body = await res.text();
+    for (const form of body.matchAll(/<form[^>]*action="([^"]+)"[^>]*>([\s\S]*?)<\/form>/g)) {
+      const token = /name="form_token" value="([^"]+)"/.exec(form[2] ?? "")?.[1];
+      if (token !== undefined) this.formTokens.set(form[1] ?? "", token);
+    }
+    return { status: res.status, headers: res.headers, body };
   }
 
   get(path: string): Promise<Reply> {
     return this.request("GET", path);
   }
 
-  post(path: string, fields: Record<string, string>): Promise<Reply> {
-    return this.request("POST", path, fields);
+  async post(path: string, fields: Record<string, string>): Promise<Reply> {
+    if (!this.formTokens.has(path))
+      await this.get(path === "/sign-out" ? "/account/sessions" : path);
+    const token = this.formTokens.get(path);
+    this.formTokens.delete(path);
+    return this.request("POST", path, {
+      ...(token === undefined ? {} : { form_token: token }),
+      ...fields,
+    });
   }
 
   async password(next = "/"): Promise<Reply> {
     const page = await this.get("/sign-in");
     return this.post("/sign-in", {
       csrf: csrfIn(page.body),
+      form_token: /name="form_token" value="([^"]+)"/.exec(page.body)?.[1] ?? "",
       email: EMAIL,
       password: PASSWORD,
       next,

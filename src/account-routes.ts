@@ -14,6 +14,7 @@ import {
 import type { Attempt } from "./auth-throttle.ts";
 import type { PendingAuthenticator } from "./factor-store.ts";
 import {
+  acceptSessionForm,
   type Ctx,
   type Current,
   currentOf,
@@ -21,6 +22,7 @@ import {
   readPostForm,
   redirect,
   sendHtml,
+  sessionForm,
 } from "./http-context.ts";
 import { messagePage } from "./pages.ts";
 import { isSignInPasswordAcceptable } from "./passwords.ts";
@@ -41,10 +43,11 @@ import {
   settleOnThrow,
   TOO_MANY,
 } from "./sign-in-factor.ts";
+import { formExpiredResendNotice } from "./states.ts";
 import { base32Encode, matchTotpStep, normalizeTotpInput, TOTP_SEED_BYTES } from "./totp.ts";
 
-const AUTHENTICATOR_FIELDS = ["action", "code", "password"] as const;
-const NEW_CODES_FIELDS = ["password"] as const;
+const AUTHENTICATOR_FIELDS = ["action", "code", "password", "form_token"] as const;
+const NEW_CODES_FIELDS = ["password", "form_token"] as const;
 const WRONG_PASSWORD = "Wrong password.";
 const PASSWORD_FORMAT = "Enter your password (at most 128 characters).";
 
@@ -58,6 +61,7 @@ function sendNoKeyPage(ctx: Ctx): void {
 
 /** The pending view of a live pending row, or undefined when its seed cannot be opened. */
 function pendingView(
+  ctx: Ctx,
   current: Current,
   pending: PendingAuthenticator,
   key: Uint8Array,
@@ -66,7 +70,7 @@ function pendingView(
   if (!opened.isOpen) return undefined;
   const view: AuthenticatorView = {
     kind: "pending",
-    csrf: current.session.csrfToken,
+    ...sessionForm(ctx),
     email: current.user.email,
     key: base32Encode(opened.plaintext),
   };
@@ -76,12 +80,12 @@ function pendingView(
 
 /** The page without a live pending row: create a key (enrol) or replace (full). */
 function startView(ctx: Ctx, current: Current, error?: string): AuthenticatorView {
-  const csrf = current.session.csrfToken;
+  const form = sessionForm(ctx);
   const confirmed = ctx.deps.factorStore.authenticator(current.user.id);
   if (current.stage === "full" && confirmed !== undefined) {
-    return { kind: "replace", csrf, confirmedAt: confirmed.confirmedAt, error };
+    return { kind: "replace", ...form, confirmedAt: confirmed.confirmedAt, error };
   }
-  return { kind: "new", csrf, error };
+  return { kind: "new", ...form, error };
 }
 
 /** `GET /account/authenticator`. */
@@ -97,7 +101,7 @@ export function sendAuthenticator(ctx: Ctx): void {
     sendHtml(ctx, 200, authenticatorPage(startView(ctx, current)));
     return;
   }
-  const view = pendingView(current, pending, key);
+  const view = pendingView(ctx, current, pending, key);
   if (view === undefined) {
     ctx.deps.log.error("authenticator secret cannot be decrypted", { userId: current.user.id });
     sendHtml(ctx, 500, messagePage("Authenticator app", DECRYPT_FAILED_TEXT));
@@ -113,10 +117,10 @@ export async function postAuthenticator(ctx: Ctx): Promise<void> {
   if (fields === undefined) return;
   switch (fields.action ?? "") {
     case "new":
-      await createPending(ctx, current, fields.password ?? "");
+      await createPending(ctx, current, fields.password ?? "", fields.form_token);
       return;
     case "confirm":
-      confirmPending(ctx, current, fields.code ?? "");
+      confirmPending(ctx, current, fields.code ?? "", fields.form_token);
       return;
     default:
       sendHtml(ctx, 422, authenticatorPage(startView(ctx, current, "Choose an action.")));
@@ -167,7 +171,12 @@ export async function recheckPassword(
   return true;
 }
 
-async function createPending(ctx: Ctx, current: Current, password: string): Promise<void> {
+async function createPending(
+  ctx: Ctx,
+  current: Current,
+  password: string,
+  token: string | undefined,
+): Promise<void> {
   const { deps } = ctx;
   const hasKey = (): boolean => {
     if (deps.secretKey !== undefined) return true;
@@ -182,6 +191,12 @@ async function createPending(ctx: Ctx, current: Current, password: string): Prom
   }
   const key = deps.secretKey;
   if (key === undefined) return;
+  if (
+    !acceptSessionForm(ctx, token, () =>
+      authenticatorPage(startView(ctx, current, formExpiredResendNotice)),
+    )
+  )
+    return;
   const seed = deps.randomBytes(TOTP_SEED_BYTES);
   const secret = sealSecret(key, current.user.id, seed, deps.randomBytes);
   seed.fill(0);
@@ -189,7 +204,12 @@ async function createPending(ctx: Ctx, current: Current, password: string): Prom
   redirect(ctx, "/account/authenticator");
 }
 
-function confirmPending(ctx: Ctx, current: Current, input: string): void {
+function confirmPending(
+  ctx: Ctx,
+  current: Current,
+  input: string,
+  token: string | undefined,
+): void {
   const { deps } = ctx;
   const userId = current.user.id;
   const code = input.length > MAX_CODE_FIELD ? undefined : normalizeTotpInput(input);
@@ -214,7 +234,7 @@ function confirmPending(ctx: Ctx, current: Current, input: string): void {
   const pending = deps.factorStore.pendingAuthenticator(current.id, now);
   if (pending === undefined) {
     attempt.release();
-    sendHtml(ctx, 409, pendingExpiredPage(current.session.csrfToken, current.stage === "full"));
+    sendHtml(ctx, 409, pendingExpiredPage(sessionForm(ctx), current.stage === "full"));
     return;
   }
   const opened = openSecret(key, userId, pending.secret);
@@ -226,8 +246,16 @@ function confirmPending(ctx: Ctx, current: Current, input: string): void {
   opened.plaintext.fill(0);
   if (step === undefined) {
     failFactor(ctx, attempt, "enrolment");
-    const csrf = current.session.csrfToken;
-    sendHtml(ctx, 401, authenticatorPage({ kind: "retry", csrf, error: "Wrong code." }));
+    const form = sessionForm(ctx);
+    sendHtml(ctx, 401, authenticatorPage({ kind: "retry", ...form, error: "Wrong code." }));
+    return;
+  }
+  if (
+    !acceptSessionForm(ctx, token, () =>
+      authenticatorPage({ kind: "retry", ...sessionForm(ctx), error: formExpiredResendNotice }),
+    )
+  ) {
+    attempt.release();
     return;
   }
   commitConfirmation(ctx, current, attempt, { secret: pending.secret, step, now });
@@ -256,7 +284,7 @@ function commitConfirmation(
   );
   if (!result.ok) {
     attempt.release();
-    sendHtml(ctx, 409, pendingExpiredPage(current.session.csrfToken, current.stage === "full"));
+    sendHtml(ctx, 409, pendingExpiredPage(sessionForm(ctx), current.stage === "full"));
     return;
   }
   attempt.succeed();
@@ -279,7 +307,7 @@ export function sendSecurity(ctx: Ctx): void {
 
 function newCodesView(ctx: Ctx, current: Current, error?: string): string {
   return newCodesPage({
-    csrf: current.session.csrfToken,
+    ...sessionForm(ctx),
     codesLeft: ctx.deps.factorStore.unusedRecoveryCodeCount(current.user.id),
     error,
   });
@@ -298,6 +326,12 @@ export async function postNewCodes(ctx: Ctx): Promise<void> {
   const page = (error: string): string => newCodesView(ctx, current, error);
   if (!(await recheckPassword(ctx, current, fields.password ?? "", page))) return;
   const { deps } = ctx;
+  if (
+    !acceptSessionForm(ctx, fields.form_token, () =>
+      newCodesView(ctx, current, formExpiredResendNotice),
+    )
+  )
+    return;
   const codes = generateRecoveryCodes(deps.randomBytes);
   deps.factorStore.replaceRecoveryCodes(current.user.id, codes.map(codeDigest));
   deps.log.info("recovery codes created", { userId: current.user.id });
@@ -310,12 +344,12 @@ export function sendSessions(ctx: Ctx): void {
   const rows = ctx.deps.store.listSessions(current.user.id, current.id, ctx.deps.now());
   const notice =
     ctx.query.get("signed-out") === "others" ? "All other sessions are signed out." : undefined;
-  sendHtml(ctx, 200, sessionsPage({ csrf: current.session.csrfToken, rows, notice }));
+  sendHtml(ctx, 200, sessionsPage({ ...sessionForm(ctx), rows, notice }));
 }
 
 /** `GET /account/sessions/sign-out-all`: the confirmation. */
 export function sendSignOutAllForm(ctx: Ctx): void {
-  sendHtml(ctx, 200, signOutAllPage(currentOf(ctx).session.csrfToken));
+  sendHtml(ctx, 200, signOutAllPage(sessionForm(ctx)));
 }
 
 /**
@@ -324,8 +358,14 @@ export function sendSignOutAllForm(ctx: Ctx): void {
  */
 export async function postSignOutAll(ctx: Ctx): Promise<void> {
   const current = currentOf(ctx);
-  const fields = await readPostForm(ctx, [], current.session.csrfToken);
+  const fields = await readPostForm(ctx, ["form_token"], current.session.csrfToken);
   if (fields === undefined) return;
+  if (
+    !acceptSessionForm(ctx, fields.form_token, () =>
+      signOutAllPage(sessionForm(ctx), formExpiredResendNotice),
+    )
+  )
+    return;
   const sessions = ctx.deps.store.deleteOtherSessions(current.user.id, current.id);
   ctx.deps.log.info("signed out other sessions", { userId: current.user.id, sessions });
   redirect(ctx, "/account/sessions?signed-out=others");

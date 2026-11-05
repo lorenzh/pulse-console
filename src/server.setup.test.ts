@@ -103,6 +103,7 @@ async function startConsole(
   const setup = createSetupGate({ now, randomBytes });
   const logs: string[] = [];
   const server: Server = createConsoleServer({
+    instanceName: "pulse Console",
     metrics: createMetrics(),
     log: createLogger({ level: "debug", write: (_level, line) => logs.push(line) }),
     mode: "loopback",
@@ -139,6 +140,12 @@ async function startConsole(
   return { base: origin, origin, code: setup.code, store, dbPath, logs, clock };
 }
 
+// The cookies that the page of each form needs; every other form needs only the CSRF cookie.
+const FORM_COOKIES: Record<string, string[]> = {
+  "/sign-out": ["pulse_console_session"],
+  "/setup/owner": ["pulse_console_csrf", "pulse_console_setup"],
+};
+
 /** A browser-like client with its own cookie jar. */
 class Client {
   readonly jar = new Map<string, string>();
@@ -174,11 +181,30 @@ class Client {
     return r;
   }
 
+  /** A fresh form token from the page of that form, sent with only the cookies it needs. */
+  private async freshFormToken(path: string): Promise<string | undefined> {
+    const page = path === "/sign-out" ? "/account/authenticator" : path;
+    const names = FORM_COOKIES[path] ?? ["pulse_console_csrf"];
+    const cookie = names
+      .filter((n) => this.jar.has(n))
+      .map((n) => `${n}=${this.jar.get(n)}`)
+      .join("; ");
+    const res = await fetch(this.c.base + page, { redirect: "manual", headers: { cookie } });
+    const html = await res.text();
+    const form = html.slice(Math.max(0, html.indexOf(`action="${path}"`)));
+    return /name="form_token" value="([^"]+)"/.exec(form)?.[1];
+  }
+
   async post(
     path: string,
     fields: Record<string, string>,
   ): Promise<{ status: number; headers: Headers; body: string }> {
-    const body = new URLSearchParams({ csrf: this.jar.get("pulse_console_csrf") ?? "", ...fields });
+    const token = await this.freshFormToken(path);
+    const body = new URLSearchParams({
+      csrf: this.jar.get("pulse_console_csrf") ?? "",
+      ...(token === undefined ? {} : { form_token: token }),
+      ...fields,
+    });
     const res = await fetch(this.c.base + path, {
       method: "POST",
       redirect: "manual",

@@ -43,7 +43,7 @@ export interface FactorSignInBase {
 
 export type FactorSignInResult =
   | { ok: true; nextPath: string | undefined; remaining: number }
-  | { ok: false; reason: "no-session" | "factor" };
+  | { ok: false; reason: "no-session" | "factor" | "form" };
 
 export interface FactorStore {
   authenticator: (userId: number) => Authenticator | undefined;
@@ -68,15 +68,15 @@ export interface FactorStore {
   completeTotpSignIn: (input: FactorSignInBase & { step: number }) => FactorSignInResult;
   /** In one BEGIN IMMEDIATE transaction: end the `factor` session, use the code, start `full`. */
   completeRecoverySignIn: (
-    input: FactorSignInBase & { candidate: Uint8Array },
+    input: FactorSignInBase & { candidate: Uint8Array; canCommit?: () => boolean },
   ) => FactorSignInResult;
 }
 
 class CommitAborted extends Error {
   override name = "CommitAborted";
-  readonly reason: "no-session" | "factor" | "no-pending";
+  readonly reason: "no-session" | "factor" | "no-pending" | "form";
 
-  constructor(reason: "no-session" | "factor" | "no-pending") {
+  constructor(reason: "no-session" | "factor" | "no-pending" | "form") {
     super(`commit aborted: ${reason}`);
     this.reason = reason;
   }
@@ -176,10 +176,15 @@ export function createFactorStore(db: Database): FactorStore {
     },
   );
   const recoverySignIn = db.transaction(
-    (input: FactorSignInBase & { candidate: Uint8Array }): FactorSignInResult => {
+    (
+      input: FactorSignInBase & { candidate: Uint8Array; canCommit?: () => boolean },
+    ): FactorSignInResult => {
       const nextPath = endFactorSession(input);
       const id = matchRecoveryCode(input.candidate, selectUnusedCodes.all(input.userId));
-      if (id === undefined || useCode.run(input.now, id).changes !== 1) {
+      if (id === undefined) throw new CommitAborted("factor");
+      // Check the form only after verification, while the write lock still protects the code.
+      if (input.canCommit?.() === false) throw new CommitAborted("form");
+      if (useCode.run(input.now, id).changes !== 1) {
         throw new CommitAborted("factor");
       }
       insertFull(input.userId, input.newSession, input.now);
@@ -229,5 +234,6 @@ export function createFactorStore(db: Database): FactorStore {
 }
 
 function signInFailure(reason: CommitAborted["reason"]): FactorSignInResult {
+  if (reason === "form") return { ok: false, reason };
   return { ok: false, reason: reason === "no-session" ? "no-session" : "factor" };
 }

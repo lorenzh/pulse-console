@@ -1,15 +1,24 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BodyError, type Logger, readBody } from "@lorenzh/pulse-kit";
-import type { AccountStore, Session, SessionStage, User } from "./account-store.ts";
+import {
+  type AccountStore,
+  type Session,
+  type SessionStage,
+  sessionDigest,
+  type User,
+} from "./account-store.ts";
 import type { AuthThrottle } from "./auth-throttle.ts";
 import type { FetchLike } from "./connection-test.ts";
 import { readCookie, serializeCookie, serializeSessionCookie } from "./cookies.ts";
 import type { FactorStore } from "./factor-store.ts";
+import type { FormTokens } from "./form-tokens.ts";
 import { type FormFields, isFormContentType, MAX_FORM_BYTES, parseForm } from "./forms.ts";
 import type { Metrics } from "./metrics.ts";
-import { messagePage } from "./pages.ts";
+import { alreadySubmittedPage, messagePage } from "./pages.ts";
 import type { CredentialVerifier, HashPassword } from "./passwords.ts";
+import type { ProtectedRoute } from "./protected-route.ts";
 import { expectedOrigin, isCsrfTokenValid, isOriginAllowed } from "./request-guard.ts";
+import type { ConsoleRole } from "./roles.ts";
 import type { ConsoleMode } from "./settings.ts";
 import type { SetupGate } from "./setup-code.ts";
 
@@ -20,6 +29,7 @@ export const NOT_FOUND = "not found\n";
 export interface ConsoleServerDeps {
   metrics: Metrics;
   log: Logger;
+  instanceName: string;
   mode: ConsoleMode;
   publicOrigin: string | undefined;
   /** PULSE_API_URL: the default of the setup form. */
@@ -38,6 +48,8 @@ export interface ConsoleServerDeps {
   verifier: CredentialVerifier;
   fetch: FetchLike;
   schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
+  testRoutes?: ReadonlyMap<string, ProtectedRoute> | undefined;
+  roleOf?: ((user: User) => ConsoleRole) | undefined;
 }
 
 export type State = {
@@ -45,6 +57,8 @@ export type State = {
   setupThrottle: AuthThrottle<"client">;
   signInThrottle: AuthThrottle<"account" | "client">;
   factorThrottle: AuthThrottle<"account" | "client">;
+  formTokens: FormTokens;
+  protectedRoutes: ReadonlyMap<string, ProtectedRoute>;
 };
 
 /** A live session of this request with its effective stage. */
@@ -139,10 +153,9 @@ export function sendRefused(ctx: Ctx): void {
  * The POST order after the gate: Origin, content type, body size, repeated fields and the CSRF
  * token. It answers the first failure and returns undefined then.
  */
-export async function readPostForm<K extends string>(
+export async function readFormFields<K extends string>(
   ctx: Ctx,
   known: readonly K[],
-  expectedCsrf: string | undefined = cookieOf(ctx, "csrf"),
 ): Promise<FormFields<K | "csrf"> | undefined> {
   const { req, deps } = ctx;
   const origin = expectedOrigin(deps.mode, req.headers.host, deps.publicOrigin);
@@ -161,17 +174,57 @@ export async function readPostForm<K extends string>(
     sendText(ctx, 400, "repeated form field\n");
     return undefined;
   }
-  if (!isCsrfTokenValid(parsed.fields.csrf, expectedCsrf)) {
+  return parsed.fields;
+}
+
+export async function readPostForm<K extends string>(
+  ctx: Ctx,
+  known: readonly K[],
+  expectedCsrf: string | undefined = cookieOf(ctx, "csrf"),
+): Promise<FormFields<K | "csrf"> | undefined> {
+  const fields = await readFormFields(ctx, known);
+  if (fields === undefined) return undefined;
+  if (!isCsrfTokenValid(fields.csrf, expectedCsrf)) {
     sendRefused(ctx);
     return undefined;
   }
-  return parsed.fields;
+  return fields;
 }
 
 /** The current session that the gate admitted; a handler behind the gate always has one. */
 export function currentOf(ctx: Ctx): Current {
   if (ctx.current === undefined) throw new GateMissingError();
   return ctx.current;
+}
+
+export type SessionForm = { csrf: string; formToken: string; signOutToken: string };
+
+/** Form tokens for a session page and its separate sign-out form. HEAD stores no token. */
+export function sessionForm(ctx: Ctx): SessionForm {
+  const current = currentOf(ctx);
+  const binding = `s:${sessionDigest(current.id)}`;
+  const issue = (path: string): string =>
+    ctx.req.method === "HEAD" ? "" : ctx.state.formTokens.issue(binding, path);
+  return {
+    csrf: current.session.csrfToken,
+    formToken: issue(ctx.path),
+    signOutToken: issue("/sign-out"),
+  };
+}
+
+/** Use a session form token immediately before its mutation; never count it as a guess. */
+export function acceptSessionForm(
+  ctx: Ctx,
+  token: string | undefined,
+  expiredPage: () => string,
+): boolean {
+  const binding = `s:${sessionDigest(currentOf(ctx).id)}`;
+  const result = ctx.state.formTokens.consume(token ?? "", binding, ctx.path);
+  if (result === "accepted") return true;
+  ctx.deps.log.info("form token refused", { reason: result, path: ctx.path });
+  const page = result === "replayed" ? alreadySubmittedPage(ctx.path) : expiredPage();
+  sendHtml(ctx, 409, page);
+  return false;
 }
 
 export class GateMissingError extends Error {

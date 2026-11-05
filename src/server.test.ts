@@ -10,7 +10,7 @@ import { createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
 import { createFactorStore } from "./factor-store.ts";
 import { createMetrics, type Metrics } from "./metrics.ts";
-import { createConsoleServer, listen } from "./server.ts";
+import { createConsoleServer, listen, TestRouteError } from "./server.ts";
 import { createSetupGate } from "./setup-code.ts";
 
 const TEST_SECRET_KEY = Uint8Array.from(Buffer.from("0123456789abcdef".repeat(4), "hex"));
@@ -50,6 +50,7 @@ function depsFor(metrics: Metrics): Parameters<typeof createConsoleServer>[0] {
   });
   const bytes = (size: number): Uint8Array => new Uint8Array(size).fill(7);
   return {
+    instanceName: "pulse Console",
     metrics,
     log: createLogger({ level: "error", write: () => undefined }),
     mode: "loopback",
@@ -345,6 +346,43 @@ describe("other paths and methods", () => {
   });
 });
 
+describe("/console.js", () => {
+  test("GET serves the busy-button script with the security headers", async () => {
+    const { base } = await start();
+    const res = await fetch(`${base}/console.js`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("content-security-policy")).toBe(
+      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    );
+    expectSecurityHeaders(res);
+    const js = await res.text();
+    for (const part of ["data-busy-label", "aria-busy", "pageshow", "setTimeout"]) {
+      expect(js).toContain(part);
+    }
+    for (const part of ["eval", "innerHTML", "fetch(", "XMLHttpRequest", "localStorage"]) {
+      expect(js).not.toContain(part);
+    }
+  });
+
+  test("HEAD has no body, POST is 405, and GET is counted under its own path", async () => {
+    const { base } = await start();
+    const head = await fetch(`${base}/console.js`, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    expect(await head.text()).toBe("");
+    const post = await fetch(`${base}/console.js`, { method: "POST" });
+    expect(post.status).toBe(405);
+    expect(post.headers.get("allow")).toBe("GET, HEAD");
+    const { base: other } = await start();
+    await fetch(`${other}/console.js`);
+    expect(requestSeries(await metricsText(other))).toEqual([
+      'pulse_console_http_requests_total{path="/console.js",code="200"} 1',
+    ]);
+  });
+});
+
 describe("listen", () => {
   test("an occupied port names both settings and the code only", async () => {
     const blocker = createHttpServer();
@@ -357,5 +395,44 @@ describe("listen", () => {
     expect(err instanceof Error ? err.message : "").toBe(
       `PULSE_CONSOLE_HOST/PULSE_CONSOLE_PORT: cannot listen on 127.0.0.1:${port} (EADDRINUSE)`,
     );
+  });
+});
+
+describe("protected routes without test routes", () => {
+  test("/__test/ paths answer the plain 404 and count as other", async () => {
+    const { base } = await start();
+    const res = await fetch(`${base}/__test/states/empty`, { redirect: "manual" });
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe("not found\n");
+    expectSecurityHeaders(res);
+    expect(requestSeries(await metricsText(base))).toEqual([
+      'pulse_console_http_requests_total{path="other",code="404"} 1',
+    ]);
+  });
+
+  test("a test route key outside /__test/ or on a production path throws", () => {
+    const route = {
+      path: "/x",
+      methods: ["GET"] as const,
+      requiredRole: "viewer" as const,
+      handle: () => Promise.reject(new Error("not used")),
+    };
+    for (const key of ["/x", "/sign-in", "/console.js", "/healthz", "/__testx"]) {
+      const deps = depsFor(createMetrics());
+      const testRoutes = new Map([[key, { ...route, path: key }]]);
+      expect(() => createConsoleServer({ ...deps, testRoutes })).toThrow(TestRouteError);
+    }
+    const mismatched = new Map([["/__test/a", { ...route, path: "/__test/b" }]]);
+    expect(() =>
+      createConsoleServer({ ...depsFor(createMetrics()), testRoutes: mismatched }),
+    ).toThrow("test route /__test/a must be a path under /__test/");
+  });
+
+  test("raw //healthz and /%2e%2e/ without a session keep the plain 404", async () => {
+    const { port } = await start();
+    for (const path of ["//healthz", "/%2e%2e/"]) {
+      const answer = await rawRequest(port, `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1`);
+      expect(answer.startsWith("HTTP/1.1 404")).toBe(true);
+    }
   });
 });

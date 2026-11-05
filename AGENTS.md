@@ -21,6 +21,8 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 | Typecheck                                                     | `bun run typecheck`                             |
 | Lint and format check / apply fixes                           | `bun run lint` / `bun run format`               |
 | Run locally                                                   | `PULSE_API_URL=http://localhost:3000 bun start` |
+| Browser checks (after `bunx playwright install chromium`)     | `bun run check:browser`                         |
+| Fixture console for a manual browser check                    | `bun e2e/run.ts --serve`                        |
 - A change is done when `bun run check` passes; the pre-commit hook runs Biome and ESLint. Never run `git commit --no-verify`, and never weaken `biome.json`, `tsconfig.json`, or CI to pass.
 
 ## Repository boundaries
@@ -101,14 +103,25 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 
 ## This repository
 
-- Pages are server-rendered HTML from template strings in `src/pages.ts`; every value goes
-  through kit `escapeHtml`. The only asset is the stylesheet in `src/styles.ts`, served at
-  `/console.css`. The CSP in `src/server.ts` is `default-src 'none'; script-src 'self';
+- Pages are server-rendered HTML from template strings in `src/pages.ts` (setup, sign-in),
+  `src/shell.ts` (signed-in shell) and `src/states.ts` (shared states), with the helpers of
+  `src/html.ts`; every value goes through kit `escapeHtml`. Only the shell head carries the
+  one script element `<script src="/console.js" defer></script>`. The assets are the stylesheet in `src/styles.ts`, served at
+  `/console.css`, and the one script `CONSOLE_JS` in `src/console-script.ts`, served at
+  `/console.js`. The script holds only the busy button now; later the copy buttons and the
+  preview extend it instead of adding another script. The CSP in `src/server.ts` is `default-src 'none'; script-src 'self';
   style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors
   'none'`: no inline script or style and no external asset. A change that needs more widens the
   CSP in the same change.
 - Every form POST follows the fixed order in `docs/configuration.md` (Origin, content type, body
   size, repeated fields, CSRF before any other check of the form).
+- Every POST form carries a hidden `form_token` directly after `csrf` (`src/form-tokens.ts`);
+  the route uses it up at its commit point, after every other check.
+- The Overview and test shell pages use a `ProtectedRoute` (`src/protected-route.ts`) with a `requiredRole`; the
+  dispatcher in `src/server.ts` checks session, POST form, role and form token before its
+  handler. Account and second-factor routes use the same session-stage gate and shared form-token store through `src/http-context.ts`. Navigation visibility is never authorization. Test-only routes live in
+  `test/fixture-routes.ts` under `/__test/` and reach only a test-created server through
+  `testRoutes`; `main.ts` never sets `testRoutes` or `roleOf`.
 - The server compares the raw request path (`req.url` up to the first `?`) byte for byte. Never
   route on a parsed `URL.pathname`: it turns `//healthz` or `/%2e%2e/` into `/`.
 - The admin token, passwords and the setup code never appear in a log line, an error, `/metrics` or a response (the code's one stdout line excepted).

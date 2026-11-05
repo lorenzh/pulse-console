@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { clientKeyOf, handleOps, type OpsHandlers, StartupError } from "@lorenzh/pulse-kit";
@@ -16,23 +17,28 @@ import {
   isSessionLive,
   type NewSessionOptions,
   SESSION_IDLE_MS,
+  type Session,
   type SessionStage,
+  sessionDigest,
   type User,
 } from "./account-store.ts";
 import { createAuthThrottle } from "./auth-throttle.ts";
 import { NO_TOKEN_TEXT, testConnection } from "./connection-test.ts";
+import { CONSOLE_JS } from "./console-script.ts";
 import { serializeCookie, serializeCookieDeletion } from "./cookies.ts";
+import { createFormTokens, type FormTokenResult } from "./form-tokens.ts";
 import { checkApiUrl, checkEmail, checkName, type FormFields, passwordText } from "./forms.ts";
+import { paragraph } from "./html.ts";
 import {
   type ConsoleServerDeps,
   type Ctx,
   type Current,
   cookieOf,
-  currentOf,
   ensureCsrf,
   NOT_FOUND,
   newToken,
   pushSessionCookie,
+  readFormFields,
   readPostForm,
   redirect,
   type State,
@@ -41,9 +47,12 @@ import {
   sendText,
 } from "./http-context.ts";
 import type { PathLabel } from "./metrics.ts";
+import type { NavId } from "./navigation.ts";
+import { overviewView } from "./overview.ts";
+import { readOverview } from "./overview-read.ts";
 import {
+  alreadySubmittedPage,
   type ConnectionView,
-  landingPage,
   messagePage,
   type OwnerErrors,
   type OwnerValues,
@@ -52,8 +61,18 @@ import {
   signInPage,
 } from "./pages.ts";
 import { isSignInPasswordAcceptable } from "./passwords.ts";
+import type { PageMethod, PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
 import { isLoopbackHost, safeNext } from "./request-guard.ts";
+import { type ConsoleRole, hasRole } from "./roles.ts";
+import { shellPage } from "./shell.ts";
 import { postFactor, sendFactorForm } from "./sign-in-factor.ts";
+import {
+  alreadySubmittedState,
+  forbiddenState,
+  formExpiredNotice,
+  formExpiredResendNotice,
+  notFoundState,
+} from "./states.ts";
 import { CONSOLE_CSS } from "./styles.ts";
 import { isSecondFactorRequired, signInStage } from "./two-factor-policy.ts";
 
@@ -79,12 +98,13 @@ type Access = "public" | "any-session" | "full" | "factor" | "enrol-or-full";
 type Route = { methods: readonly string[]; access: Access; isNewInPhase2?: true };
 
 const OPS_PATHS: readonly string[] = ["/healthz", "/readyz", "/metrics"];
+const TEST_PREFIX = "/__test/";
 const ROUTES: Readonly<Record<string, Route>> = {
-  "/": { methods: ["GET", "HEAD"], access: "full" },
   "/setup": { methods: ["GET", "HEAD", "POST"], access: "public" },
   "/setup/owner": { methods: ["GET", "HEAD", "POST"], access: "public" },
   "/sign-in": { methods: ["GET", "HEAD", "POST"], access: "public" },
   "/sign-out": { methods: ["POST"], access: "any-session" },
+  "/console.js": { methods: ["GET", "HEAD"], access: "public" },
   "/console.css": { methods: ["GET", "HEAD"], access: "public" },
   "/sign-in/factor": { methods: ["GET", "HEAD", "POST"], access: "factor", isNewInPhase2: true },
   "/account/authenticator": {
@@ -106,7 +126,7 @@ const ROUTES: Readonly<Record<string, Route>> = {
   },
 };
 
-const CODE_FIELDS = ["code", "csrf"] as const;
+const CODE_FIELDS = ["code", "csrf", "form_token"] as const;
 const OWNER_FIELDS = [
   "api_url",
   "email",
@@ -115,13 +135,19 @@ const OWNER_FIELDS = [
   "password_confirm",
   "action",
   "csrf",
+  "form_token",
 ] as const;
-const SIGN_OUT_FIELDS = ["csrf"] as const;
-const SIGN_IN_FIELDS = ["email", "password", "next"] as const;
+const SIGN_OUT_FIELDS = ["csrf", "form_token"] as const;
+const SIGN_IN_FIELDS = ["email", "password", "next", "form_token"] as const;
 const SESSION_TOUCH_MS = 60_000;
 const WRONG_CREDENTIALS = "Wrong email or password.";
 const EXPIRED = "Your session has expired.";
 
+/** A test route key outside /__test/ or on a production path. */
+export class TestRouteError extends Error {
+  override name = "TestRouteError";
+}
+type SignedIn = Current;
 /**
  * The raw path before the first "?", not decoded and not normalised, as kit's handleOps reads
  * it. A parsed URL would turn "//healthz" or "/%2e%2e/" into "/".
@@ -153,6 +179,7 @@ function pathLabel(path: string): PathLabel {
     case "/account/recovery-codes":
     case "/account/sessions":
     case "/account/sessions/sign-out-all":
+    case "/console.js":
       return path;
     default:
       return "other";
@@ -214,7 +241,7 @@ function gateTarget(
 /** The access gate: it runs after setup, before Origin and the body. True lets the request on. */
 function passesGate(ctx: Ctx, access: Access): boolean {
   const current = currentSession(ctx);
-  const target = gateTarget(access, current?.stage ?? "anonymous", ctx.path);
+  const target = gateTarget(access, current?.stage ?? "anonymous", safeNext(ctx.req.url));
   if (target !== undefined) {
     redirect(ctx, target);
     return false;
@@ -226,21 +253,99 @@ function passesGate(ctx: Ctx, access: Access): boolean {
   return true;
 }
 
-// Before setup the gate does not run, so "/" keeps its #562 redirect to /setup.
-function sendLanding(ctx: Ctx, isSetUp: boolean): void {
-  if (!isSetUp) {
-    redirect(ctx, "/setup");
-    return;
-  }
-  const signedIn = currentOf(ctx);
-  const apiUrl = ctx.deps.store.instance()?.apiUrl ?? ctx.deps.defaultApiUrl;
-  const page = landingPage({
-    csrf: signedIn.session.csrfToken,
-    name: signedIn.user.name,
-    email: signedIn.user.email,
-    apiOrigin: new URL(apiUrl).origin,
+function signedInOf(ctx: Ctx): SignedIn | undefined {
+  return ctx.current?.stage === "full" ? ctx.current : undefined;
+}
+
+function anonBinding(csrf: string): string {
+  return `a:${createHash("sha256").update(csrf).digest("hex")}`;
+}
+
+function sessionBinding(sessionId: string): string {
+  return `s:${sessionDigest(sessionId)}`;
+}
+
+/** A fresh form token; a HEAD answer sends no body, so it stores nothing. */
+function issueFormToken(ctx: Ctx, binding: string, path: string): string {
+  return ctx.req.method === "HEAD" ? "" : ctx.state.formTokens.issue(binding, path);
+}
+
+function logRefusedToken(ctx: Ctx, reason: Exclude<FormTokenResult, "accepted">): void {
+  ctx.deps.log.info("form token refused", { reason, path: ctx.path });
+}
+
+/**
+ * The form-token step at a commit point. A refused token gets its 409 answer here: "already
+ * submitted" for a replay, else the form again from `expiredPage`.
+ */
+function acceptFormToken(
+  ctx: Ctx,
+  token: string | undefined,
+  binding: string,
+  refusal: { reopenHref: string; expiredPage: () => string },
+): boolean {
+  const result = ctx.state.formTokens.consume(token ?? "", binding, ctx.path);
+  if (result === "accepted") return true;
+  logRefusedToken(ctx, result);
+  const page =
+    result === "replayed" ? alreadySubmittedPage(refusal.reopenHref) : refusal.expiredPage();
+  sendHtml(ctx, 409, page);
+  return false;
+}
+
+function roleOfUser(ctx: Ctx, user: User): ConsoleRole {
+  return ctx.deps.roleOf?.(user) ?? user.role;
+}
+
+type ShellPart = {
+  title: string;
+  body: string;
+  banner?: string | undefined;
+  navId?: NavId | undefined;
+};
+
+function signedInPage(
+  ctx: Ctx,
+  signedIn: { id: string; user: User; csrf: string },
+  page: ShellPart,
+): string {
+  return shellPage({
+    instanceName: ctx.deps.instanceName,
+    user: signedIn.user,
+    role: roleOfUser(ctx, signedIn.user),
+    csrf: signedIn.csrf,
+    signOutToken: issueFormToken(ctx, sessionBinding(signedIn.id), "/sign-out"),
+    current: page.navId,
+    banner: page.banner,
+    title: page.title,
+    body: page.body,
   });
-  sendHtml(ctx, 200, page);
+}
+
+function shellOf(signedIn: SignedIn): { id: string; user: User; csrf: string } {
+  return { id: signedIn.id, user: signedIn.user, csrf: signedIn.session.csrfToken };
+}
+
+/** The Overview at `/`: two pulse-api reads and their summary. */
+function overviewRoute(deps: ConsoleServerDeps): ProtectedRoute {
+  return {
+    path: "/",
+    methods: ["GET"],
+    requiredRole: "viewer",
+    navId: "overview",
+    handle: async () => {
+      const apiUrl = deps.store.instance()?.apiUrl ?? deps.defaultApiUrl;
+      const read = await readOverview(apiUrl, {
+        fetch: deps.fetch,
+        token: deps.adminToken,
+        schedule: deps.schedule,
+        warn: (message, fields) => deps.log.warn(message, fields),
+      });
+      const view = overviewView(new URL(apiUrl).origin, read);
+      const banner = view.banner === "" ? undefined : view.banner;
+      return { kind: "page", status: 200, title: "Overview", body: view.body, banner };
+    },
+  };
 }
 
 function hasGrant(ctx: Ctx): boolean {
@@ -256,13 +361,15 @@ function missingTokenView(ctx: Ctx): ConnectionView | undefined {
   return ctx.deps.adminToken === undefined ? { isOk: false, text: NO_TOKEN_TEXT } : undefined;
 }
 
+/** The CSRF token of a pre-session form and a fresh form token bound to it. */
+function anonForm(ctx: Ctx, csrf: string): { csrf: string; formToken: string } {
+  return { csrf, formToken: issueFormToken(ctx, anonBinding(csrf), ctx.path) };
+}
+
 function handleGet(ctx: Ctx, isSetUp: boolean): void {
   switch (ctx.path) {
-    case "/":
-      sendLanding(ctx, isSetUp);
-      return;
     case "/setup":
-      sendHtml(ctx, 200, setupCodePage({ csrf: ensureCsrf(ctx) }));
+      sendHtml(ctx, 200, setupCodePage(anonForm(ctx, ensureCsrf(ctx))));
       return;
     case "/setup/owner":
       if (!hasGrant(ctx)) redirect(ctx, "/setup");
@@ -271,7 +378,7 @@ function handleGet(ctx: Ctx, isSetUp: boolean): void {
           ctx,
           200,
           setupOwnerPage({
-            csrf: ensureCsrf(ctx),
+            ...anonForm(ctx, ensureCsrf(ctx)),
             values: ownerDefaults(ctx),
             connection: missingTokenView(ctx),
           }),
@@ -279,6 +386,9 @@ function handleGet(ctx: Ctx, isSetUp: boolean): void {
       return;
     case "/sign-in":
       sendSignInForm(ctx, isSetUp);
+      return;
+    case "/console.js":
+      send(ctx, 200, "text/javascript; charset=utf-8", CONSOLE_JS);
       return;
     case "/sign-in/factor":
       sendFactorForm(ctx);
@@ -324,7 +434,7 @@ function sendSignInForm(ctx: Ctx, isSetUp: boolean): void {
   }
   const notice = signInNotice(ctx);
   const next = safeNext(ctx.query.get("next") ?? undefined);
-  sendHtml(ctx, 200, signInPage({ csrf: ensureCsrf(ctx), next, notice }));
+  sendHtml(ctx, 200, signInPage({ ...anonForm(ctx, ensureCsrf(ctx)), next, notice }));
 }
 
 function signInNotice(ctx: Ctx): string | undefined {
@@ -349,9 +459,10 @@ async function postSetupCode(ctx: Ctx): Promise<void> {
     return;
   }
   const csrf = csrfOf(fields);
+  const codePage = (error: string): string => setupCodePage({ ...anonForm(ctx, csrf), error });
   const check = gate.checkCode(fields.code ?? "");
   if (check === "empty") {
-    sendHtml(ctx, 422, setupCodePage({ csrf, error: "Enter the setup code." }));
+    sendHtml(ctx, 422, codePage("Enter the setup code."));
     return;
   }
   const client = clientKeyOf(ctx.req.socket.remoteAddress);
@@ -359,7 +470,7 @@ async function postSetupCode(ctx: Ctx): Promise<void> {
   if (!admission.isAdmitted) {
     ctx.deps.log.warn("setup code refused", { client, reason: "throttled" });
     ctx.deps.metrics.recordAuthAttempt("setup-code", "throttled");
-    const page = setupCodePage({ csrf, error: "Too many attempts. Try again later." });
+    const page = codePage("Too many attempts. Try again later.");
     sendHtml(ctx, 429, page, { "retry-after": String(admission.retryAfterSeconds) });
     return;
   }
@@ -367,7 +478,12 @@ async function postSetupCode(ctx: Ctx): Promise<void> {
     admission.attempt.fail();
     ctx.deps.log.warn("setup code refused", { client, reason: "credentials" });
     ctx.deps.metrics.recordAuthAttempt("setup-code", "failure");
-    sendHtml(ctx, 401, setupCodePage({ csrf, error: "Wrong setup code." }));
+    sendHtml(ctx, 401, codePage("Wrong setup code."));
+    return;
+  }
+  const refusal = { reopenHref: "/setup", expiredPage: () => codePage(formExpiredResendNotice) };
+  if (!acceptFormToken(ctx, fields.form_token, anonBinding(csrf), refusal)) {
+    admission.attempt.release();
     return;
   }
   admission.attempt.succeed();
@@ -424,12 +540,14 @@ async function postSetupOwner(ctx: Ctx): Promise<void> {
   const isComplete = action === "complete";
   const { owner, errors } = validateOwner(fields);
   const values = keptValues(fields);
+  const ownerPage = (view: OwnerView): string =>
+    setupOwnerPage({ ...anonForm(ctx, csrf), values, ...view });
   if (action !== "test" && !isComplete) {
-    sendHtml(ctx, 422, setupOwnerPage({ csrf, values, errors, message: "Choose an action." }));
+    sendHtml(ctx, 422, ownerPage({ errors, message: "Choose an action." }));
     return;
   }
   if (Object.keys(errors).length > 0) {
-    sendHtml(ctx, 422, setupOwnerPage({ csrf, values, errors }));
+    sendHtml(ctx, 422, ownerPage({ errors }));
     return;
   }
   const { fetch, adminToken: token, schedule } = ctx.deps;
@@ -439,7 +557,7 @@ async function postSetupOwner(ctx: Ctx): Promise<void> {
   );
   if (!result.isOk) {
     const connection: ConnectionView = { isOk: false, text: result.text };
-    sendHtml(ctx, 502, setupOwnerPage({ csrf, values, connection }));
+    sendHtml(ctx, 502, ownerPage({ connection }));
     return;
   }
   const connection: ConnectionView = {
@@ -448,17 +566,28 @@ async function postSetupOwner(ctx: Ctx): Promise<void> {
     isScopeChecked: result.adminScope === "confirmed",
   };
   if (!isComplete) {
-    sendHtml(ctx, 200, setupOwnerPage({ csrf, values, connection }));
+    sendHtml(ctx, 200, ownerPage({ connection }));
     return;
   }
-  await commitSetup(ctx, owner, result.checkCount, { csrf, values, connection });
+  const refusal = {
+    reopenHref: "/setup/owner",
+    expiredPage: () => ownerPage({ connection, message: formExpiredNotice }),
+  };
+  if (!acceptFormToken(ctx, fields.form_token, anonBinding(csrf), refusal)) return;
+  await commitSetup(ctx, owner, result.checkCount, (message) => ownerPage({ connection, message }));
 }
+
+type OwnerView = {
+  errors?: OwnerErrors;
+  connection?: ConnectionView;
+  message?: string;
+};
 
 async function commitSetup(
   ctx: Ctx,
   owner: ValidOwner,
   checks: number,
-  view: { csrf: string; values: OwnerValues; connection: ConnectionView },
+  pageWith: (message: string) => string,
 ): Promise<void> {
   const { deps } = ctx;
   let outcome: ReturnType<AccountStore["completeSetup"]>;
@@ -473,7 +602,7 @@ async function commitSetup(
     deps.log.error("setup could not be saved", {
       error: err instanceof Error ? err.name : "unknown",
     });
-    sendHtml(ctx, 500, setupOwnerPage({ ...view, message: "Setup could not be saved." }));
+    sendHtml(ctx, 500, pageWith("Setup could not be saved."));
     return;
   }
   if (!outcome.ok) {
@@ -496,13 +625,44 @@ async function commitSetup(
 async function postSignOut(ctx: Ctx): Promise<void> {
   const live = ctx.current;
   if (live === undefined) {
-    redirect(ctx, "/sign-in");
+    await postSignOutWithoutSession(ctx);
     return;
   }
-  const fields = await readPostForm(ctx, SIGN_OUT_FIELDS, live.session.csrfToken);
+  const csrf = live.session.csrfToken;
+  const fields = await readPostForm(ctx, SIGN_OUT_FIELDS, csrf);
   if (fields === undefined) return;
+  const refusal = {
+    reopenHref: "/",
+    expiredPage: () => signOutExpiredPage(ctx, { id: live.id, session: live.session }),
+  };
+  if (!acceptFormToken(ctx, fields.form_token, sessionBinding(live.id), refusal)) return;
   ctx.deps.store.deleteSession(live.id);
   ctx.cookies.push(serializeCookieDeletion("session", ctx.deps.mode));
+  redirect(ctx, "/sign-in");
+}
+
+function signOutExpiredPage(ctx: Ctx, live: { id: string; session: Session }): string {
+  const user = ctx.deps.store.userById(live.session.userId);
+  if (user === undefined) return messagePage("Sign out", formExpiredResendNotice);
+  const signedIn = { id: live.id, user, csrf: live.session.csrfToken };
+  return signedInPage(ctx, signedIn, {
+    title: "Sign out",
+    body: paragraph(formExpiredResendNotice, ' role="alert"'),
+  });
+}
+
+/**
+ * No session token exists to compare, so there is no CSRF step. A token already used on
+ * /sign-out is a replay; anything else changes nothing and goes to sign-in as before.
+ */
+async function postSignOutWithoutSession(ctx: Ctx): Promise<void> {
+  const fields = await readFormFields(ctx, SIGN_OUT_FIELDS);
+  if (fields === undefined) return;
+  if (ctx.state.formTokens.wasUsed(fields.form_token ?? "", "/sign-out")) {
+    logRefusedToken(ctx, "replayed");
+    sendHtml(ctx, 409, alreadySubmittedPage("/sign-in"));
+    return;
+  }
   redirect(ctx, "/sign-in");
 }
 
@@ -511,12 +671,13 @@ async function postSignIn(ctx: Ctx): Promise<void> {
   if (fields === undefined) return;
   const csrf = csrfOf(fields);
   const next = safeNext(fields.next);
+  const formPage = (error: string): string => signInPage({ ...anonForm(ctx, csrf), next, error });
   // Normalized as in setup: trimmed and lowercased.
   const email = (fields.email ?? "").trim().toLowerCase();
   const password = fields.password ?? "";
   if (email === "" || !isSignInPasswordAcceptable(password)) {
     const error = "Enter your email and your password (at most 128 characters).";
-    sendHtml(ctx, 422, signInPage({ csrf, next, error }));
+    sendHtml(ctx, 422, formPage(error));
     return;
   }
   const { deps } = ctx;
@@ -525,7 +686,7 @@ async function postSignIn(ctx: Ctx): Promise<void> {
   if (!admission.isAdmitted) {
     deps.log.warn("sign-in failed", { client, reason: "throttled" });
     deps.metrics.recordAuthAttempt("sign-in", "throttled");
-    const page = signInPage({ csrf, next, error: "Too many attempts. Try again later." });
+    const page = formPage("Too many attempts. Try again later.");
     sendHtml(ctx, 429, page, { "retry-after": String(admission.retryAfterSeconds) });
     return;
   }
@@ -542,7 +703,12 @@ async function postSignIn(ctx: Ctx): Promise<void> {
     admission.attempt.fail();
     deps.log.warn("sign-in failed", { client, reason: "credentials" });
     deps.metrics.recordAuthAttempt("sign-in", "failure");
-    sendHtml(ctx, 401, signInPage({ csrf, next, error: WRONG_CREDENTIALS }));
+    sendHtml(ctx, 401, formPage(WRONG_CREDENTIALS));
+    return;
+  }
+  const refusal = { reopenHref: "/sign-in", expiredPage: () => formPage(formExpiredResendNotice) };
+  if (!acceptFormToken(ctx, fields.form_token, anonBinding(csrf), refusal)) {
+    admission.attempt.release();
     return;
   }
   const stage = passwordStage(ctx, user);
@@ -635,29 +801,180 @@ function isClosedInPhase(path: string, route: Route, method: string, isSetUp: bo
   return path === "/sign-in" && method === "POST" && !isSetUp;
 }
 
-async function handleApp(ctx: Ctx): Promise<void> {
-  const method = ctx.req.method ?? "GET";
-  const route = ROUTES[ctx.path];
-  if (route === undefined) {
+function allowedMethods(route: ProtectedRoute): string[] {
+  const methods: string[] = [...route.methods];
+  if (methods.includes("GET") && !methods.includes("HEAD")) methods.splice(1, 0, "HEAD");
+  return methods;
+}
+
+function isHostRefused(ctx: Ctx): boolean {
+  return ctx.deps.mode === "loopback" && !isLoopbackHost(ctx.req.headers.host);
+}
+
+function sendShell(ctx: Ctx, signedIn: SignedIn, status: number, page: ShellPart): void {
+  sendHtml(ctx, status, signedInPage(ctx, shellOf(signedIn), page));
+}
+
+function sendPageResult(ctx: Ctx, signedIn: SignedIn, route: ProtectedRoute, result: PageResult) {
+  if (result.kind === "redirect") {
+    redirect(ctx, result.location);
+    return;
+  }
+  sendShell(ctx, signedIn, result.status, { ...result, navId: route.navId });
+}
+
+function pageRequest(
+  ctx: Ctx,
+  signedIn: SignedIn,
+  method: PageMethod,
+  fields: PageRequest["fields"],
+): PageRequest {
+  return {
+    method,
+    path: ctx.path,
+    user: signedIn.user,
+    role: roleOfUser(ctx, signedIn.user),
+    csrf: signedIn.session.csrfToken,
+    fields,
+    query: ctx.query,
+    issueFormToken: (actionPath) => issueFormToken(ctx, sessionBinding(signedIn.id), actionPath),
+  };
+}
+
+/**
+ * Step 7 of the protected order. A refused token answers 409 here: "already submitted" for a
+ * replay, else the route's form again with the expired notice.
+ */
+function isProtectedTokenAccepted(
+  ctx: Ctx,
+  signedIn: SignedIn,
+  route: ProtectedRoute,
+  request: PageRequest,
+): boolean {
+  const token = request.fields.form_token ?? "";
+  const result = ctx.state.formTokens.consume(token, sessionBinding(signedIn.id), ctx.path);
+  if (result === "accepted") return true;
+  logRefusedToken(ctx, result);
+  if (result === "replayed") {
+    const reopenHref = route.methods.includes("GET") ? ctx.path : "/";
+    sendShell(ctx, signedIn, 409, {
+      title: "Already submitted",
+      body: alreadySubmittedState({ reopenHref }),
+    });
+    return false;
+  }
+  const form = route.renderForm?.(request, formExpiredNotice) ?? {
+    kind: "page",
+    status: 409,
+    title: "Form expired",
+    body: paragraph(formExpiredNotice, ' role="alert"'),
+  };
+  sendPageResult(ctx, signedIn, route, form.kind === "page" ? { ...form, status: 409 } : form);
+  return false;
+}
+
+/**
+ * Steps 2 to 8 of the protected order (Required behavior 1): phase, Host, session, the POST
+ * form with CSRF, role, form token, handler.
+ */
+async function handleProtected(
+  ctx: Ctx,
+  route: ProtectedRoute,
+  method: PageMethod,
+  isSetUp: boolean,
+): Promise<void> {
+  if (!isSetUp) {
+    if (method === "POST") sendText(ctx, 404, NOT_FOUND);
+    else redirect(ctx, "/setup");
+    return;
+  }
+  if (isHostRefused(ctx)) {
+    sendText(ctx, 421, MISDIRECTED);
+    return;
+  }
+  if (!passesGate(ctx, "full")) return;
+  const signedIn = signedInOf(ctx);
+  if (signedIn === undefined) return;
+  let fields: PageRequest["fields"] = {};
+  if (method === "POST") {
+    const known = [...(route.knownFields ?? []), "form_token"];
+    const read = await readPostForm(ctx, known, signedIn.session.csrfToken);
+    if (read === undefined) return;
+    fields = read;
+  }
+  const role = roleOfUser(ctx, signedIn.user);
+  if (!hasRole(role, route.requiredRole)) {
+    sendShell(ctx, signedIn, 403, {
+      title: "Access denied",
+      body: forbiddenState({ requiredRole: route.requiredRole, role }),
+    });
+    return;
+  }
+  const request = pageRequest(ctx, signedIn, method, fields);
+  if (method === "POST" && !isProtectedTokenAccepted(ctx, signedIn, route, request)) return;
+  sendPageResult(ctx, signedIn, route, await route.handle(request));
+}
+
+/** Decision 9: the shell 404 for a signed-in GET or HEAD, else the plain text 404. */
+function sendNotFound(ctx: Ctx, method: string, isSetUp: boolean): void {
+  const isPage = (method === "GET" || method === "HEAD") && isSetUp && !isHostRefused(ctx);
+  const signedIn = isPage ? signedInOf(ctx) : undefined;
+  if (signedIn === undefined) {
     sendText(ctx, 404, NOT_FOUND);
     return;
   }
-  if (!route.methods.includes(method)) {
-    ctx.res.writeHead(405, { allow: route.methods.join(", "), "content-length": 0 }).end();
+  touch(ctx, signedIn);
+  sendShell(ctx, signedIn, 404, { title: "Page not found", body: notFoundState() });
+}
+
+function isPageMethod(method: string): method is PageMethod {
+  return method === "GET" || method === "HEAD" || method === "POST";
+}
+
+async function handleApp(ctx: Ctx): Promise<void> {
+  const method = ctx.req.method ?? "GET";
+  const isSetUp = ctx.deps.store.instance() !== undefined;
+  const protectedRoute = ctx.state.protectedRoutes.get(ctx.path);
+  const route = ROUTES[ctx.path];
+  const allowed = protectedRoute === undefined ? route?.methods : allowedMethods(protectedRoute);
+  if (allowed === undefined) {
+    ctx.current = currentSession(ctx);
+    sendNotFound(ctx, method, isSetUp);
     return;
   }
-  const isSetUp = ctx.deps.store.instance() !== undefined;
+  if (!allowed.includes(method)) {
+    ctx.res.writeHead(405, { allow: allowed.join(", "), "content-length": 0 }).end();
+    return;
+  }
+  if (protectedRoute !== undefined && isPageMethod(method)) {
+    await handleProtected(ctx, protectedRoute, method, isSetUp);
+    return;
+  }
+  if (route === undefined) return;
   if (isClosedInPhase(ctx.path, route, method, isSetUp)) {
     sendText(ctx, 404, NOT_FOUND);
     return;
   }
-  if (ctx.deps.mode === "loopback" && !isLoopbackHost(ctx.req.headers.host)) {
+  if (isHostRefused(ctx)) {
     sendText(ctx, 421, MISDIRECTED);
     return;
   }
   if (isSetUp && !passesGate(ctx, route.access)) return;
   if (method === "POST") await handlePost(ctx);
   else handleGet(ctx, isSetUp);
+}
+
+/** The protected routes: `/` and the test routes, whose keys must be under /__test/. */
+function protectedRoutesOf(deps: ConsoleServerDeps): Map<string, ProtectedRoute> {
+  const routes = new Map<string, ProtectedRoute>([["/", overviewRoute(deps)]]);
+  for (const [key, route] of deps.testRoutes ?? []) {
+    const isProduction = key in ROUTES || OPS_PATHS.includes(key);
+    if (!key.startsWith(TEST_PREFIX) || isProduction || route.path !== key) {
+      throw new TestRouteError(`test route ${key} must be a path under ${TEST_PREFIX}`);
+    }
+    routes.set(key, route);
+  }
+  return routes;
 }
 
 function handleOpsRoute(req: IncomingMessage, res: ServerResponse, ops: OpsHandlers): void {
@@ -690,6 +1007,8 @@ export function createConsoleServer(deps: ConsoleServerDeps): Server {
       tables: ["account", "client"],
       clearsOnSuccess: ["account"],
     }),
+    formTokens: createFormTokens({ now: deps.now, randomBytes: deps.randomBytes }),
+    protectedRoutes: protectedRoutesOf(deps),
   };
   return createServer((req, res) => {
     const path = rawPath(req);

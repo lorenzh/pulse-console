@@ -17,6 +17,7 @@ export type PathLabel =
   | "/account/recovery-codes"
   | "/account/sessions"
   | "/account/sessions/sign-out-all"
+  | "/console.js"
   | "other";
 
 export type AuthKind =

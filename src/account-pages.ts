@@ -1,5 +1,7 @@
 import { escapeHtml } from "@lorenzh/pulse-kit";
-import { csrfField, field, layout, paragraph } from "./pages.ts";
+import { csrfField, field, formTokenField, plainDocument as layout, paragraph } from "./html.ts";
+
+import type { SessionForm } from "./http-context.ts";
 
 export const DECRYPT_FAILED_TEXT =
   "The authenticator secret cannot be read. Sign in with a recovery code.";
@@ -18,11 +20,12 @@ export function utcMinute(ms: number): string {
 }
 
 /** The second-factor step of sign-in: TOTP, a recovery code, or cancel. */
-export function factorPage(view: { csrf: string; error?: string | undefined }): string {
+export function factorPage(view: SessionForm & { error?: string | undefined }): string {
   return layout(
     "Two-factor sign-in",
     `${alert(view.error)}<form method="post" action="/sign-in/factor">
 ${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
 <label for="field-code">Code from your authenticator app
 <input id="field-code" name="code" type="text" autocomplete="one-time-code" inputmode="numeric" maxlength="64">
 </label>
@@ -30,6 +33,7 @@ ${csrfField(view.csrf)}
 </form>
 <form method="post" action="/sign-in/factor">
 ${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
 <label for="field-recovery_code">Recovery code
 <input id="field-recovery_code" name="recovery_code" type="text" autocomplete="off" maxlength="64">
 </label>
@@ -37,6 +41,7 @@ ${csrfField(view.csrf)}
 </form>
 <form method="post" action="/sign-out">
 ${csrfField(view.csrf)}
+${formTokenField(view.signOutToken)}
 <div class="actions"><button type="submit" class="secondary">Cancel</button></div>
 </form>`,
   );
@@ -51,41 +56,45 @@ export function otpauthUri(email: string, key: string): string {
   return `otpauth://totp/pulse%20Console:${encodeURIComponent(email)}?secret=${key}&issuer=pulse%20Console&algorithm=SHA1&digits=6&period=30`;
 }
 
-function newForm(csrf: string, isReplace: boolean): string {
+function newForm(view: SessionForm, isReplace: boolean): string {
   const password = isReplace
     ? `${field({ label: "Current password", name: "password", type: "password", autocomplete: "current-password" })}\n`
     : "";
   const label = isReplace ? "Replace authenticator" : "Create a setup key";
   return `<form method="post" action="/account/authenticator">
-${csrfField(csrf)}
+${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
 <input type="hidden" name="action" value="new">
 ${password}<div class="actions"><button type="submit">${label}</button></div>
 </form>`;
 }
 
-export type AuthenticatorView =
-  | { kind: "pending"; csrf: string; email: string; key: string; error?: string | undefined }
-  | { kind: "retry"; csrf: string; error?: string | undefined }
-  | { kind: "new"; csrf: string; error?: string | undefined }
-  | { kind: "replace"; csrf: string; confirmedAt: number; error?: string | undefined };
+export type AuthenticatorView = SessionForm &
+  (
+    | { kind: "pending"; csrf: string; email: string; key: string; error?: string | undefined }
+    | { kind: "retry"; csrf: string; error?: string | undefined }
+    | { kind: "new"; csrf: string; error?: string | undefined }
+    | { kind: "replace"; csrf: string; confirmedAt: number; error?: string | undefined }
+  );
 
-function pendingBody(view: { csrf: string; email: string; key: string }): string {
+function pendingBody(view: SessionForm & { email: string; key: string }): string {
   return `<p>Add this setup key to your authenticator app, then enter the code it shows.</p>
 <p>Setup key: <code class="secret" id="totp-secret">${escapeHtml(groupKey(view.key))}</code></p>
 <p>Type: time-based (TOTP), SHA-1, 6 digits, 30 seconds.</p>
 <p>URI: <code class="secret" id="totp-uri">${escapeHtml(otpauthUri(view.email, view.key))}</code></p>
-${confirmForm(view.csrf)}`;
+${confirmForm(view)}`;
 }
 
 // Only GET shows the setup key; a failed confirmation links back to it.
-function retryBody(csrf: string): string {
+function retryBody(view: SessionForm): string {
   return `<p>Enter the current code from your authenticator app. <a href="/account/authenticator">Show the setup key again</a>.</p>
-${confirmForm(csrf)}`;
+${confirmForm(view)}`;
 }
 
-function confirmForm(csrf: string): string {
+function confirmForm(view: SessionForm): string {
   return `<form method="post" action="/account/authenticator">
-${csrfField(csrf)}
+${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
 <input type="hidden" name="action" value="confirm">
 <label for="field-code">Code from your authenticator app
 <input id="field-code" name="code" type="text" autocomplete="one-time-code" inputmode="numeric" maxlength="64" required>
@@ -99,13 +108,13 @@ function authenticatorBody(view: AuthenticatorView): string {
     case "pending":
       return pendingBody(view);
     case "retry":
-      return retryBody(view.csrf);
+      return retryBody(view);
     case "new":
-      return `<p>Your account needs an authenticator app. Create a setup key to start.</p>\n${newForm(view.csrf, false)}`;
+      return `<p>Your account needs an authenticator app. Create a setup key to start.</p>\n${newForm(view, false)}`;
     case "replace":
       return `<p>Authenticator added ${escapeHtml(utcMinute(view.confirmedAt))}.</p>
 <p>Replacing it ends every other session and makes new recovery codes.</p>
-${newForm(view.csrf, true)}`;
+${newForm(view, true)}`;
     default: {
       const never: never = view;
       return never;
@@ -115,12 +124,20 @@ ${newForm(view.csrf, true)}`;
 
 /** `/account/authenticator`: the setup key, a new-key form or the replace form. */
 export function authenticatorPage(view: AuthenticatorView): string {
-  return layout("Authenticator app", `${alert(view.error)}${authenticatorBody(view)}`);
+  return layout(
+    "Authenticator app",
+    `${alert(view.error)}${authenticatorBody(view)}
+<form method="post" action="/sign-out">
+${csrfField(view.csrf)}
+${formTokenField(view.signOutToken)}
+<div class="actions"><button type="submit" class="secondary">Sign out</button></div>
+</form>`,
+  );
 }
 
 /** The 409 page when the pending setup key is gone. */
-export function pendingExpiredPage(csrf: string, isReplace: boolean): string {
-  return layout("Authenticator app", `${alert(PENDING_EXPIRED_TEXT)}${newForm(csrf, isReplace)}`);
+export function pendingExpiredPage(view: SessionForm, isReplace: boolean): string {
+  return layout("Authenticator app", `${alert(PENDING_EXPIRED_TEXT)}${newForm(view, isReplace)}`);
 }
 
 /** The account security overview. */
@@ -142,17 +159,20 @@ export function securityPage(view: { confirmedAt: number | undefined; codesLeft:
 }
 
 /** The password confirmation before a new set of recovery codes. */
-export function newCodesPage(view: {
-  csrf: string;
-  codesLeft: number;
-  error?: string | undefined;
-}): string {
+export function newCodesPage(
+  view: SessionForm & {
+    csrf: string;
+    codesLeft: number;
+    error?: string | undefined;
+  },
+): string {
   return layout(
     "New recovery codes",
     `${alert(view.error)}<p>${escapeHtml(String(view.codesLeft))} of 10 recovery codes left.</p>
 <p>Your current recovery codes stop working.</p>
 <form method="post" action="/account/recovery-codes">
 ${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
 ${field({ label: "Current password", name: "password", type: "password", autocomplete: "current-password" })}
 <div class="actions"><button type="submit">Create new recovery codes</button></div>
 </form>`,
@@ -166,11 +186,13 @@ export interface SessionRow {
 }
 
 /** The live `full` sessions of the user; it never holds a session id or another CSRF token. */
-export function sessionsPage(view: {
-  csrf: string;
-  rows: readonly SessionRow[];
-  notice?: string | undefined;
-}): string {
+export function sessionsPage(
+  view: SessionForm & {
+    csrf: string;
+    rows: readonly SessionRow[];
+    notice?: string | undefined;
+  },
+): string {
   const rows = view.rows
     .map(
       (row) =>
@@ -188,18 +210,20 @@ ${rows}
 <p><a href="/account/sessions/sign-out-all">Sign out all other sessions</a></p>
 <form method="post" action="/sign-out">
 ${csrfField(view.csrf)}
+${formTokenField(view.signOutToken)}
 <div class="actions"><button type="submit" class="secondary">Sign out</button></div>
 </form>`,
   );
 }
 
 /** The confirmation of sign out all: only the CSRF field and the button. */
-export function signOutAllPage(csrf: string): string {
+export function signOutAllPage(view: SessionForm, error?: string): string {
   return layout(
     "Sign out all other sessions",
-    `<p>Sign out all other sessions? This browser stays signed in.</p>
+    `${alert(error)}<p>Sign out all other sessions? This browser stays signed in.</p>
 <form method="post" action="/account/sessions/sign-out-all">
-${csrfField(csrf)}
+${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
 <div class="actions"><button type="submit">Sign out all other sessions</button></div>
 </form>`,
   );
