@@ -15,7 +15,9 @@ const view: ShellView = {
 test("renders the instance, account, role and sign-out form", () => {
   const html = shellPage(view);
   expect(html).toContain("pulse Console");
-  expect(html).toContain("Signed in as Owner &lt;Sentinel&gt; (o@example.com)");
+  expect(html).toContain(
+    'Signed in as Owner &lt;Sentinel&gt; <span class="account-email">(o@example.com)</span>',
+  );
   expect(html).toContain("Role: Admin");
   expect(html).toContain('<div class="sign-out">\n<form method="post" action="/sign-out">');
   expect(html).toContain(

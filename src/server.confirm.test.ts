@@ -210,7 +210,9 @@ describe("target changes", () => {
     target.current = undefined;
     const get = await getPage(c, TYPED_PATH);
     expect(get.status).toBe(404);
-    expect(get.body).toContain("<h2>Page not found</h2>");
+    expect(get.body).toContain("<h1>Page not found</h1>");
+    expect(get.body).not.toContain("<h2>Page not found</h2>");
+    expect(get.body).toContain("There is no page at this address.");
     const post = await postForm(c, TYPED_PATH, {
       csrf: SESSION_CSRF,
       form_token: token,
@@ -218,7 +220,9 @@ describe("target changes", () => {
       confirm_name: "Checkout API",
     });
     expect(post.status).toBe(404);
-    expect(post.body).toContain("<h2>Page not found</h2>");
+    expect(post.body).toContain("<h1>Page not found</h1>");
+    expect(post.body).not.toContain("<h2>Page not found</h2>");
+    expect(post.body).toContain("There is no page at this address.");
     expect(recorder.actions).toHaveLength(0);
   });
 });

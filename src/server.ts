@@ -50,6 +50,7 @@ import {
   readFormFields,
   readPostForm,
   redirect,
+  roleOfUser,
   type State,
   send,
   sendHtml,
@@ -74,7 +75,7 @@ import { isSignInPasswordAcceptable } from "./passwords.ts";
 import { routeRole } from "./permissions.ts";
 import type { PageMethod, PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
 import { isLoopbackHost, safeNext } from "./request-guard.ts";
-import { type ConsoleRole, hasRole } from "./roles.ts";
+import { hasRole } from "./roles.ts";
 import { shellPage } from "./shell.ts";
 import { postFactor, sendFactorForm } from "./sign-in-factor.ts";
 import {
@@ -323,10 +324,6 @@ function acceptFormToken(
     result === "replayed" ? alreadySubmittedPage(refusal.reopenHref) : refusal.expiredPage();
   sendHtml(ctx, 409, page);
   return false;
-}
-
-function roleOfUser(ctx: Ctx, user: User): ConsoleRole {
-  return ctx.deps.roleOf?.(user) ?? user.role;
 }
 
 type ShellPart = {

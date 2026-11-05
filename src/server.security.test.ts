@@ -598,7 +598,13 @@ describe("signed-in unknown paths and the Overview", () => {
     const c = await signedIn();
     const res = await getPage(c, "/no-such-page");
     expect(res.status).toBe(404);
-    expect(res.body).toContain("<h2>Page not found</h2>");
+    expect(res.body.split("Page not found")).toHaveLength(3);
+    expect(res.body).toContain("<title>Page not found");
+    expect(res.body).toContain("<h1>Page not found</h1>");
+    expect(res.body).not.toContain("<h2>Page not found</h2>");
+    expect(res.body).toContain(
+      "<p>There is no page at this address. Check the address, or go to the overview.</p>",
+    );
     expect(res.body).toContain('<a href="/">Go to the overview</a>');
     expectShell(res);
     const head = await fetch(`${c.base}/no-such-page`, {
@@ -624,7 +630,10 @@ describe("signed-in unknown paths and the Overview", () => {
     const res = await getPage(c, "/");
     expect(res.status).toBe(200);
     expectShell(res);
-    expect(res.body).toContain("pulse-api cannot be reached at http://127.0.0.1:9.");
+    expect(res.body).toContain("<p>Kind: connection refused</p>");
+    expect(res.body).toContain(
+      "The connection to http://127.0.0.1:9 was refused. Check that pulse-api is running at this address.",
+    );
   });
 
   test("GET / without a session redirects to sign-in with next=/", async () => {

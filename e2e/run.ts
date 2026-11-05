@@ -12,7 +12,6 @@ import {
   type Recorder,
 } from "../test/fixture-routes.ts";
 import {
-  OWNER_EMAIL,
   OWNER_PASSWORD,
   type SignedInConsole,
   startSignedInConsole,
@@ -34,17 +33,26 @@ const ADMIN_TOKEN = `e2e-admin-token-${randomBytes(12).toString("hex")}`;
 const LONG_NAME = `Checkout-API-${"very-long-unbroken-name-".repeat(8)}end`;
 const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 const SERVE_WAIT_MS = 3000;
+const DEMO_EMAIL = "demo-owner@example.com";
+const LINK_COLOUR = "rgb(27, 79, 156)";
 
 type Env = {
+  ownerEmail: string;
   console: SignedInConsole;
   api: ReturnType<typeof startFakeApi>;
   recorder: Recorder;
   target: ConfirmTargetHolder;
   role: { current: ConsoleRole };
   hold: { current: Promise<void> | undefined };
+  /** When set, every pulse-api read goes to this closed loopback origin. */
+  refuse: { current: string | undefined };
+  /** When true, the 5000 ms read deadline fires after a real 100 ms. */
+  fastDeadline: { current: boolean };
 };
 
-async function startEnv(waitMs: number): Promise<Env> {
+const FAST_DEADLINE_MS = 100;
+
+async function startEnv(waitMs: number, ownerEmail = DEMO_EMAIL): Promise<Env> {
   const api = startFakeApi();
   api.reply("/admin/config", jsonReply(emptyConfig));
   api.reply("/checks", jsonReply([checkWithState("web", "up")]));
@@ -56,19 +64,35 @@ async function startEnv(waitMs: number): Promise<Env> {
     if (hold.current !== undefined) return hold.current;
     return waitMs > 0 ? new Promise((resolve) => setTimeout(resolve, waitMs)) : Promise.resolve();
   };
+  const refuse: { current: string | undefined } = { current: undefined };
+  const fastDeadline = { current: false };
   const server = await startSignedInConsole({
     apiUrl: api.url,
+    ownerEmail,
     adminToken: ADMIN_TOKEN,
     testRoutes: createFixtureRoutes({ recorder, target, wait }),
     roleOf: () => role.current,
+    fetch: Object.assign(
+      (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const closed = refuse.current;
+        if (closed === undefined) return fetch(input, init);
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        return fetch(`${closed}${url.pathname}`, init);
+      },
+      { preconnect: fetch.preconnect },
+    ),
+    schedule: (fn, ms) => {
+      const timer = setTimeout(fn, fastDeadline.current && ms === 5000 ? FAST_DEADLINE_MS : ms);
+      return () => clearTimeout(timer);
+    },
   });
-  return { console: server, api, recorder, target, role, hold };
+  return { ownerEmail, console: server, api, recorder, target, role, hold, refuse, fastDeadline };
 }
 
 async function signIn(page: Page, env: Env): Promise<void> {
   const base = env.console.base;
   await page.goto(`${base}/sign-in`);
-  await page.fill('input[name="email"]', OWNER_EMAIL);
+  await page.fill('input[name="email"]', env.ownerEmail);
   await page.fill('input[name="password"]', OWNER_PASSWORD);
   await Promise.all([
     page.waitForURL(`${base}/sign-in/factor`),
@@ -105,6 +129,7 @@ const FIXTURE_PAGES = [
   "/__test/states/busy",
   "/__test/states/already-submitted",
   "/__test/states/api-timeout",
+  "/__test/states/api-refused",
   "/__test/states/api-network",
   "/__test/states/api-status",
   "/__test/states/token-rejected",
@@ -154,6 +179,55 @@ async function assertFits(page: Page, width: number, label: string): Promise<voi
   assert(!result.hidden, `${label}: overflow hidden on the root`);
 }
 
+const ACCOUNT_ROUTES = [
+  "/account/security",
+  "/account/sessions",
+  "/account/sessions/sign-out-all",
+  "/account/recovery-codes",
+];
+
+/** The account page is in the shell, fits, and its Overview link goes to `/`. */
+async function assertAccountShell(page: Page, width: number, label: string): Promise<void> {
+  await assertFits(page, width, `${width}px ${label}`);
+  assert(await page.locator("header.shell-header").isVisible(), `${label}: header`);
+  assert(await page.locator('nav[aria-label="Main"]').isVisible(), `${label}: Main nav`);
+  assert((await page.locator("h1").count()) === 1, `${label}: one h1`);
+}
+
+async function checkAccountShell(env: Env, page: Page, width: number): Promise<void> {
+  const base = env.console.base;
+  const nav = page.locator('nav[aria-label="Main"]');
+  const visits: [string, () => Promise<unknown>][] = ACCOUNT_ROUTES.map((path) => [
+    path,
+    () => page.goto(base + path),
+  ]);
+  visits.push([
+    "wrong-password recovery confirmation",
+    async () => {
+      await page.goto(`${base}/account/recovery-codes`);
+      await page.fill('input[name="password"]', "wrong-password-for-the-check");
+      await page.getByRole("button", { name: "Create new recovery codes" }).click();
+      await page.getByText("Wrong password", { exact: false }).first().waitFor();
+    },
+  ]);
+  for (const [label, visit] of visits) {
+    await visit();
+    await assertAccountShell(page, width, label);
+    await Promise.all([
+      page.waitForURL(`${base}/`),
+      nav.getByRole("link", { name: "Overview", exact: true }).click(),
+    ]);
+  }
+  env.role.current = "viewer";
+  await page.goto(`${base}/account/security`);
+  assert((await nav.getByRole("link", { name: "Overview" }).count()) === 1, "viewer: Overview");
+  assert((await nav.getByRole("link", { name: "Team" }).count()) === 0, "viewer: no Team");
+  env.role.current = "owner";
+  ok(
+    `${width}px: ${ACCOUNT_ROUTES.join(", ")} and the wrong-password recovery confirmation fit, show header and Main nav, have 1 h1 and reach / through Overview; viewer has Overview and no Team`,
+  );
+}
+
 async function checkLayout(env: Env, browser: Browser, width: number, height: number) {
   const violations: string[] = [];
   const context = await browser.newContext({ viewport: { width, height } });
@@ -183,9 +257,220 @@ async function checkLayout(env: Env, browser: Browser, width: number, height: nu
   env.target.current = { name: "Checkout API", revision: "rev-1" };
   await page.goto(`${base}/team`);
   await assertFits(page, width, `${width}px team`);
+  await checkAccountShell(env, page, width);
   assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
   await context.close();
   ok(`${width} x ${height}: sign-in, 4 Overview states, 403, Team and every fixture page fit`);
+}
+
+async function closedOrigin(): Promise<string> {
+  const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  const origin = `http://127.0.0.1:${probe.port}`;
+  await probe.stop(true);
+  return origin;
+}
+
+async function overviewText(page: Page, base: string): Promise<string> {
+  await page.goto(`${base}/`);
+  return (await page.locator("main").textContent()) ?? "";
+}
+
+/** Each failure kind through `/`, `readOverview` and the real `fetchJson`, then recovery. */
+async function checkFailureKinds(env: Env, browser: Browser): Promise<void> {
+  const base = env.console.base;
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const violations: string[] = [];
+  watchCsp(context, violations);
+  const page = await newPage(context, violations);
+  await signIn(page, env);
+  try {
+    env.refuse.current = await closedOrigin();
+    const refused = await overviewText(page, base);
+    assert(refused.includes("Kind: connection refused"), "refused: kind");
+    assert(refused.includes(`The connection to ${env.api.url} was refused.`), "refused: text");
+    assert(!refused.includes("5 seconds"), "refused: no 5 seconds");
+    env.refuse.current = undefined;
+    ok("failure kinds: a bound-then-closed port shows Kind: connection refused without 5 seconds");
+
+    env.api.reply("/checks", { status: 200, isHeld: true });
+    env.fastDeadline.current = true;
+    const timeout = await overviewText(page, base);
+    assert(timeout.includes("Kind: timeout"), "timeout: kind");
+    assert(timeout.includes("pulse-api did not answer within 5 seconds."), "timeout: text");
+    ok("failure kinds: a held /checks with the real 5000 ms deadline shows Kind: timeout");
+
+    env.fastDeadline.current = false;
+    env.api.reply("/checks", { status: 503 });
+    const status = await overviewText(page, base);
+    assert(status.includes("Kind: status 503"), "status: kind");
+    assert(status.includes("pulse-api answered 503."), "status: text");
+    assert(!status.includes("5 seconds"), "status: no 5 seconds");
+    ok("failure kinds: HTTP 503 shows Kind: status 503");
+  } finally {
+    env.refuse.current = undefined;
+    env.fastDeadline.current = false;
+    env.api.reply("/checks", jsonReply([checkWithState("web", "up")]));
+  }
+  const back = await overviewText(page, base);
+  assert(back.includes("Overall state") && !back.includes("Kind:"), "failure kinds: recovery");
+  assert(violations.length === 0, `failure kinds: CSP violations ${violations.join("; ")}`);
+  ok("failure kinds: resetting every switch restores the summary");
+  await context.close();
+}
+
+/** Distinct rounded tops of the client rects of a Range over the `.account-email` text. */
+async function emailTops(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const span = document.querySelector(".account-email");
+    if (span === null) return 0;
+    const range = document.createRange();
+    range.selectNodeContents(span);
+    return new Set(Array.from(range.getClientRects(), (r) => Math.round(r.top))).size;
+  });
+}
+
+async function checkEmail(env: Env, browser: Browser): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  const base = env.console.base;
+  await signIn(page, env);
+  for (const path of ["/", ...ACCOUNT_ROUTES]) {
+    await page.goto(base + path);
+    const tops = await emailTops(page);
+    assert(tops === 1, `${path}: e-mail on ${tops} lines`);
+  }
+  await context.close();
+  ok(`390px: the Range over ${DEMO_EMAIL} has exactly 1 top on / and the four account pages`);
+}
+
+async function checkLongEmail(browser: Browser): Promise<void> {
+  const email = `${"a".repeat(58)}@example.com`;
+  assert(email.length === 70, `long e-mail has ${email.length} characters, expected 70`);
+  const env = await startEnv(0, email);
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  try {
+    const page = await context.newPage();
+    await signIn(page, env);
+    await page.goto(`${env.console.base}/`);
+    const text = await page.locator(".account-email").textContent();
+    assert(text === `(${email})`, `long e-mail span text: ${text}`);
+    await assertFits(page, 390, "long e-mail");
+    ok("390px: a 70-character e-mail is shown in full in parentheses and fits");
+  } finally {
+    await context.close();
+    await env.console.close();
+    env.api.stop();
+  }
+}
+
+async function checkNotFound(env: Env, browser: Browser): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  const base = env.console.base;
+  await signIn(page, env);
+  await page.goto(`${base}/does-not-exist`);
+  const titles = page.getByText("Page not found", { exact: true });
+  assert((await titles.count()) === 1 && (await titles.isVisible()), "404: one visible title");
+  const sentence = "There is no page at this address. Check the address, or go to the overview.";
+  assert(await page.getByText(sentence, { exact: true }).isVisible(), "404: sentence");
+  await Promise.all([
+    page.waitForURL(`${base}/`),
+    page.getByRole("link", { name: "Go to the overview", exact: true }).click(),
+  ]);
+  await context.close();
+  ok("404: 1 visible Page not found, the fixed sentence and a working Go to the overview link");
+}
+
+/** Computed colour and keyboard outline of a link, reached by Tab. */
+async function assertLink(page: Page, name: string, label: string): Promise<void> {
+  const link = page.getByRole("link", { name, exact: true }).first();
+  const colour = await link.evaluate((a) => getComputedStyle(a).color);
+  assert(colour === LINK_COLOUR, `${label}: colour ${colour}`);
+  await page.locator("body").focus();
+  await tabTo(page, name);
+  const outline = (await focusedOutline(page)).outline;
+  assert(outline !== "none", `${label}: no focus outline`);
+}
+
+/** Reads the CSS rules, because getComputedStyle hides the visited colour for privacy. */
+async function visitedRules(page: Page): Promise<{ matching: number; conflicting: string[] }> {
+  return page.evaluate((colour) => {
+    const rules = Array.from(document.styleSheets).flatMap((sheet) =>
+      Array.from(sheet.cssRules).filter((rule) => rule instanceof CSSStyleRule),
+    );
+    const visited = rules.filter((rule) => rule.selectorText.includes(":visited"));
+    const matching = visited.filter(
+      (rule) =>
+        rule.selectorText.split(",").some((s) => s.trim() === "a:visited") &&
+        rule.style.color === colour,
+    ).length;
+    const conflicting = visited
+      .filter((rule) => rule.style.color !== "" && rule.style.color !== colour)
+      .map((rule) => rule.selectorText);
+    return { matching, conflicting };
+  }, LINK_COLOUR);
+}
+
+async function checkLinks(env: Env, browser: Browser): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const base = env.console.base;
+  await signIn(page, env);
+  await page.goto(`${base}/account/security`);
+  await assertLink(page, "Account security", "header Account security");
+  await assertLink(page, "Sessions", "account-content link");
+  await page.goto(`${base}/account/sessions/sign-out-all`);
+  await assertLink(page, "Cancel", "sign out all Cancel");
+  await page.goto(`${base}/account/recovery-codes`);
+  await assertLink(page, "Cancel", "recovery codes Cancel");
+  const rules = await visitedRules(page);
+  assert(rules.matching >= 1, "no a:visited rule with the link colour");
+  assert(rules.conflicting.length === 0, `other visited colours: ${rules.conflicting.join(", ")}`);
+  await page.fill('input[name="password"]', OWNER_PASSWORD);
+  await page.getByRole("button", { name: "Create new recovery codes" }).click();
+  const codes = await page.locator("#recovery-codes li").allTextContents();
+  env.console.recoveryCodes.splice(0, env.console.recoveryCodes.length, ...codes);
+  await assertLink(page, "Continue", "result Continue");
+  await context.close();
+  ok(`links: header, account, both Cancels and Continue are ${LINK_COLOUR} with a focus outline`);
+  ok(`Visited links: an a:visited rule has ${LINK_COLOUR} and no :visited rule has another colour`);
+}
+
+/** Gaps between consecutive forms, top of the next minus bottom of the previous. */
+async function formGaps(page: Page): Promise<number[]> {
+  return page.evaluate(() => {
+    const rects = Array.from(document.querySelectorAll("main form"), (f) =>
+      f.getBoundingClientRect(),
+    );
+    return rects.slice(1).map((r, i) => r.top - (rects[i]?.bottom ?? r.top));
+  });
+}
+
+async function checkGaps(env: Env, browser: Browser): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  const base = env.console.base;
+  await page.goto(`${base}/sign-in`);
+  await page.fill('input[name="email"]', env.ownerEmail);
+  await page.fill('input[name="password"]', OWNER_PASSWORD);
+  await Promise.all([
+    page.waitForURL(`${base}/sign-in/factor`),
+    page.click('button[type="submit"]'),
+  ]);
+  const factor = await formGaps(page);
+  assert(factor.length === 2 && factor.every((g) => g >= 12), `factor gaps ${factor.join(", ")}`);
+  await page.fill('input[name="recovery_code"]', env.console.recoveryCodes.shift() ?? "");
+  await Promise.all([
+    page.waitForURL(`${base}/`),
+    page.getByRole("button", { name: "Use recovery code" }).click(),
+  ]);
+  await page.goto(`${base}/account/authenticator`);
+  const replace = await formGaps(page);
+  assert(replace.length === 1 && replace.every((g) => g >= 12), `replace gap ${replace.join()}`);
+  await context.close();
+  ok(
+    `Gap: 390px form gaps ${factor.join(", ")} px on /sign-in/factor and ${replace} px on replace`,
+  );
 }
 
 async function axeOn(page: Page, url: string, label: string): Promise<void> {
@@ -206,6 +491,7 @@ async function checkAxe(env: Env, browser: Browser): Promise<void> {
   await axeOn(page, `${base}/`, "Overview");
   await axeOn(page, `${base}/does-not-exist`, "shell 404");
   await axeOn(page, `${base}/team`, "Team");
+  for (const path of ACCOUNT_ROUTES) await axeOn(page, base + path, path);
   env.role.current = "viewer";
   await axeOn(page, `${base}/__test/states/forbidden`, "shell 403");
   env.role.current = "owner";
@@ -405,6 +691,21 @@ async function checkPageShow(env: Env, page: Page): Promise<void> {
   ok("pageshow from the back/forward cache leaves the restored form usable");
 }
 
+/** Cancel on new recovery codes returns to security with the count unchanged. */
+async function checkCodesCancel(owner: Page, base: string): Promise<void> {
+  const left = /<p>(\d{1,2}) of 10 recovery codes left/;
+  await owner.goto(`${base}/account/security`);
+  const before = left.exec(await owner.content())?.[1];
+  await owner.goto(`${base}/account/recovery-codes`);
+  await Promise.all([
+    owner.waitForURL(`${base}/account/security`),
+    owner.getByRole("link", { name: "Cancel", exact: true }).click(),
+  ]);
+  const after = left.exec(await owner.content())?.[1];
+  assert(before !== undefined && before === after, `Cancel kept the count (${before}, ${after})`);
+  ok(`no JavaScript: recovery codes Cancel returns to /account/security with ${after} of 10 left`);
+}
+
 /** The account confirmations and two-browser revocation work with page JavaScript off. */
 async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
   const a = await browser.newContext({
@@ -423,6 +724,15 @@ async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
     await signIn(other, env);
     await owner.goto(`${base}/account/sessions/sign-out-all`);
     await Promise.all([
+      owner.waitForURL(`${base}/account/sessions`),
+      owner.getByRole("link", { name: "Cancel", exact: true }).click(),
+    ]);
+    const stillIn = await other.goto(`${base}/`);
+    assert(stillIn?.status() === 200, "Cancel leaves the other browser at 200");
+    assert((await other.content()).includes("Signed in as"), "Cancel keeps the other session");
+    ok("no JavaScript: sign out all Cancel returns to /account/sessions and signs nobody out");
+    await owner.goto(`${base}/account/sessions/sign-out-all`);
+    await Promise.all([
       owner.waitForURL(`${base}/account/sessions?signed-out=others`),
       owner.getByRole("button", { name: "Sign out all other sessions", exact: true }).click(),
     ]);
@@ -434,11 +744,20 @@ async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
     assert(other.url().includes("/sign-in?next="), "other browser is signed out");
     await owner.goto(`${base}/`);
     assert((await owner.content()).includes("Signed in as"), "current browser stays signed in");
+    await checkCodesCancel(owner, base);
     await owner.goto(`${base}/account/recovery-codes`);
     await owner.fill('input[name="password"]', OWNER_PASSWORD);
     await owner.getByRole("button", { name: "Create new recovery codes" }).click();
     const codes = await owner.locator("#recovery-codes li").allTextContents();
     assert(codes.length === 10, "new recovery codes confirmation shows ten codes");
+    assert((await owner.getByRole("link", { name: "Cancel" }).count()) === 0, "no Cancel");
+    await Promise.all([
+      owner.waitForURL(`${base}/account/security`),
+      owner.getByRole("link", { name: "Continue", exact: true }).click(),
+    ]);
+    ok(
+      "no JavaScript: new recovery codes shows 10 codes once and Continue reaches /account/security",
+    );
     // The old fixture codes stop working; later checks sign in with the new ones.
     env.console.recoveryCodes.splice(0, env.console.recoveryCodes.length, ...codes);
     await assertFits(owner, 390, "recovery codes");
@@ -447,7 +766,7 @@ async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
     await owner.getByRole("button", { name: "Replace authenticator", exact: true }).click();
     await owner.locator("#totp-secret").waitFor();
     await assertFits(owner, 390, "authenticator setup key");
-    await other.fill('input[name="email"]', OWNER_EMAIL);
+    await other.fill('input[name="email"]', env.ownerEmail);
     await other.fill('input[name="password"]', OWNER_PASSWORD);
     await Promise.all([
       other.waitForURL(`${base}/sign-in/factor`),
@@ -653,6 +972,26 @@ async function runChecks(): Promise<void> {
     await checkBusyScript(env, browser);
     await checkAccountNoScript(env, browser);
     await checkResetAndPassword(env, browser);
+    await checkLongEmail(browser);
+    // A console of its own: each check signs in with a fixture recovery code.
+    const shellEnv = await startEnv(0);
+    try {
+      await checkEmail(shellEnv, browser);
+      await checkNotFound(shellEnv, browser);
+      await checkGaps(shellEnv, browser);
+      await checkLinks(shellEnv, browser);
+    } finally {
+      await shellEnv.console.close();
+      shellEnv.api.stop();
+    }
+    // A console of its own: the first one has used up its fixture recovery codes.
+    const failureEnv = await startEnv(0);
+    try {
+      await checkFailureKinds(failureEnv, browser);
+    } finally {
+      await failureEnv.console.close();
+      failureEnv.api.stop();
+    }
   } finally {
     await browser.close();
     await env.console.close();
@@ -663,7 +1002,7 @@ async function runChecks(): Promise<void> {
 async function serve(): Promise<void> {
   const env = await startEnv(SERVE_WAIT_MS);
   console.log(`url: ${env.console.base}`);
-  console.log(`sign in: ${OWNER_EMAIL} / ${OWNER_PASSWORD}`);
+  console.log(`sign in: ${env.ownerEmail} / ${OWNER_PASSWORD}`);
   console.log(`busy page: ${env.console.base}/__test/states/busy (waits ${SERVE_WAIT_MS} ms)`);
   setInterval(() => {
     console.log(`recorder: ${JSON.stringify(env.recorder.actions)}`);

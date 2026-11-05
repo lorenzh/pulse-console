@@ -362,6 +362,11 @@ describe("guarded account writes", () => {
     expect(r.status).toBe(409);
     expect(r.body).toContain(CHANGED_WHILE);
     expect(r.body).not.toContain('id="recovery-codes"');
+    expect(r.body.split('<header class="shell-header">')).toHaveLength(2);
+    expect(r.body).toContain(
+      'Signed in as Ada Admin <span class="account-email">(admin@example.com)</span>',
+    );
+    expect(r.body).toContain('<a class="cancel" href="/account/security">Cancel</a>');
     expect(c.logs.some((l) => l.includes('"recovery codes created"'))).toBe(false);
   }
 
@@ -444,6 +449,11 @@ describe("guarded account writes", () => {
     const text = Buffer.concat(chunks).toString("utf8");
     expect(Number(text.split(" ")[1])).toBe(409);
     expect(text).toContain(CHANGED_WHILE);
+    expect(text.split('<header class="shell-header">')).toHaveLength(2);
+    expect(text).toContain(
+      'Signed in as Mo Member <span class="account-email">(member@example.com)</span>',
+    );
+    expect(text).toContain('<a class="cancel" href="/account/sessions">Cancel</a>');
     expect(count(c, "sessions WHERE id_digest = ?", sessionDigest(s2 ?? ""))).toBe(1);
     expect(text).not.toContain(sessionIdOf("member"));
   });

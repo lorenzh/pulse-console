@@ -18,6 +18,7 @@ import type { PendingAuthenticator } from "./factor-store.ts";
 import { passwordText } from "./forms.ts";
 import {
   acceptSessionForm,
+  accountShell,
   type Ctx,
   type Current,
   currentOf,
@@ -26,6 +27,7 @@ import {
   redirect,
   sendHtml,
   sessionForm,
+  signOutForm,
 } from "./http-context.ts";
 import { messagePage } from "./pages.ts";
 import { isSignInPasswordAcceptable } from "./passwords.ts";
@@ -312,19 +314,21 @@ function commitConfirmation(
 export function sendSecurity(ctx: Ctx): void {
   const current = currentOf(ctx);
   const { factorStore } = ctx.deps;
-  const page = securityPage({
+  const part = securityPage({
     confirmedAt: factorStore.authenticator(current.user.id)?.confirmedAt,
     codesLeft: factorStore.unusedRecoveryCodeCount(current.user.id),
   });
-  sendHtml(ctx, 200, page);
+  sendHtml(ctx, 200, accountShell(ctx, signOutForm(ctx), part));
 }
 
 function newCodesView(ctx: Ctx, current: Current, error?: string): string {
-  return newCodesPage({
-    ...sessionForm(ctx),
+  const form = sessionForm(ctx);
+  const part = newCodesPage({
+    ...form,
     codesLeft: ctx.deps.factorStore.unusedRecoveryCodeCount(current.user.id),
     error,
   });
+  return accountShell(ctx, form, part);
 }
 
 /** `GET /account/recovery-codes`: the password confirmation. */
@@ -366,12 +370,18 @@ export function sendSessions(ctx: Ctx): void {
   const rows = ctx.deps.store.listSessions(current.user.id, current.id, ctx.deps.now());
   const notice =
     ctx.query.get("signed-out") === "others" ? "All other sessions are signed out." : undefined;
-  sendHtml(ctx, 200, sessionsPage({ ...sessionForm(ctx), rows, notice }));
+  const form = sessionForm(ctx);
+  sendHtml(ctx, 200, accountShell(ctx, form, sessionsPage({ ...form, rows, notice })));
+}
+
+function signOutAllView(ctx: Ctx, error?: string): string {
+  const form = sessionForm(ctx);
+  return accountShell(ctx, form, signOutAllPage(form, error));
 }
 
 /** `GET /account/sessions/sign-out-all`: the confirmation. */
 export function sendSignOutAllForm(ctx: Ctx): void {
-  sendHtml(ctx, 200, signOutAllPage(sessionForm(ctx)));
+  sendHtml(ctx, 200, signOutAllView(ctx));
 }
 
 /**
@@ -383,9 +393,7 @@ export async function postSignOutAll(ctx: Ctx): Promise<void> {
   const fields = await readPostForm(ctx, ["form_token"], current.session.csrfToken);
   if (fields === undefined) return;
   if (
-    !acceptSessionForm(ctx, fields.form_token, () =>
-      signOutAllPage(sessionForm(ctx), formExpiredResendNotice),
-    )
+    !acceptSessionForm(ctx, fields.form_token, () => signOutAllView(ctx, formExpiredResendNotice))
   )
     return;
   const result = ctx.deps.store.deleteOtherSessionsFor({
@@ -393,7 +401,7 @@ export async function postSignOutAll(ctx: Ctx): Promise<void> {
     userId: current.user.id,
   });
   if (!result.ok) {
-    sendHtml(ctx, 409, signOutAllPage(sessionForm(ctx), CREDENTIALS_CHANGED_TEXT));
+    sendHtml(ctx, 409, signOutAllView(ctx, CREDENTIALS_CHANGED_TEXT));
     return;
   }
   ctx.deps.log.info("signed out other sessions", {

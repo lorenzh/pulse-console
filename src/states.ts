@@ -1,5 +1,10 @@
 import { escapeHtml } from "@lorenzh/pulse-kit";
-import { type ApiFailure, apiFailureHeading, apiFailureText } from "./api-failure.ts";
+import {
+  type ApiFailure,
+  apiFailureHeading,
+  apiFailureKind,
+  apiFailureText,
+} from "./api-failure.ts";
 import { paragraph } from "./html.ts";
 import { type ConsoleRole, roleLabel } from "./roles.ts";
 
@@ -33,10 +38,12 @@ export function emptyState(view: {
 
 /** pulse-api cannot be reached, or sent an answer the console cannot use. */
 export function apiUnavailableState(failure: ApiFailure, retryHref: string): string {
+  const kind = apiFailureKind(failure);
+  const kindLine = paragraph(kind === undefined ? undefined : `Kind: ${kind}`);
   return state(
     "error",
     apiFailureHeading(failure),
-    `${paragraph(apiFailureText(failure))}${link(retryHref, "Retry")}`,
+    `${kindLine}${paragraph(apiFailureText(failure))}${link(retryHref, "Retry")}`,
     ' role="alert"',
   );
 }
@@ -82,7 +89,8 @@ export function forbiddenState(
 
 /** The 404 body. */
 export function notFoundState(): string {
-  return state("error", "Page not found", link("/", "Go to the overview"));
+  return `<p>There is no page at this address. Check the address, or go to the overview.</p>
+${link("/", "Go to the overview")}`;
 }
 
 /** A 409 or 412 answer: the target changed since the form was opened. */

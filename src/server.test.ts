@@ -151,7 +151,10 @@ describe("app routes", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/css; charset=utf-8");
     expectSecurityHeaders(res);
-    expect(await res.text()).toContain(":focus-visible");
+    const css = await res.text();
+    expect(css).toContain(":focus-visible");
+    expect(css).toContain("\na, a:visited { color: #1b4f9c; }\n");
+    expect(css).toContain("\nform + form { margin-top: 1rem; }\n");
   });
 });
 

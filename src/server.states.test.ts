@@ -62,6 +62,11 @@ describe("state fixtures", () => {
     ["/__test/states/busy", 200, "Busy button"],
     ["/__test/states/already-submitted", 409, "Already submitted"],
     ["/__test/states/api-timeout", 200, "pulse-api did not answer within 5 seconds."],
+    [
+      "/__test/states/api-refused",
+      200,
+      "The connection to http://127.0.0.1:9 was refused. Check that pulse-api is running at this address.",
+    ],
     ["/__test/states/api-network", 200, "pulse-api cannot be reached at http://127.0.0.1:9."],
     ["/__test/states/api-status", 200, "pulse-api answered 503."],
     ["/__test/states/token-rejected", 200, "pulse-api rejected the console token"],

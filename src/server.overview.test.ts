@@ -40,6 +40,13 @@ async function consoleFor(
   return c;
 }
 
+// The console takes `typeof fetch`, so a fake keeps Bun's `preconnect`.
+function fakeFetch(
+  fn: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
+): typeof fetch {
+  return Object.assign(fn, { preconnect: fetch.preconnect });
+}
+
 function checksOf(...states: string[]): FakeReply {
   return jsonReply(states.map((s, i) => checkWithState(`c${i}`, s)));
 }
@@ -84,7 +91,9 @@ describe("GET / Overview summary", () => {
       expect(res.body).toContain(overall);
       expect(res.body).toContain(count);
       expect(res.body).toContain(`pulse-api: ${api.url}`);
-      expect(res.body).toContain("Signed in as Owner (owner@example.com)");
+      expect(res.body).toContain(
+        'Signed in as Owner <span class="account-email">(owner@example.com)</span>',
+      );
       expect(res.body).toContain('<a href="/" aria-current="page">Overview</a>');
       expectClean(c, res.body);
     });
@@ -147,11 +156,13 @@ describe("GET / Overview failures", () => {
     config?: FakeReply;
     checks?: FakeReply;
     heading: string;
+    kind?: string;
     text: string;
     log: string;
   }> = [
     {
       name: "config 403",
+      kind: "status 403",
       config: { status: 403 },
       heading: UNREACHABLE,
       text: "The console token lacks the read or checks scope.",
@@ -159,6 +170,7 @@ describe("GET / Overview failures", () => {
     },
     {
       name: "config 429",
+      kind: "status 429",
       config: { status: 429 },
       heading: UNREACHABLE,
       text: "pulse-api is throttling the console. Try again in a minute.",
@@ -166,6 +178,7 @@ describe("GET / Overview failures", () => {
     },
     {
       name: "checks 503",
+      kind: "status 503",
       checks: { status: 503 },
       heading: UNREACHABLE,
       text: "pulse-api answered 503.",
@@ -217,6 +230,12 @@ describe("GET / Overview failures", () => {
       expect(res.status).toBe(200);
       expect(res.body).toContain(row.heading);
       expect(res.body).toContain(row.text);
+      if (row.kind === undefined) {
+        expect(res.body).not.toContain("Kind:");
+      } else {
+        expect(res.body).toContain(`<p>Kind: ${row.kind}</p>`);
+      }
+      expect(res.body).not.toContain("5 seconds");
       expect(res.body).toContain('<a href="/">Retry</a>');
       expect(res.body).not.toContain("Overall state");
       const warn = c.logs.filter((l) => l.includes("api read failed"));
@@ -238,36 +257,107 @@ describe("GET / Overview failures", () => {
       "Set a valid token in PULSE_CONSOLE_ADMIN_TOKEN or PULSE_CONSOLE_ADMIN_TOKEN_FILE and restart the console.",
     );
     expect(res.body).not.toContain("Overall state");
+    expect(res.body).not.toContain("Kind:");
     expect(res.headers.get("set-cookie")).toBeNull();
     expect((await getPage(c, "/")).status).toBe(200);
     expectClean(c, res.body);
   });
 
-  test("timeout through a fake schedule", async () => {
+  test("a deadline fired after the request arrived shows Kind: timeout", async () => {
     const api = fakeApi();
-    api.reply("/admin/config", { status: 200, isHeld: true });
+    api.reply("/admin/config", jsonReply(emptyConfig));
     api.reply("/checks", { status: 200, isHeld: true });
     const delays: number[] = [];
+    const pending = new Set<() => void>();
     const schedule = (fn: () => void, ms: number): (() => void) => {
       delays.push(ms);
-      queueMicrotask(fn);
-      return () => undefined;
+      pending.add(fn);
+      return () => pending.delete(fn);
     };
     const c = await consoleFor(api.url, { schedule });
-    const res = await getPage(c, "/");
+    const page = getPage(c, "/");
+    await api.received("/checks");
+    // The config read may still be open here; wait until only the held read keeps its timer.
+    while (pending.size > 1) await new Promise((resolve) => setImmediate(resolve));
+    for (const fn of pending) fn();
+    const res = await page;
     expect(res.status).toBe(200);
+    expect(res.body).toContain("<p>Kind: timeout</p>");
     expect(res.body).toContain("pulse-api did not answer within 5 seconds.");
     expect(delays).toEqual([5000, 5000]);
+    const warn = c.logs.filter((l) => l.includes("api read failed"));
+    expect(warn).toHaveLength(1);
+    expect(warn[0]).toContain('"call":"checks","kind":"timeout"');
   });
 
-  test("closed port", async () => {
+  test("closed port shows Kind: connection refused, no 5 seconds, and Retry recovers", async () => {
     const closed = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
     const url = `http://127.0.0.1:${closed.port}`;
     await closed.stop(true);
-    const c = await consoleFor(url);
+    const live = fakeApi();
+    live.reply("/admin/config", jsonReply(emptyConfig));
+    live.reply("/checks", checksOf("up"));
+    const target = { current: url };
+    const c = await consoleFor(url, {
+      fetch: fakeFetch((input, init) => {
+        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+        return fetch(`${target.current}${path}`, init);
+      }),
+    });
     const res = await getPage(c, "/");
     expect(res.status).toBe(200);
-    expect(res.body).toContain(`pulse-api cannot be reached at ${url}.`);
+    expect(res.body).toContain(UNREACHABLE);
+    expect(res.body).toContain("<p>Kind: connection refused</p>");
+    expect(res.body).toContain(
+      `The connection to ${url} was refused. Check that pulse-api is running at this address.`,
+    );
+    expect(res.body).not.toContain("5 seconds");
+    expect(res.body).toContain('<a href="/">Retry</a>');
+    const warn = c.logs.filter((l) => l.includes("api read failed"));
+    expect(warn).toHaveLength(2);
+    expect(warn[0]).toContain('"call":"config","kind":"network"');
+    expect(warn[1]).toContain('"call":"checks","kind":"network"');
+    for (const line of warn) {
+      expect(line).not.toContain("status");
+      expect(line).not.toContain("ConnectionRefused");
+      expect(line).not.toContain("127.0.0.1");
+    }
+    target.current = live.url;
+    const retry = await getPage(c, "/");
+    expect(retry.body).toContain("Overall state: Up. All checks are up.");
+    expect(retry.body).not.toContain("Kind:");
+  });
+
+  test("fetch rejections are classified by own code only, never by message or getter", async () => {
+    const calls = { count: 0 };
+    const getterCause = new TypeError("getter-sentinel");
+    Object.defineProperty(getterCause, "code", {
+      get: () => {
+        calls.count += 1;
+        return "ECONNREFUSED";
+      },
+    });
+    const rows: Array<[unknown, string]> = [
+      [new TypeError("x", { cause: { code: "ECONNREFUSED" } }), "connection refused"],
+      [new TypeError("x", { cause: { cause: { code: "ECONNREFUSED" } } }), "network error"],
+      [new TypeError("ECONNREFUSED connection refused sentinel"), "network error"],
+      [Object.create({ code: "ECONNREFUSED" }), "network error"],
+      [{ code: "ENOTFOUND" }, "network error"],
+      [getterCause, "network error"],
+    ];
+    for (const [rejection, kind] of rows) {
+      const c = await consoleFor("http://127.0.0.1:9", {
+        fetch: fakeFetch(() => Promise.reject(rejection)),
+      });
+      const res = await getPage(c, "/");
+      expect(res.status).toBe(200);
+      expect(res.body).toContain(`<p>Kind: ${kind}</p>`);
+      for (const text of [res.body, ...c.logs]) {
+        expect(text).not.toContain("sentinel");
+        expect(text).not.toContain("ECONNREFUSED");
+      }
+    }
+    expect(calls.count).toBe(0);
   });
 
   test("302: the redirect target gets 0 requests", async () => {

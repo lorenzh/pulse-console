@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { ApiFailure } from "./api-failure.ts";
 import {
   alreadySubmittedState,
   apiUnavailableState,
@@ -40,6 +41,35 @@ test("api unavailable state", () => {
   );
 });
 
+test("api unavailable state names the kind before the detail", () => {
+  const rows: Array<[ApiFailure, string, string]> = [
+    [{ kind: "timeout" }, "Kind: timeout", "pulse-api did not answer within 5 seconds."],
+    [
+      { kind: "refused", origin: "http://127.0.0.1:9" },
+      "Kind: connection refused",
+      "The connection to http://127.0.0.1:9 was refused. Check that pulse-api is running at this address.",
+    ],
+    [
+      { kind: "network", origin: "http://127.0.0.1:9" },
+      "Kind: network error",
+      "pulse-api cannot be reached at http://127.0.0.1:9.",
+    ],
+    [{ kind: "http", call: "checks", status: 503 }, "Kind: status 503", "pulse-api answered 503."],
+  ];
+  for (const [failure, kind, detail] of rows) {
+    expect(apiUnavailableState(failure, "/")).toContain(
+      `<h2>pulse-api cannot be reached</h2>\n<p>${kind}</p>\n<p>${detail}</p>\n`,
+    );
+  }
+  for (const failure of [
+    { kind: "invalid" },
+    { kind: "missing-header" },
+    { kind: "wire-mismatch", label: "2" },
+  ] satisfies ApiFailure[]) {
+    expect(apiUnavailableState(failure, "/")).not.toContain("Kind:");
+  }
+});
+
 test("token banner", () => {
   const html = tokenRejectedBanner();
   expect(html).toContain("<h2>pulse-api rejected the console token</h2>");
@@ -53,7 +83,10 @@ test("forbidden and not found", () => {
   expect(html).toContain("<h2>Access denied</h2>");
   expect(html).toContain("<p>This page needs the Admin role or higher. Your role is Viewer.</p>");
   const notFound = notFoundState();
-  expect(notFound).toContain("<h2>Page not found</h2>");
+  expect(notFound).not.toContain("Page not found");
+  expect(notFound).toBe(
+    '<p>There is no page at this address. Check the address, or go to the overview.</p>\n<p><a href="/">Go to the overview</a></p>\n',
+  );
   expect(notFound).toContain('<a href="/">Go to the overview</a>');
 });
 

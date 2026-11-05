@@ -289,6 +289,7 @@ function confirmRoutes(options: FixtureOptions): ProtectedRoute[] {
 
 const API_FAILURES: ReadonlyArray<[string, ApiFailure]> = [
   ["api-timeout", { kind: "timeout" }],
+  ["api-refused", { kind: "refused", origin: "http://127.0.0.1:9" }],
   ["api-network", { kind: "network", origin: "http://127.0.0.1:9" }],
   ["api-status", { kind: "http", call: "checks", status: 503 }],
 ];
