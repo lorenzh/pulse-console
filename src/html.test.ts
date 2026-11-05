@@ -4,6 +4,7 @@ import {
   field,
   formErrorSummary,
   formTokenField,
+  plainDocument,
   submitButton,
   textareaField,
 } from "./html.ts";
@@ -24,6 +25,39 @@ test("submitButton starts enabled and carries the busy label", () => {
   expect(submitButton({ label: "<a>", busyLabel: '"b"', variant: "secondary" })).toBe(
     '<button type="submit" class="secondary" data-busy-label="&quot;b&quot;">&lt;a&gt;</button>',
   );
+  expect(submitButton({ label: "A", busyLabel: "B" })).toBe(
+    '<button type="submit" data-busy-label="B">A</button>',
+  );
+  expect(submitButton({ label: "A", busyLabel: "B", variant: "primary" })).toBe(
+    '<button type="submit" data-busy-label="B">A</button>',
+  );
+  expect(submitButton({ label: "A", busyLabel: "B", variant: "secondary" })).toBe(
+    '<button type="submit" class="secondary" data-busy-label="B">A</button>',
+  );
+});
+
+test("submitButton renders the ghost and danger variants as classes", () => {
+  expect(submitButton({ label: "A", busyLabel: "B", variant: "ghost" })).toBe(
+    '<button type="submit" class="ghost" data-busy-label="B">A</button>',
+  );
+  expect(submitButton({ label: "Remove", busyLabel: "Removing…", variant: "danger" })).toBe(
+    '<button type="submit" class="danger" data-busy-label="Removing…">Remove</button>',
+  );
+});
+
+test("plainDocument has the wordmark, one h1 in the plain panel and no script", () => {
+  const html = plainDocument("Sign <in>", "<p>body</p>");
+  expect(html).toContain('<body class="plain">');
+  expect(html).toContain(
+    '<header class="plain-head"><p class="wordmark"><span class="wordmark-name">pulse</span><span class="cursor" aria-hidden="true"></span><span class="pill">self-hosted</span></p></header>',
+  );
+  expect(html).toContain(
+    '<main class="plain-main"><div class="panel plain-panel">\n<h1>Sign &lt;in&gt;</h1>\n<p>body</p>\n</div></main>',
+  );
+  expect(html.match(/<h1/g)?.length).toBe(1);
+  expect(html).not.toContain("<script");
+  expect(html).not.toMatch(/style=|<style/);
+  expect(html).toContain("<title>Sign &lt;in&gt; · pulse Console</title>");
 });
 
 test("formTokenField escapes its value", () => {
@@ -64,5 +98,7 @@ test("formErrorSummary links each field", () => {
   ]);
   expect(html).toContain('<a href="#field-name">Enter a &lt;name&gt;.</a>');
   expect(html).toContain('<a href="#field-note">Too long.</a>');
-  expect(html).toContain('role="alert"');
+  expect(html).toStartWith('<section class="callout callout-error" role="alert">');
+  expect(html).toContain('<h2 class="callout-title">There is a problem</h2>');
+  expect(html).not.toMatch(/style=|<style/);
 });

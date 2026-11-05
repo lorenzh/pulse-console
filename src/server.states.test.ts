@@ -104,7 +104,7 @@ describe("state fixtures", () => {
         secret: SECRET,
       });
       expect(res.status).toBe(status);
-      expect(res.body).toContain(`<h2>${heading}</h2>`);
+      expect(res.body).toContain(`<h2 class="callout-title">${heading}</h2>`);
       expect(res.body).toContain('value="Kept &lt;name&gt;"');
       expect(res.body).toContain(">Kept note</textarea>");
       expect(res.body).not.toContain(SECRET);
@@ -135,7 +135,10 @@ describe("state fixtures", () => {
     setRole("viewer");
     const res = await getPage(c, "/__test/states/forbidden");
     expect(res.status).toBe(403);
-    expect(res.body).toContain("<h2>Access denied</h2>");
+    expect(res.body.split("Access denied</h").length - 1).toBe(1);
+    expect(res.body).toContain('<div class="page-head"><h1>Access denied</h1></div>');
+    expect(res.body).toContain('<section class="callout callout-warning">');
+    expect(res.body).toContain('<a href="/">Go to the overview</a>');
     expect(res.body).toContain("This page needs the Admin role or higher. Your role is Viewer.");
     expect(res.body).toContain("Role: Viewer");
     expectShellHeaders(res);

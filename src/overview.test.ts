@@ -82,13 +82,13 @@ describe("overviewView", () => {
     expect(body).toContain(
       "pulse-api has no active checks. Add a check in pulse-api, then reload this page.",
     );
-    expect(body).toContain('<a href="/">Reload</a>');
+    expect(body).toContain('<a class="button" href="/">Reload</a>');
     expect(body).not.toContain("Overall state");
   });
 
   test("a failure shows the unavailable state with Retry and no summary", () => {
     const body = overviewView(origin, { kind: "failed", failure: { kind: "timeout" } }).body;
-    expect(body).toContain("<h2>pulse-api cannot be reached</h2>");
+    expect(body).toContain('<h2 class="callout-title">pulse-api cannot be reached</h2>');
     expect(body).toContain("pulse-api did not answer within 5 seconds.");
     expect(body).toContain('<a href="/">Retry</a>');
     expect(body).not.toContain("Overall state");
@@ -96,7 +96,9 @@ describe("overviewView", () => {
 
   test("a rejected token fills the banner and shows no summary", () => {
     const view = overviewView(origin, { kind: "token-rejected" });
-    expect(view.banner).toContain("<h2>pulse-api rejected the console token</h2>");
+    expect(view.banner).toContain(
+      '<h2 class="callout-title">pulse-api rejected the console token</h2>',
+    );
     expect(view.body).not.toContain("Overall state");
   });
 

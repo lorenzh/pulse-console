@@ -46,7 +46,10 @@ describe("team.view at HTTP level", () => {
     const r = await getPage(c, "/team", c.cookies[role]);
     expect(r.status).toBe(status);
     if (status === 403) {
-      expect(r.body).toContain("<h2>Access denied</h2>");
+      expect(r.body.split("Access denied</h").length - 1).toBe(1);
+      expect(r.body).toContain('<div class="page-head"><h1>Access denied</h1></div>');
+      expect(r.body).toContain('<section class="callout callout-warning">');
+      expect(r.body).toContain('<a href="/">Go to the overview</a>');
       const label = role === "member" ? "Member" : "Viewer";
       expect(r.body).toContain(
         `<p>This page needs the Admin role or higher. Your role is ${label}.</p>`,

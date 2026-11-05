@@ -94,7 +94,9 @@ describe("GET / Overview summary", () => {
       expect(res.body).toContain(
         'Signed in as Owner <span class="account-email">(owner@example.com)</span>',
       );
-      expect(res.body).toContain('<a href="/" aria-current="page">Overview</a>');
+      expect(res.body).toContain(
+        '<a class="nav-item" href="/" aria-current="page"><svg class="icon"',
+      );
       expectClean(c, res.body);
     });
   }
@@ -121,7 +123,7 @@ describe("GET / Overview summary", () => {
     expect(res.body).toContain(
       "pulse-api has no active checks. Add a check in pulse-api, then reload this page.",
     );
-    expect(res.body).toContain('<a href="/">Reload</a>');
+    expect(res.body).toContain('<a class="button" href="/">Reload</a>');
   });
 
   test("authorization: Bearer on /admin/config, none on /checks", async () => {

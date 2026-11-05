@@ -37,7 +37,9 @@ describe("GET /team", () => {
     expect(r.status).toBe(200);
     expect(r.headers.get("content-security-policy")).toBe(CSP);
     expect(r.headers.get("cache-control")).toBe("no-store");
-    expect(r.body).toContain('<a href="/team" aria-current="page">Team</a>');
+    expect(r.body).toContain(
+      '<a class="nav-item" href="/team" aria-current="page"><svg class="icon"',
+    );
     expect(r.body).toContain("<h1");
     for (const row of [
       "<td>Owner</td>\n<td>owner@example.com</td>\n<td>Owner</td>\n<td>2FA: on</td>",

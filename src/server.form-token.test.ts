@@ -241,7 +241,7 @@ describe("sign-in form token", () => {
     const c = await startConsole(true);
     const page = await get(c, "/sign-in", "pulse_console_csrf=fixed-csrf-value");
     const frozen =
-      '<!doctype html>\n<html lang="en">\n  <head>\n    <meta charset="utf-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1">\n    <title>Sign in · pulse Console</title>\n    <link rel="stylesheet" href="/console.css">\n  </head>\n  <body>\n    <main>\n      <h1>Sign in</h1>\n<form method="post" action="/sign-in">\n<input type="hidden" name="csrf" value="fixed-csrf-value">\n<input type="hidden" name="next" value="/">\n<label for="field-email">Email\n<input id="field-email" name="email" type="email" autocomplete="username" required>\n</label>\n<label for="field-password">Password\n<input id="field-password" name="password" type="password" autocomplete="current-password" required>\n</label>\n<div class="actions"><button type="submit">Sign in</button></div>\n</form>\n    </main>\n  </body>\n</html>\n';
+      '<!doctype html>\n<html lang="en">\n  <head>\n    <meta charset="utf-8">\n    <meta name="viewport" content="width=device-width, initial-scale=1">\n    <title>Sign in · pulse Console</title>\n    <link rel="stylesheet" href="/console.css">\n  </head>\n  <body class="plain">\n<header class="plain-head"><p class="wordmark"><span class="wordmark-name">pulse</span><span class="cursor" aria-hidden="true"></span><span class="pill">self-hosted</span></p></header>\n<main class="plain-main"><div class="panel plain-panel">\n<h1>Sign in</h1>\n<form method="post" action="/sign-in">\n<input type="hidden" name="csrf" value="fixed-csrf-value">\n<input type="hidden" name="next" value="/">\n<label for="field-email">Email\n<input id="field-email" name="email" type="email" autocomplete="username" required>\n</label>\n<label for="field-password">Password\n<input id="field-password" name="password" type="password" autocomplete="current-password" required>\n</label>\n<div class="actions"><button type="submit">Sign in</button></div>\n</form>\n</div></main>\n  </body>\n</html>\n';
     expect(page.body.replace(TOKEN_LINE, "").replace("\n\n", "\n")).toBe(frozen);
   });
 
@@ -367,7 +367,7 @@ describe("sign-out form token", () => {
     const home = await get(c, "/", s.cookie);
     expect(home.status).toBe(200);
     expect(home.body).toContain(
-      `<form method="post" action="/sign-out">\n<input type="hidden" name="csrf" value="${s.csrf}">\n<input type="hidden" name="form_token" value="${tokenOf(home.body)}">`,
+      `<form method="post" action="/sign-out" class="sign-out">\n<input type="hidden" name="csrf" value="${s.csrf}">\n<input type="hidden" name="form_token" value="${tokenOf(home.body)}">`,
     );
     expect(home.body.split("<script")).toHaveLength(2);
     expect(home.body).toContain('<script src="/console.js" defer></script>');
@@ -594,7 +594,7 @@ describe("form tokens on protected routes", () => {
     expect(formTokenOf(first.body, BUSY)).not.toBe(token);
     const second = await postForm(c, BUSY, busyBody(token));
     expect(second.status).toBe(409);
-    expect(second.body).toContain("<h2>Already submitted</h2>");
+    expect(second.body).toContain('<h2 class="callout-title">Already submitted</h2>');
     expect(second.body).toContain(`<a href="${BUSY}">Open the page again</a>`);
     expect(recorder.actions).toEqual([{ action: "go", choice: "kept-choice" }]);
     const refused = c.logs.filter((l) => l.includes("form token refused"));

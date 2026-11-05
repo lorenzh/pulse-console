@@ -45,7 +45,20 @@ const LONG_NAME = `Checkout-API-${"very-long-unbroken-name-".repeat(8)}end`;
 const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 const SERVE_WAIT_MS = 3000;
 const DEMO_EMAIL = "demo-owner@example.com";
-const LINK_COLOUR = "rgb(27, 79, 156)";
+// --accent-text in the light scheme, the default of a new context.
+const LINK_COLOUR = "rgb(122, 66, 144)";
+// The R3 link table: every :visited selector part and its color, written out from the spec.
+const VISITED_RULES: Readonly<Record<string, string>> = {
+  "a:visited": "var(--accent-text)",
+  "a.button:visited": "var(--on-strong)",
+  "a.button.secondary:visited": "var(--text)",
+  "a.button.ghost:visited": "var(--text)",
+  "a.button.danger:visited": "var(--bg)",
+  ".callout a:not(.button):visited": "var(--text)",
+  ".nav-item:visited": "var(--lead)",
+  '.nav-item[aria-current="page"]:visited': "var(--text)",
+  ".breadcrumbs a:visited": "var(--muted)",
+};
 
 type Env = {
   ownerEmail: string;
@@ -207,7 +220,7 @@ const ACCOUNT_ROUTES = [
 /** The account page is in the shell, fits, and its Overview link goes to `/`. */
 async function assertAccountShell(page: Page, width: number, label: string): Promise<void> {
   await assertFits(page, width, `${width}px ${label}`);
-  assert(await page.locator("header.shell-header").isVisible(), `${label}: header`);
+  assert(await page.locator("header.sidebar").isVisible(), `${label}: header`);
   assert(await page.locator('nav[aria-label="Main"]').isVisible(), `${label}: Main nav`);
   assert((await page.locator("h1").count()) === 1, `${label}: one h1`);
 }
@@ -417,23 +430,40 @@ async function assertLink(page: Page, name: string, label: string): Promise<void
   assert(outline !== "none", `${label}: no focus outline`);
 }
 
-/** Reads the CSS rules, because getComputedStyle hides the visited colour for privacy. */
-async function visitedRules(page: Page): Promise<{ matching: number; conflicting: string[] }> {
-  return page.evaluate((colour) => {
-    const rules = Array.from(document.styleSheets).flatMap((sheet) =>
-      Array.from(sheet.cssRules).filter((rule) => rule instanceof CSSStyleRule),
-    );
-    const visited = rules.filter((rule) => rule.selectorText.includes(":visited"));
-    const matching = visited.filter(
-      (rule) =>
-        rule.selectorText.split(",").some((s) => s.trim() === "a:visited") &&
-        rule.style.color === colour,
-    ).length;
-    const conflicting = visited
-      .filter((rule) => rule.style.color !== "" && rule.style.color !== colour)
-      .map((rule) => rule.selectorText);
-    return { matching, conflicting };
-  }, LINK_COLOUR);
+/**
+ * Reads the CSS rules, because getComputedStyle hides the visited colour for privacy. Returns the
+ * problems: a :visited part outside the R3 table, a wrong color, a missing entry, or a :visited
+ * rule inside an @media block.
+ */
+async function visitedProblems(page: Page): Promise<string[]> {
+  const found = await page.evaluate(() => {
+    const top = Array.from(document.styleSheets).flatMap((sheet) => Array.from(sheet.cssRules));
+    const nested = top
+      .filter((rule) => rule instanceof CSSMediaRule)
+      .flatMap((rule) => Array.from(rule.cssRules))
+      .filter((rule) => rule instanceof CSSStyleRule && rule.selectorText.includes(":visited"))
+      .map((rule) => (rule instanceof CSSStyleRule ? rule.selectorText : ""));
+    const parts = top
+      .filter((rule) => rule instanceof CSSStyleRule)
+      .flatMap((rule) =>
+        rule.selectorText
+          .split(",")
+          .map((part) => ({ part: part.trim(), color: rule.style.color }))
+          .filter((p) => p.part.includes(":visited")),
+      );
+    return { nested, parts };
+  });
+  const problems = found.nested.map((selector) => `in @media: ${selector}`);
+  for (const { part, color } of found.parts) {
+    const want = VISITED_RULES[part];
+    if (want === undefined) problems.push(`not listed: ${part}`);
+    else if (color !== want) problems.push(`${part}: ${color}`);
+  }
+  const seen = new Set(found.parts.map((p) => p.part));
+  for (const part of Object.keys(VISITED_RULES)) {
+    if (!seen.has(part)) problems.push(`missing: ${part}`);
+  }
+  return problems;
 }
 
 async function checkLinks(env: Env, browser: Browser): Promise<void> {
@@ -448,9 +478,8 @@ async function checkLinks(env: Env, browser: Browser): Promise<void> {
   await assertLink(page, "Cancel", "sign out all Cancel");
   await page.goto(`${base}/account/recovery-codes`);
   await assertLink(page, "Cancel", "recovery codes Cancel");
-  const rules = await visitedRules(page);
-  assert(rules.matching >= 1, "no a:visited rule with the link colour");
-  assert(rules.conflicting.length === 0, `other visited colours: ${rules.conflicting.join(", ")}`);
+  const problems = await visitedProblems(page);
+  assert(problems.length === 0, `visited rules: ${problems.join(", ")}`);
   await page.fill('input[name="password"]', OWNER_PASSWORD);
   await page.getByRole("button", { name: "Create new recovery codes" }).click();
   const codes = await page.locator("#recovery-codes li").allTextContents();
@@ -458,7 +487,9 @@ async function checkLinks(env: Env, browser: Browser): Promise<void> {
   await assertLink(page, "Continue", "result Continue");
   await context.close();
   ok(`links: header, account, both Cancels and Continue are ${LINK_COLOUR} with a focus outline`);
-  ok(`Visited links: an a:visited rule has ${LINK_COLOUR} and no :visited rule has another colour`);
+  ok(
+    `Visited links: ordinary links are ${LINK_COLOUR}; the ${Object.keys(VISITED_RULES).length} listed :visited rules (link, 4 button, callout, 2 nav, breadcrumb) match R3 and none sits in @media`,
+  );
 }
 
 /** Gaps between consecutive forms, top of the next minus bottom of the previous. */
@@ -539,7 +570,17 @@ async function checkFocus(env: Env, browser: Browser): Promise<void> {
   const page = await context.newPage();
   await signIn(page, env);
   await page.goto(`${env.console.base}/`);
-  const expected = ["Skip to content", "Account security", "Sign out", "Overview"];
+  // Skip link, the nav entries, Account security, Sign out; the overview has no breadcrumb link.
+  const expected = [
+    "Skip to content",
+    "Overview",
+    "Checks",
+    "Tokens",
+    "Probes",
+    "Team",
+    "Account security",
+    "Sign out",
+  ];
   for (const text of expected) {
     await page.keyboard.press("Tab");
     const got = await focusedOutline(page);
@@ -548,7 +589,7 @@ async function checkFocus(env: Env, browser: Browser): Promise<void> {
   }
   await context.close();
   ok(
-    "Tab reaches Skip to content, Account security, Sign out and Overview in order, each with an outline",
+    "Tab reaches Skip to content, the nav entries, Account security and Sign out in order, each with an outline",
   );
 }
 

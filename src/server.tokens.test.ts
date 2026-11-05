@@ -155,7 +155,7 @@ describe("GET /tokens", () => {
     const c = await tokensConsole(tokenApi([]));
     const res = await getPage(c, "/tokens", c.cookies.admin);
     expect(res.body).toContain("No tokens");
-    expect(res.body).toContain('<a href="/tokens/new">Create a token</a>');
+    expect(res.body).toContain('<a class="button" href="/tokens/new">Create a token</a>');
   });
 
   test("a token with the console's name but another id is not protected", async () => {

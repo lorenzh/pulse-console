@@ -605,7 +605,10 @@ describe("signed-in unknown paths and the Overview", () => {
     const c = await signedIn();
     const res = await getPage(c, "/no-such-page");
     expect(res.status).toBe(404);
-    expect(res.body.split("Page not found")).toHaveLength(3);
+    // Title, breadcrumb and h1.
+    expect(res.body.split("Page not found")).toHaveLength(4);
+    expect(res.body).toContain('<li aria-current="page">Page not found</li>');
+    expect(res.body).toContain('<section class="callout callout-neutral">');
     expect(res.body).toContain("<title>Page not found");
     expect(res.body).toContain("<h1>Page not found</h1>");
     expect(res.body).not.toContain("<h2>Page not found</h2>");

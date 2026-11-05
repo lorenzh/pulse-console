@@ -126,7 +126,7 @@ describe("confirmation families", () => {
 
       const replay = await postForm(c, path, body);
       expect(replay.status).toBe(409);
-      expect(replay.body).toContain("<h2>Already submitted</h2>");
+      expect(replay.body).toContain('<h2 class="callout-title">Already submitted</h2>');
       expect(recorder.actions).toHaveLength(1);
     });
   }
@@ -195,7 +195,7 @@ describe("target changes", () => {
       confirm_name: "Checkout API",
     });
     expect(res.status).toBe(409);
-    expect(res.body).toContain("<h2>Changed since you opened it</h2>");
+    expect(res.body).toContain('<h2 class="callout-title">Changed since you opened it</h2>');
     expect(res.body).toContain('value="Checkout API"');
     expect(res.body).toContain('name="revision" value="rev-2"');
     const fresh = formTokenOf(res.body, TYPED_PATH);

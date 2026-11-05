@@ -152,9 +152,110 @@ describe("app routes", () => {
     expect(res.headers.get("content-type")).toBe("text/css; charset=utf-8");
     expectSecurityHeaders(res);
     const css = await res.text();
-    expect(css).toContain(":focus-visible");
-    expect(css).toContain("\na, a:visited { color: #1b4f9c; }\n");
-    expect(css).toContain("\nform + form { margin-top: 1rem; }\n");
+    expect(css).toContain(
+      ":focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }",
+    );
+    for (const part of [
+      "color-scheme: light dark",
+      "@media (prefers-color-scheme: dark)",
+      "--bg: #f2eeec",
+      "--bg: #271b32",
+      "--error: #a4262c",
+      "--error: #f2a7ab",
+      "--touch: 44px",
+      "[hidden] { display: none !important; }",
+      '--font-sans: "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif',
+      '--font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      "@media (max-width: 1180px) {\n  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }",
+      "@media (max-width: 900px) {\n  dl.settings, .settings { grid-template-columns: minmax(0, 1fr); }\n  .grid-2, .grid-4, .form-grid { grid-template-columns: minmax(0, 1fr); }",
+      "@media (max-width: 719px) {\n  .shell { grid-template-columns: minmax(0, 1fr); }",
+      "main.shell-main { padding: 20px 16px 40px; }",
+      ".sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px;",
+      ".shell { display: grid; grid-template-columns: 236px minmax(0, 1fr);",
+    ]) {
+      expect(css).toContain(part);
+    }
+    expect(css.startsWith("[hidden] { display: none !important; }\n")).toBe(true);
+    expect(css.split("@font-face").length - 1).toBe(7);
+    expect(css.split("font-display: swap").length - 1).toBe(7);
+    expect(css.split("url(").length - 1).toBe(7);
+    for (const url of [
+      'url("/fonts/space-grotesk-latin-400-normal.woff2") format("woff2")',
+      'url("/fonts/space-grotesk-latin-500-normal.woff2") format("woff2")',
+      'url("/fonts/space-grotesk-latin-600-normal.woff2") format("woff2")',
+      'url("/fonts/space-grotesk-latin-700-normal.woff2") format("woff2")',
+      'url("/fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2")',
+      'url("/fonts/jetbrains-mono-latin-500-normal.woff2") format("woff2")',
+      'url("/fonts/jetbrains-mono-latin-600-normal.woff2") format("woff2")',
+    ]) {
+      expect(css.split(url).length - 1).toBe(1);
+    }
+    for (const banned of [
+      "@import",
+      "data:",
+      "local(",
+      "1b4f9c",
+      "e3a008",
+      "overflow-x: hidden",
+      "overflow: hidden; }\nbody",
+      "outline-offset: -",
+    ]) {
+      expect(css).not.toContain(banned);
+    }
+    expect(css).not.toMatch(/(?:^|\n)(?:html|body|:root)[^{]*\{[^}]*overflow(?:-x)?: hidden/);
+    expect(Buffer.byteLength(css)).toBeLessThanOrEqual(49152);
+  });
+
+  test("GET /console.css holds every R3 :visited rule with its color, none inside @media", async () => {
+    const { base } = await start();
+    const css = await (await fetch(`${base}/console.css`)).text();
+    const expected: Record<string, string> = {
+      "a:visited": "var(--accent-text)",
+      "a.button:visited": "var(--on-strong)",
+      "a.button.secondary:visited": "var(--text)",
+      "a.button.ghost:visited": "var(--text)",
+      "a.button.danger:visited": "var(--bg)",
+      ".callout a:not(.button):visited": "var(--text)",
+      ".nav-item:visited": "var(--lead)",
+      '.nav-item[aria-current="page"]:visited': "var(--text)",
+      ".breadcrumbs a:visited": "var(--muted)",
+    };
+    const seen = new Map<string, string>();
+    const tokens = css.match(/[{}]|[^{}]+/g) ?? [];
+    let depth = 0;
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i] ?? "";
+      if (token === "}") {
+        depth -= 1;
+        continue;
+      }
+      if (token === "{" || tokens[i + 1] !== "{") continue;
+      const body = tokens[i + 2] ?? "";
+      if (tokens[i + 3] !== "}" || body === "{" || body === "}") {
+        depth += 1;
+        i += 1;
+        continue;
+      }
+      const parts = token
+        .split(",")
+        .map((p) => p.trim())
+        .filter((p) => p.includes(":visited"));
+      if (parts.length > 0) expect(depth).toBe(0);
+      const color = body
+        .split(";")
+        .map((d) => d.trim())
+        .find((d) => d.startsWith("color:"))
+        ?.slice("color:".length)
+        .trim();
+      for (const part of parts) {
+        expect(Object.keys(expected)).toContain(part);
+        expect(color).toBe(expected[part]);
+        seen.set(part, color ?? "");
+      }
+      i += 3;
+    }
+    const byText = (x: string, y: string) => x.localeCompare(y);
+    expect([...seen.keys()].sort(byText)).toEqual(Object.keys(expected).sort(byText));
   });
 });
 

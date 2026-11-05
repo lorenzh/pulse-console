@@ -1,4 +1,5 @@
 import { escapeHtml } from "@lorenzh/pulse-kit";
+import { callout } from "./states.ts";
 
 // The one script element of the console. Only the shell sets `hasScript`.
 const SCRIPT_ELEMENT = `\n    <script src="/console.js" defer></script>`;
@@ -17,16 +18,22 @@ export function documentHead(view: {
   </head>`;
 }
 
+/** The pulse wordmark of the shell sidebar and the plain header. It is not a link. */
+export function wordmark(): string {
+  return `<p class="wordmark"><span class="wordmark-name">pulse</span><span class="cursor" aria-hidden="true"></span><span class="pill">self-hosted</span></p>`;
+}
+
 /** The plain document of setup and sign-in: no shell and no script element. */
 export function plainDocument(title: string, body: string): string {
   return `<!doctype html>
 <html lang="en">
 ${documentHead({ title, instanceName: "pulse Console", hasScript: false })}
-  <body>
-    <main>
-      <h1>${escapeHtml(title)}</h1>
+  <body class="plain">
+<header class="plain-head">${wordmark()}</header>
+<main class="plain-main"><div class="panel plain-panel">
+<h1>${escapeHtml(title)}</h1>
 ${body}
-    </main>
+</div></main>
   </body>
 </html>
 `;
@@ -101,11 +108,12 @@ export function submitButton(view: {
   busyLabel: string;
   name?: string | undefined;
   value?: string | undefined;
-  variant?: "primary" | "secondary" | undefined;
+  variant?: "primary" | "secondary" | "ghost" | "danger" | undefined;
 }): string {
   const name = view.name === undefined ? "" : ` name="${escapeHtml(view.name)}"`;
   const value = view.value === undefined ? "" : ` value="${escapeHtml(view.value)}"`;
-  const cls = view.variant === "secondary" ? ` class="secondary"` : "";
+  const cls =
+    view.variant === undefined || view.variant === "primary" ? "" : ` class="${view.variant}"`;
   return `<button type="submit"${name}${value}${cls} data-busy-label="${escapeHtml(view.busyLabel)}">${escapeHtml(view.label)}</button>`;
 }
 
@@ -115,11 +123,10 @@ export function formErrorSummary(errors: ReadonlyArray<{ name: string; text: str
   const items = errors
     .map((e) => `<li><a href="#field-${escapeHtml(e.name)}">${escapeHtml(e.text)}</a></li>`)
     .join("\n");
-  return `<div class="error-summary" role="alert">
-<h2>There is a problem</h2>
-<ul>
-${items}
-</ul>
-</div>
-`;
+  return callout({
+    kind: "error",
+    title: "There is a problem",
+    body: `<ul class="error-summary">\n${items}\n</ul>\n`,
+    role: "alert",
+  });
 }

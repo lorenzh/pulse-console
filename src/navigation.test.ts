@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { NAVIGATION, visibleNavigation } from "./navigation.ts";
+import { NAVIGATION, navigationGroups, visibleNavigation } from "./navigation.ts";
 import type { ConsoleRole } from "./roles.ts";
 import { shellPage } from "./shell.ts";
 
@@ -76,17 +76,40 @@ describe("navigation registry", () => {
       title: "Overview",
       body: "",
     });
-    expect(html.match(/<a href="[^"]*"/g)).toEqual([
+    expect(html.match(/<a (?:class="nav-item" )?href="[^"]*"/g)).toEqual([
+      '<a class="nav-item" href="/"',
+      '<a class="nav-item" href="/checks"',
+      '<a class="nav-item" href="/tokens"',
+      '<a class="nav-item" href="/probes"',
+      '<a class="nav-item" href="/team"',
       '<a href="/account/security"',
-      '<a href="/"',
-      '<a href="/checks"',
-      '<a href="/tokens"',
-      '<a href="/probes"',
-      '<a href="/team"',
     ]);
     for (const path of ["/incidents", "/system"]) {
       expect(html).not.toContain(`href="${path}"`);
     }
     expect(html).not.toContain("Incidents");
+  });
+});
+
+describe("navigationGroups", () => {
+  test("splits admin entries into the instance group in registry order", () => {
+    const groups = navigationGroups(visibleNavigation("owner", allAvailable));
+    expect(groups.main.map((e) => e.label)).toEqual([
+      "Overview",
+      "Checks",
+      "Incidents",
+      "Maintenance",
+    ]);
+    expect(groups.instance.map((e) => e.label)).toEqual([
+      "Tokens",
+      "Probes",
+      "Team",
+      "Activity",
+      "System",
+    ]);
+  });
+
+  test("a member has an empty instance group", () => {
+    expect(navigationGroups(visibleNavigation("member")).instance).toEqual([]);
   });
 });

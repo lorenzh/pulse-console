@@ -39,12 +39,12 @@ function expectAccountShell(res: Reply, title: string): void {
   expect(countOf(res.body, "<h1>")).toBe(1);
   expect(res.body).toContain(`<h1>${title}</h1>`);
   expect(res.body).toContain(`<title>${title}`);
-  expect(countOf(res.body, '<header class="shell-header">')).toBe(1);
+  expect(countOf(res.body, '<header class="sidebar">')).toBe(1);
   expect(countOf(res.body, '<nav aria-label="Main">')).toBe(1);
   expect(countOf(res.body, "<script")).toBe(1);
   expect(res.body).toContain('<script src="/console.js" defer></script>');
-  expect(res.body).toContain('<a href="/">Overview</a>');
-  expect(res.body).not.toContain("aria-current");
+  expect(res.body).toContain('<a class="nav-item" href="/"><svg class="icon"');
+  expect(res.body).not.toMatch(/class="nav-item"[^>]*aria-current/);
   expect(res.body).toContain(
     'Signed in as Owner <span class="account-email">(owner@example.com)</span>',
   );
@@ -134,8 +134,9 @@ describe("account pages in the signed-in shell", () => {
     const c = await signedIn({ isViewer: true });
     const res = await getPage(c, "/account/security");
     expect(res.status).toBe(200);
-    expect(res.body).toContain('<a href="/">Overview</a>');
+    expect(res.body).toContain("<span>Overview</span></a>");
     expect(res.body).not.toContain(">Team<");
+    expect(res.body).not.toContain("Instance");
     expect(res.body).toContain("Role: Viewer");
   });
 
@@ -220,7 +221,7 @@ describe("account pages outside the full stage", () => {
     const res = await getPage(c, "/account/security");
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/account/authenticator");
-    expect(res.body).not.toContain("shell-header");
+    expect(res.body).not.toContain('class="sidebar"');
   });
 
   test("a factor-stage session is sent to /sign-in/factor", async () => {
@@ -232,6 +233,6 @@ describe("account pages outside the full stage", () => {
     const res = await getPage(c, "/account/sessions");
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/sign-in/factor");
-    expect(res.body).not.toContain("shell-header");
+    expect(res.body).not.toContain('class="sidebar"');
   });
 });
