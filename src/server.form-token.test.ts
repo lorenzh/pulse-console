@@ -23,6 +23,7 @@ import { createMetrics, type Metrics } from "./metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { createConsoleServer, listen } from "./server.ts";
 import { createSetupGate } from "./setup-code.ts";
+import { createTeamStore } from "./team-store.ts";
 
 const PASSWORD = "form-token-password-sentinel-42";
 const EMAIL = "owner@example.com";
@@ -114,6 +115,7 @@ async function startConsole(isSetUp: boolean): Promise<Console> {
     adminToken: TOKEN,
     store,
     factorStore: createFactorStore(db),
+    teamStore: createTeamStore(db),
     secretKey: undefined,
     gate: isSetUp ? undefined : setup.gate,
     now: () => START,

@@ -15,6 +15,7 @@ import { createFactorStore } from "./factor-store.ts";
 import { createMetrics, type Metrics } from "./metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { createConsoleServer, listen } from "./server.ts";
+import { createTeamStore } from "./team-store.ts";
 
 export const PASSWORD = "factor-password-sentinel-42";
 export const EMAIL = "owner-factor@example.com";
@@ -109,6 +110,7 @@ export async function startConsole(
     adminToken: undefined,
     store,
     factorStore: createFactorStore(db),
+    teamStore: createTeamStore(db),
     secretKey: opts.key === null ? undefined : (opts.key ?? KEY),
     gate: undefined,
     now: () => clock.now,

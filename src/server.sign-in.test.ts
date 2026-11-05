@@ -13,6 +13,7 @@ import { createMetrics, type Metrics } from "./metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { sealSecret } from "./secret-box.ts";
 import { createConsoleServer, listen } from "./server.ts";
+import { createTeamStore } from "./team-store.ts";
 
 const TEST_SECRET_KEY = Uint8Array.from(Buffer.from("0123456789abcdef".repeat(4), "hex"));
 
@@ -121,6 +122,7 @@ async function startConsole(
     adminToken: undefined,
     store,
     factorStore: createFactorStore(db),
+    teamStore: createTeamStore(db),
     secretKey: TEST_SECRET_KEY,
     gate: undefined,
     now: () => clock.now,

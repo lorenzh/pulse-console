@@ -181,9 +181,11 @@ async function checkLayout(env: Env, browser: Browser, width: number, height: nu
     }
   }
   env.target.current = { name: "Checkout API", revision: "rev-1" };
+  await page.goto(`${base}/team`);
+  await assertFits(page, width, `${width}px team`);
   assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
   await context.close();
-  ok(`${width} x ${height}: sign-in, 4 Overview states, 403 and every fixture page fit`);
+  ok(`${width} x ${height}: sign-in, 4 Overview states, 403, Team and every fixture page fit`);
 }
 
 async function axeOn(page: Page, url: string, label: string): Promise<void> {
@@ -203,6 +205,7 @@ async function checkAxe(env: Env, browser: Browser): Promise<void> {
   await signIn(page, env);
   await axeOn(page, `${base}/`, "Overview");
   await axeOn(page, `${base}/does-not-exist`, "shell 404");
+  await axeOn(page, `${base}/team`, "Team");
   env.role.current = "viewer";
   await axeOn(page, `${base}/__test/states/forbidden`, "shell 403");
   env.role.current = "owner";

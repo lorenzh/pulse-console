@@ -47,7 +47,11 @@ describe("setup transaction", () => {
     expect(store.instance()).toBeUndefined();
     const result = store.completeSetup(OWNER, API, 1000);
     expect(result.ok).toBe(true);
-    expect(store.instance()).toEqual({ apiUrl: API, setupCompletedAt: 1000 });
+    expect(store.instance()).toEqual({
+      apiUrl: API,
+      setupCompletedAt: 1000,
+      isTwoFactorRequiredForAll: false,
+    });
     expect(count(db, "users")).toBe(1);
     expect(count(db, "instance")).toBe(1);
     const user = store.userByEmail("owner@example.com");
@@ -82,7 +86,11 @@ describe("setup transaction", () => {
       reason: "already-complete",
     });
     expect(count(db, "users")).toBe(1);
-    expect(first.instance()).toEqual({ apiUrl: API, setupCompletedAt: 1000 });
+    expect(first.instance()).toEqual({
+      apiUrl: API,
+      setupCompletedAt: 1000,
+      isTwoFactorRequiredForAll: false,
+    });
   });
 
   test("a failed transaction writes neither the owner nor the instance", () => {
@@ -245,4 +253,28 @@ test("sessionDigest is the SHA-256 hex digest", () => {
   expect(sessionDigest("abc")).toBe(
     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
   );
+});
+
+describe("stored roles and the instance switch", () => {
+  test("users carry their stored role; the switch reads live", () => {
+    const { db } = fresh();
+    const store = createAccountStore(db);
+    store.completeSetup(OWNER, API, 1000);
+    db.run(
+      "INSERT INTO users (email, name, password_hash, role, created_at) VALUES ('v@example.com', 'V', 'h', 'viewer', 1)",
+    );
+    expect(store.userByEmail("v@example.com")?.role).toBe("viewer");
+    expect(store.userByEmail(OWNER.email)?.role).toBe("owner");
+    db.run("UPDATE instance SET require_2fa_all = 1");
+    expect(store.instance()?.isTwoFactorRequiredForAll).toBe(true);
+  });
+
+  test("an unknown stored role throws instead of being cast", () => {
+    const { db } = fresh();
+    const store = createAccountStore(db);
+    store.completeSetup(OWNER, API, 1000);
+    db.run("DROP TRIGGER users_role_update");
+    db.run("UPDATE users SET role = 'superuser'");
+    expect(() => store.userByEmail(OWNER.email)).toThrow("invalid role");
+  });
 });

@@ -18,6 +18,7 @@ export type PathLabel =
   | "/account/sessions"
   | "/account/sessions/sign-out-all"
   | "/console.js"
+  | "/team"
   | "other";
 
 export type AuthKind =

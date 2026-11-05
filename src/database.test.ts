@@ -82,9 +82,9 @@ function pragma(db: Database, name: string): unknown {
 }
 
 describe("openDatabase", () => {
-  test("a new file runs migrations 1 and 2 and sets the pragmas", () => {
+  test("a new file runs migrations 1 to 3 and sets the pragmas", () => {
     const db = opened(tempPath());
-    expect(pragma(db, "user_version")).toBe(2);
+    expect(pragma(db, "user_version")).toBe(3);
     expect(pragma(db, "journal_mode")).toBe("wal");
     expect(pragma(db, "foreign_keys")).toBe(1);
     expect(pragma(db, "busy_timeout")).toBe(5000);
@@ -97,8 +97,11 @@ describe("openDatabase", () => {
     expect(tables).toEqual([
       "authenticators",
       "instance",
+      "invites",
       "pending_authenticators",
+      "people_events",
       "recovery_codes",
+      "reset_links",
       "sessions",
       "users",
     ]);
@@ -119,15 +122,49 @@ describe("openDatabase", () => {
       "authenticators.user_id",
       "instance.api_url",
       "instance.id",
+      "instance.require_2fa_all",
       "instance.setup_completed_at",
+      "invites.accepted_user_id",
+      "invites.created_at",
+      "invites.created_by",
+      "invites.email",
+      "invites.expires_at",
+      "invites.id",
+      "invites.revoked_at",
+      "invites.role",
+      "invites.token_digest",
+      "invites.used_at",
       "pending_authenticators.created_at",
       "pending_authenticators.secret",
       "pending_authenticators.session_digest",
       "pending_authenticators.user_id",
+      "people_events.action",
+      "people_events.actor_email",
+      "people_events.actor_kind",
+      "people_events.actor_name",
+      "people_events.actor_user_id",
+      "people_events.at",
+      "people_events.from_role",
+      "people_events.id",
+      "people_events.target_email",
+      "people_events.target_id",
+      "people_events.target_kind",
+      "people_events.target_name",
+      "people_events.to_role",
+      "people_events.value",
       "recovery_codes.digest",
       "recovery_codes.id",
       "recovery_codes.used_at",
       "recovery_codes.user_id",
+      "reset_links.created_at",
+      "reset_links.expires_at",
+      "reset_links.id",
+      "reset_links.issued_by",
+      "reset_links.kind",
+      "reset_links.target_role",
+      "reset_links.token_digest",
+      "reset_links.used_at",
+      "reset_links.user_id",
       "sessions.created_at",
       "sessions.csrf_token",
       "sessions.id_digest",
@@ -201,10 +238,10 @@ describe("openDatabase", () => {
   test("a newer schema version fails with the literal text", () => {
     const path = tempPath();
     const db = new Database(path);
-    db.run("PRAGMA user_version = 3");
+    db.run("PRAGMA user_version = 4");
     db.close();
     expect(failure(path)).toBe(
-      `PULSE_CONSOLE_DB=${path}: schema version 3 is newer than this console (2)`,
+      `PULSE_CONSOLE_DB=${path}: schema version 4 is newer than this console (3)`,
     );
   });
 
@@ -224,7 +261,7 @@ describe("openDatabase", () => {
     );
     legacy.close();
     const db = opened(path);
-    expect(pragma(db, "user_version")).toBe(2);
+    expect(pragma(db, "user_version")).toBe(3);
     expect(db.query("SELECT count(*) AS n FROM sessions").get()).toEqual({ n: 0 });
     expect(db.query("SELECT email, password_hash, role FROM users").all()).toEqual([
       // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a fixture hash, not a password
@@ -259,5 +296,88 @@ describe("openDatabase", () => {
     ).toThrow();
     db.run(`INSERT INTO recovery_codes (user_id, digest) VALUES (1, '${"a".repeat(64)}')`);
     expect(db.query("SELECT count(*) AS n FROM recovery_codes").get()).toEqual({ n: 1 });
+  });
+
+  test("a schema-2 file migrates to 3 and keeps owner, hash, sessions and factors", () => {
+    const path = tempPath();
+    const legacy = new Database(path);
+    legacy.run(SCHEMA_1_SQL);
+    legacy.run("PRAGMA user_version = 1");
+    legacy.close();
+    // Migration 2 runs on this open; then the file is put back to version 2 with data in it.
+    const two = opened(path);
+    two.run("DROP TRIGGER users_role_insert");
+    two.run("DROP TRIGGER users_role_update");
+    two.run("DROP TRIGGER people_events_no_update");
+    two.run("DROP TRIGGER people_events_no_delete");
+    two.run("DROP TABLE invites");
+    two.run("DROP TABLE reset_links");
+    two.run("DROP TABLE people_events");
+    two.run("ALTER TABLE instance DROP COLUMN require_2fa_all");
+    two.run("PRAGMA user_version = 2");
+    two.run(
+      "INSERT INTO users (id, email, name, password_hash, role, created_at) VALUES (1, 'owner@example.com', 'Owner', '$argon2id$v=19$fixture', 'owner', 5)",
+    );
+    two.run(
+      "INSERT INTO instance (id, api_url, setup_completed_at) VALUES (1, 'http://api:3000', 5)",
+    );
+    two.run(
+      "INSERT INTO sessions (id_digest, user_id, csrf_token, created_at, last_seen_at, stage) VALUES ('d1', 1, 'c1', 5, 6, 'full')",
+    );
+    two.run(
+      "INSERT INTO authenticators (user_id, secret, last_step, confirmed_at) VALUES (1, 'sealed', 7, 5)",
+    );
+    two.run(`INSERT INTO recovery_codes (user_id, digest) VALUES (1, '${"b".repeat(64)}')`);
+    open.splice(open.indexOf(two), 1);
+    two.close();
+    const db = opened(path);
+    expect(pragma(db, "user_version")).toBe(3);
+    expect(db.query("SELECT email, password_hash, role FROM users").all()).toEqual([
+      // eslint-disable-next-line sonarjs/no-hardcoded-passwords -- a fixture hash, not a password
+      { email: "owner@example.com", password_hash: "$argon2id$v=19$fixture", role: "owner" },
+    ]);
+    expect(db.query("SELECT id_digest, stage, last_seen_at FROM sessions").all()).toEqual([
+      { id_digest: "d1", stage: "full", last_seen_at: 6 },
+    ]);
+    expect(db.query("SELECT secret, last_step FROM authenticators").all()).toEqual([
+      { secret: "sealed", last_step: 7 },
+    ]);
+    expect(db.query("SELECT digest FROM recovery_codes").all()).toEqual([
+      { digest: "b".repeat(64) },
+    ]);
+    expect(db.query("SELECT require_2fa_all FROM instance").all()).toEqual([
+      { require_2fa_all: 0 },
+    ]);
+  });
+
+  test("migration 3 refuses an unknown role, a second owner and an owner invite", () => {
+    const db = opened(tempPath());
+    const insert = (email: string, role: string) =>
+      db.run(
+        `INSERT INTO users (email, name, password_hash, role, created_at) VALUES ('${email}', 'N', 'h', '${role}', 1)`,
+      );
+    expect(() => insert("s@example.com", "superuser")).toThrow("invalid role");
+    insert("o@example.com", "owner");
+    insert("m@example.com", "member");
+    expect(() => insert("o2@example.com", "owner")).toThrow();
+    expect(() => db.run("UPDATE users SET role = 'superuser' WHERE role = 'member'")).toThrow(
+      "invalid role",
+    );
+    expect(() =>
+      db.run(
+        "INSERT INTO invites (token_digest, email, role, created_at, expires_at) VALUES ('d', 'x@example.com', 'owner', 1, 2)",
+      ),
+    ).toThrow();
+    db.run(
+      "INSERT INTO instance (id, api_url, setup_completed_at) VALUES (1, 'http://api:3000', 1)",
+    );
+    expect(() => db.run("UPDATE instance SET require_2fa_all = 2")).toThrow();
+    expect(
+      db
+        .query<{ n: number }, []>(
+          "SELECT count(*) AS n FROM sqlite_master WHERE name = 'sqlite_sequence'",
+        )
+        .get(),
+    ).toEqual({ n: 0 });
   });
 });

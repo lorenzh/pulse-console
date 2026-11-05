@@ -8,6 +8,7 @@ import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts"
 import { createConsoleServer, listen } from "./server.ts";
 import { readSettings } from "./settings.ts";
 import { createSetupGate } from "./setup-code.ts";
+import { createTeamStore } from "./team-store.ts";
 
 const SHUTDOWN_TIMEOUT_MS = 5000;
 const EXIT_STARTUP = 2;
@@ -76,6 +77,7 @@ async function start(): Promise<void> {
     adminToken: settings.adminToken,
     store,
     factorStore: createFactorStore(db),
+    teamStore: createTeamStore(db),
     secretKey: settings.secretKey,
     gate,
     now: Date.now,

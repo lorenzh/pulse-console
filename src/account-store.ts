@@ -1,9 +1,12 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { type ConsoleRole, parseRole } from "./roles.ts";
 
 export interface Instance {
   apiUrl: string;
   setupCompletedAt: number;
+  /** The Owner's organisation switch: every role must have a second factor. */
+  isTwoFactorRequiredForAll: boolean;
 }
 
 export interface User {
@@ -11,7 +14,7 @@ export interface User {
   email: string;
   name: string;
   passwordHash: string;
-  role: "owner";
+  role: ConsoleRole;
 }
 
 export interface NewOwner {
@@ -132,32 +135,33 @@ interface UserRow {
   email: string;
   name: string;
   password_hash: string;
+  role: string;
 }
 
 function toUser(row: UserRow | null): User | undefined {
   if (row === null) return undefined;
-  // Migration 1 allows only the owner role, which completeSetup writes.
   return {
     id: row.id,
     email: row.email,
     name: row.name,
     passwordHash: row.password_hash,
-    role: "owner",
+    role: parseRole(row.role),
   };
 }
 
 /** The account store over an open console database. */
 export function createAccountStore(db: Database): AccountStore {
-  const selectInstance = db.query<{ api_url: string; setup_completed_at: number }, []>(
-    "SELECT api_url, setup_completed_at FROM instance WHERE id = 1",
-  );
+  const selectInstance = db.query<
+    { api_url: string; setup_completed_at: number; require_2fa_all: number },
+    []
+  >("SELECT api_url, setup_completed_at, require_2fa_all FROM instance WHERE id = 1");
   const insertOwner = db.query<{ id: number }, [string, string, string, number]>(
     "INSERT INTO users (email, name, password_hash, role, created_at) VALUES (?, ?, ?, 'owner', ?) RETURNING id",
   );
   const insertInstance = db.query<unknown, [string, number]>(
     "INSERT INTO instance (id, api_url, setup_completed_at) VALUES (1, ?, ?)",
   );
-  const userColumns = "SELECT id, email, name, password_hash FROM users";
+  const userColumns = "SELECT id, email, name, password_hash, role FROM users";
   const selectUserByEmail = db.query<UserRow, [string]>(`${userColumns} WHERE email = ?`);
   const selectUserById = db.query<UserRow, [number]>(`${userColumns} WHERE id = ?`);
   const insertSession = db.query<
@@ -205,7 +209,11 @@ export function createAccountStore(db: Database): AccountStore {
       const row = selectInstance.get();
       return row === null
         ? undefined
-        : { apiUrl: row.api_url, setupCompletedAt: row.setup_completed_at };
+        : {
+            apiUrl: row.api_url,
+            setupCompletedAt: row.setup_completed_at,
+            isTwoFactorRequiredForAll: row.require_2fa_all === 1,
+          };
     },
     completeSetup: (owner, apiUrl, now) => setup.immediate(owner, apiUrl, now),
     userByEmail: (email) => toUser(selectUserByEmail.get(email)),

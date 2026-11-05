@@ -53,15 +53,31 @@ export function tokenRejectedBanner(): string {
   );
 }
 
-/** The 403 body. */
-export function forbiddenState(view: { requiredRole: ConsoleRole; role: ConsoleRole }): string {
-  return state(
-    "error",
-    "Access denied",
-    paragraph(
-      `This page needs the ${roleLabel(view.requiredRole)} role or higher. Your role is ${roleLabel(view.role)}.`,
-    ),
-  );
+/** A 403 whose reason is the target, not the actor's role. */
+export type ForbiddenTarget = "owner-target" | "transfer-not-admin";
+
+function forbiddenTargetText(target: ForbiddenTarget): string {
+  switch (target) {
+    case "owner-target":
+      return "No one can change the owner account in the console.";
+    case "transfer-not-admin":
+      return "Only an admin can become the owner.";
+    default: {
+      const unknown: never = target;
+      return unknown;
+    }
+  }
+}
+
+/** The 403 body: the role sentence, or the fixed text of a target denial. */
+export function forbiddenState(
+  view: { requiredRole: ConsoleRole; role: ConsoleRole } | { target: ForbiddenTarget },
+): string {
+  const text =
+    "target" in view
+      ? forbiddenTargetText(view.target)
+      : `This page needs the ${roleLabel(view.requiredRole)} role or higher. Your role is ${roleLabel(view.role)}.`;
+  return state("error", "Access denied", paragraph(text));
 }
 
 /** The 404 body. */

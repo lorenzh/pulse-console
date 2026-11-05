@@ -12,6 +12,7 @@ import { createFactorStore } from "./factor-store.ts";
 import { createMetrics, type Metrics } from "./metrics.ts";
 import { createConsoleServer, listen, TestRouteError } from "./server.ts";
 import { createSetupGate } from "./setup-code.ts";
+import { createTeamStore } from "./team-store.ts";
 
 const TEST_SECRET_KEY = Uint8Array.from(Buffer.from("0123456789abcdef".repeat(4), "hex"));
 
@@ -59,6 +60,7 @@ function depsFor(metrics: Metrics): Parameters<typeof createConsoleServer>[0] {
     adminToken: undefined,
     store: createAccountStore(db),
     factorStore: createFactorStore(db),
+    teamStore: createTeamStore(db),
     secretKey: TEST_SECRET_KEY,
     gate: createSetupGate({ now: () => 0, randomBytes: bytes }).gate,
     now: () => 0,

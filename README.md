@@ -13,7 +13,7 @@ The console is the fifth service of the pulse Compose stack. Today it serves:
 - a single-use form token on every POST form, including the account and second-factor forms: a form sent twice changes nothing the second time;
 - the stylesheet `/console.css`, the busy-button script `/console.js` and the ops routes `/healthz`, `/readyz` and `/metrics`.
 
-Password recovery, roles and passkeys are not part of the console yet. Checks, incidents, tokens and the notify and status settings come in later items of [#460](https://github.com/lorenzh/pulse-meta/issues/460).
+Each person has one console role: Owner, Admin, Member or Viewer. The role is read from the database on every request, and a policy decides what each role may do; the Team page (`/team`, Admin and Owner) lists everyone and the pending invites. Roles, the matrix and the two-factor rule are in [docs/team.md](docs/team.md). Invites, reset links, role changes and owner recovery follow in later steps of [#564](https://github.com/lorenzh/pulse-meta/issues/564). Passkeys are not part of the console yet. Checks, incidents, tokens and the notify and status settings come in later items of [#460](https://github.com/lorenzh/pulse-meta/issues/460).
 
 ## First-run setup
 
@@ -85,36 +85,37 @@ An invalid setting stops the start with exit code 2 and one line on stderr. Ever
 
 ## HTTP endpoints
 
-| Path                                  | Before setup                                                     | After setup                                                                                             |
-| ------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `GET /`                               | `303` to `/setup`                                                | `200` Overview with a full session, else the access gate                                                |
-| `GET /setup`                          | `200`, the setup code form                                       | `404`                                                                                                   |
-| `POST /setup`                         | `303` to `/setup/owner` with a grant; `401`, `409`, `422`, `429` | `404`                                                                                                   |
-| `GET /setup/owner`                    | `200` with a grant, else `303` to `/setup`                       | `404`                                                                                                   |
-| `POST /setup/owner`                   | test: `200` or `502`; finish: `303`, `409` or `500`              | `404`                                                                                                   |
-| `GET /sign-in`                        | `303` to `/setup`                                                | `200`, the sign-in form; `303` to `/` when signed in                                                    |
-| `POST /sign-in`                       | `404`                                                            | `303` to `/sign-in/factor` or `/account/authenticator`; `401`, `422`, `429`                             |
-| `POST /sign-out`                      | `303` to `/sign-in`                                              | `303` to `/sign-in`; ends the session                                                                   |
-| `GET /sign-in/factor`                 | `404`                                                            | `200`, the TOTP and recovery-code forms (`factor` session)                                              |
-| `POST /sign-in/factor`                | `404`                                                            | `303` to `next`; `401`, `422`, `429`, `500`, `503`                                                      |
-| `GET /account/authenticator`          | `404`                                                            | `200`, setup key or replace form (`enrol` or full session); `503` without the key                       |
-| `POST /account/authenticator`         | `404`                                                            | `action=new`: `303`; `action=confirm`: `200` with the recovery codes; `401`, `409`, `422`, `429`, `503` |
-| `GET /account/security`               | `404`                                                            | `200`, authenticator date, recovery codes left, links (full session)                                    |
-| `GET /account/recovery-codes`         | `404`                                                            | `200`, the password confirmation for new codes                                                          |
-| `POST /account/recovery-codes`        | `404`                                                            | `200` with 10 new codes; the old ones stop working; `401`, `422`, `429`                                 |
-| `GET /account/sessions`               | `404`                                                            | `200`, the live full sessions with "This browser"                                                       |
-| `GET /account/sessions/sign-out-all`  | `404`                                                            | `200`, the confirmation                                                                                 |
-| `POST /account/sessions/sign-out-all` | `404`                                                            | `303` to `/account/sessions?signed-out=others`; ends every other session, keeps this one                |
-| `GET /console.css`                    | `200`, `text/css`                                                | same                                                                                                    |
-| `GET /console.js`                     | `200`, `text/javascript`                                         | same                                                                                                    |
-| `GET /healthz`                        | `200 ok`                                                         | same                                                                                                    |
-| `GET /readyz`                         | `200 ok`; `503 shutting down` after `SIGTERM`                    | same                                                                                                    |
-| `GET /metrics`                        | Prometheus text                                                  | same                                                                                                    |
-| any other path                        | `404 not found`                                                  | full-session `GET`/`HEAD`: shell `404`; else plain `404`                                                |
+| Path                                  | Before setup                                                     | After setup                                                                                                 |
+| ------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `GET /`                               | `303` to `/setup`                                                | `200` Overview with a full session, else the access gate                                                    |
+| `GET /setup`                          | `200`, the setup code form                                       | `404`                                                                                                       |
+| `POST /setup`                         | `303` to `/setup/owner` with a grant; `401`, `409`, `422`, `429` | `404`                                                                                                       |
+| `GET /setup/owner`                    | `200` with a grant, else `303` to `/setup`                       | `404`                                                                                                       |
+| `POST /setup/owner`                   | test: `200` or `502`; finish: `303`, `409` or `500`              | `404`                                                                                                       |
+| `GET /sign-in`                        | `303` to `/setup`                                                | `200`, the sign-in form; `303` to `/` when signed in                                                        |
+| `POST /sign-in`                       | `404`                                                            | `303` to `/sign-in/factor` or `/account/authenticator`; `401`, `422`, `429`                                 |
+| `POST /sign-out`                      | `303` to `/sign-in`                                              | `303` to `/sign-in`; ends the session                                                                       |
+| `GET /sign-in/factor`                 | `404`                                                            | `200`, the TOTP and recovery-code forms (`factor` session)                                                  |
+| `POST /sign-in/factor`                | `404`                                                            | `303` to `next`; `401`, `422`, `429`, `500`, `503`                                                          |
+| `GET /account/authenticator`          | `404`                                                            | `200`, setup key or replace form (`enrol` or full session); `503` without the key                           |
+| `POST /account/authenticator`         | `404`                                                            | `action=new`: `303`; `action=confirm`: `200` with the recovery codes; `401`, `409`, `422`, `429`, `503`     |
+| `GET /account/security`               | `404`                                                            | `200`, authenticator date, recovery codes left, links (full session)                                        |
+| `GET /account/recovery-codes`         | `404`                                                            | `200`, the password confirmation for new codes                                                              |
+| `POST /account/recovery-codes`        | `404`                                                            | `200` with 10 new codes; the old ones stop working; `401`, `422`, `429`                                     |
+| `GET /team`                           | `303` to `/setup`                                                | `200` for Admin and Owner, the People list and pending invites; `403` `Access denied` for Member and Viewer |
+| `GET /account/sessions`               | `404`                                                            | `200`, the live full sessions with "This browser"                                                           |
+| `GET /account/sessions/sign-out-all`  | `404`                                                            | `200`, the confirmation                                                                                     |
+| `POST /account/sessions/sign-out-all` | `404`                                                            | `303` to `/account/sessions?signed-out=others`; ends every other session, keeps this one                    |
+| `GET /console.css`                    | `200`, `text/css`                                                | same                                                                                                        |
+| `GET /console.js`                     | `200`, `text/javascript`                                         | same                                                                                                        |
+| `GET /healthz`                        | `200 ok`                                                         | same                                                                                                        |
+| `GET /readyz`                         | `200 ok`; `503 shutting down` after `SIGTERM`                    | same                                                                                                        |
+| `GET /metrics`                        | Prometheus text                                                  | same                                                                                                        |
+| any other path                        | `404 not found`                                                  | full-session `GET`/`HEAD`: shell `404`; else plain `404`                                                    |
 
 Every form POST can also answer `409` when its single-use form token is missing, expired or replayed.
 
-`HEAD` works wherever `GET` does; another method on a known path answers `405` with `allow`. A finished setup starts an enrolment session and redirects to `/account/authenticator`. After setup an access gate sends a request without the needed session stage to its step: no session to `/sign-in?next=<path>`, a password-only session to `/sign-in/factor`, an owner without an authenticator to `/account/authenticator`. In loopback mode the app routes answer only a loopback `Host`. Every form POST checks `Origin` and a CSRF token. Cookies, modes, the POST order and the metrics are in [docs/configuration.md](docs/configuration.md). More in [docs/](docs/index.md).
+`HEAD` works wherever `GET` does; another method on a known path answers `405` with `allow`. A finished setup starts an enrolment session and redirects to `/account/authenticator`. After setup an access gate sends a request without the needed session stage to its step: no session to `/sign-in?next=<path>`, a password-only session to `/sign-in/factor`, a user who must have a second factor (Owner, Admin, or everyone when the organisation switch is on) and has none to `/account/authenticator`. In loopback mode the app routes answer only a loopback `Host`. Every form POST checks `Origin` and a CSRF token. Cookies, modes, the POST order and the metrics are in [docs/configuration.md](docs/configuration.md). More in [docs/](docs/index.md).
 
 ## License
 

@@ -21,6 +21,7 @@ import { expectedOrigin, isCsrfTokenValid, isOriginAllowed } from "./request-gua
 import type { ConsoleRole } from "./roles.ts";
 import type { ConsoleMode } from "./settings.ts";
 import type { SetupGate } from "./setup-code.ts";
+import type { TeamStore } from "./team-store.ts";
 
 const REFUSED = "Request refused. Reload the page and try again.";
 const TOKEN_BYTES = 32;
@@ -37,6 +38,7 @@ export interface ConsoleServerDeps {
   adminToken: string | undefined;
   store: AccountStore;
   factorStore: FactorStore;
+  teamStore: TeamStore;
   /** The 32-byte key of PULSE_CONSOLE_SECRET_KEY_FILE; undefined when unset. */
   secretKey: Uint8Array | undefined;
   /** The setup gate; undefined when the console was set up at start. */

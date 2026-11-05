@@ -31,7 +31,7 @@ afterEach(closeAll);
 
 describe("policy", () => {
   test("the owner must have a second factor; signInStage covers every branch", () => {
-    expect(isSecondFactorRequired({ role: "owner" })).toBe(true);
+    expect(isSecondFactorRequired({ role: "owner" }, { isRequiredForAll: false })).toBe(true);
     expect(signInStage({ isRequired: false, hasAuthenticator: false })).toBe("full");
     expect(signInStage({ isRequired: true, hasAuthenticator: false })).toBe("enrol");
     expect(signInStage({ isRequired: true, hasAuthenticator: true })).toBe("factor");

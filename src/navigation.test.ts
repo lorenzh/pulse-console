@@ -3,19 +3,23 @@ import { NAVIGATION, visibleNavigation } from "./navigation.ts";
 import type { ConsoleRole } from "./roles.ts";
 import { shellPage } from "./shell.ts";
 
-const ROLES: ConsoleRole[] = ["viewer", "member", "admin", "owner"];
 const allAvailable = NAVIGATION.map((e) => ({ ...e, isAvailable: true }));
 const labels = (role: ConsoleRole, registry = NAVIGATION) =>
   visibleNavigation(role, registry).map((e) => e.label);
 
 describe("navigation registry", () => {
-  test("has exactly 9 entries, 8 of them unavailable", () => {
+  test("has exactly 9 entries, 7 of them unavailable", () => {
     expect(NAVIGATION).toHaveLength(9);
-    expect(NAVIGATION.filter((e) => !e.isAvailable)).toHaveLength(8);
+    expect(NAVIGATION.filter((e) => !e.isAvailable)).toHaveLength(7);
   });
 
-  test.each(ROLES)("today %s sees only Overview", (role) => {
-    expect(labels(role)).toEqual(["Overview"]);
+  test.each([
+    ["viewer", ["Overview"]],
+    ["member", ["Overview"]],
+    ["admin", ["Overview", "Team"]],
+    ["owner", ["Overview", "Team"]],
+  ] as const)("today %s sees its available entries", (role, expected) => {
+    expect(labels(role)).toEqual([...expected]);
   });
 
   test.each([
@@ -64,7 +68,11 @@ describe("navigation registry", () => {
       title: "Overview",
       body: "",
     });
-    expect(html.match(/<a href="[^"]*"/g)).toEqual(['<a href="/account/security"', '<a href="/"']);
+    expect(html.match(/<a href="[^"]*"/g)).toEqual([
+      '<a href="/account/security"',
+      '<a href="/"',
+      '<a href="/team"',
+    ]);
     for (const path of ["/checks", "/incidents", "/tokens", "/system"]) {
       expect(html).not.toContain(`href="${path}"`);
     }

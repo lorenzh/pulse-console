@@ -81,7 +81,7 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 
 ## End-to-end checks
 
-- `src/server.test.ts`, `src/server.setup.test.ts`, `src/server.sign-in.test.ts`, `src/server.security.test.ts`, `src/server.factor.test.ts`, `src/server.recovery.test.ts`, `src/server.sessions.test.ts` and `src/server.upgrade.test.ts` start the real server on port `0` and drive it over HTTP; `src/main.startup.test.ts` spawns `bun src/main.ts`.
+- `src/server.test.ts`, `src/server.setup.test.ts`, `src/server.sign-in.test.ts`, `src/server.security.test.ts`, `src/server.factor.test.ts`, `src/server.recovery.test.ts`, `src/server.sessions.test.ts`, `src/server.upgrade.test.ts`, `src/server.roles.test.ts` and `src/server.team.test.ts` start the real server on port `0` and drive it over HTTP; `src/main.startup.test.ts` spawns `bun src/main.ts`.
 - The CI job `deploy-dev` starts the dev stack of `pulse-deploy` `main` with this checkout and runs `E2E_CONSOLE_FLOW=two-factor bash e2e/console-setup.sh dev/compose.yaml`. A failure in a two-factor step where the console follows the spec is a deploy defect: hold the issue, never edit deploy from here or weaken the job.
 - A change to an endpoint or a response shape gets such a test; once the console reads the API, the response is typed by the contract.
 - Before handoff of a user-visible change, start the service with `bun start` and exercise the changed behavior once; report the command and result.
@@ -117,7 +117,8 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
   size, repeated fields, CSRF before any other check of the form).
 - Every POST form carries a hidden `form_token` directly after `csrf` (`src/form-tokens.ts`);
   the route uses it up at its commit point, after every other check.
-- The Overview and test shell pages use a `ProtectedRoute` (`src/protected-route.ts`) with a `requiredRole`; the
+- Roles are stored in `users.role` and read on every request. The permission matrix, `minimumRole` and the target rule live in `src/permissions.ts`; a production `ProtectedRoute` takes its `requiredRole` from `routeRole(<action>)`. Team routes live in `src/team-routes.ts`, their pages in `src/team-pages.ts`, their reads in `src/team-store.ts`; every team change appends one row with `appendPeopleEvent` (`src/people-log.ts`) in its own transaction. `test/team-console.ts` starts a console with one stored user per role.
+- The Overview, Team and test shell pages use a `ProtectedRoute` (`src/protected-route.ts`) with a `requiredRole`; the
   dispatcher in `src/server.ts` checks session, POST form, role and form token before its
   handler. Account and second-factor routes use the same session-stage gate and shared form-token store through `src/http-context.ts`. Navigation visibility is never authorization. Test-only routes live in
   `test/fixture-routes.ts` under `/__test/` and reach only a test-created server through

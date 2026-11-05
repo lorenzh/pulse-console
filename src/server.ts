@@ -61,6 +61,7 @@ import {
   signInPage,
 } from "./pages.ts";
 import { isSignInPasswordAcceptable } from "./passwords.ts";
+import { routeRole } from "./permissions.ts";
 import type { PageMethod, PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
 import { isLoopbackHost, safeNext } from "./request-guard.ts";
 import { type ConsoleRole, hasRole } from "./roles.ts";
@@ -74,6 +75,7 @@ import {
   notFoundState,
 } from "./states.ts";
 import { CONSOLE_CSS } from "./styles.ts";
+import { teamRoutes } from "./team-routes.ts";
 import { isSecondFactorRequired, signInStage } from "./two-factor-policy.ts";
 
 export type { ConsoleServerDeps };
@@ -180,10 +182,16 @@ function pathLabel(path: string): PathLabel {
     case "/account/sessions":
     case "/account/sessions/sign-out-all":
     case "/console.js":
+    case "/team":
       return path;
     default:
       return "other";
   }
+}
+
+/** The organisation switch, read live from the instance row. */
+function organisationOf(ctx: Ctx): { isRequiredForAll: boolean } {
+  return { isRequiredForAll: ctx.deps.store.instance()?.isTwoFactorRequiredForAll === true };
 }
 
 /**
@@ -199,7 +207,7 @@ function currentSession(ctx: Ctx): Current | undefined {
   if (user === undefined) return undefined;
   const isMissingFactor =
     session.stage === "full" &&
-    isSecondFactorRequired(user) &&
+    isSecondFactorRequired(user, organisationOf(ctx)) &&
     ctx.deps.factorStore.authenticator(user.id) === undefined;
   return { id, session, user, stage: isMissingFactor ? "enrol" : session.stage };
 }
@@ -331,7 +339,7 @@ function overviewRoute(deps: ConsoleServerDeps): ProtectedRoute {
   return {
     path: "/",
     methods: ["GET"],
-    requiredRole: "viewer",
+    requiredRole: routeRole("overview.view"),
     navId: "overview",
     handle: async () => {
       const apiUrl = deps.store.instance()?.apiUrl ?? deps.defaultApiUrl;
@@ -728,7 +736,7 @@ async function postSignIn(ctx: Ctx): Promise<void> {
 
 function passwordStage(ctx: Ctx, user: User): SessionStage {
   return signInStage({
-    isRequired: isSecondFactorRequired(user),
+    isRequired: isSecondFactorRequired(user, organisationOf(ctx)),
     hasAuthenticator: ctx.deps.factorStore.authenticator(user.id) !== undefined,
   });
 }
@@ -967,6 +975,7 @@ async function handleApp(ctx: Ctx): Promise<void> {
 /** The protected routes: `/` and the test routes, whose keys must be under /__test/. */
 function protectedRoutesOf(deps: ConsoleServerDeps): Map<string, ProtectedRoute> {
   const routes = new Map<string, ProtectedRoute>([["/", overviewRoute(deps)]]);
+  for (const route of teamRoutes(deps)) routes.set(route.path, route);
   for (const [key, route] of deps.testRoutes ?? []) {
     const isProduction = key in ROUTES || OPS_PATHS.includes(key);
     if (!key.startsWith(TEST_PREFIX) || isProduction || route.path !== key) {

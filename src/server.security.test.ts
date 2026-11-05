@@ -18,6 +18,7 @@ import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts"
 import { createConsoleServer, listen } from "./server.ts";
 import type { ConsoleMode } from "./settings.ts";
 import { createSetupGate } from "./setup-code.ts";
+import { createTeamStore } from "./team-store.ts";
 import {
   closeAll,
   csrfIn,
@@ -93,6 +94,7 @@ async function startConsole(
     adminToken: TOKEN,
     store,
     factorStore: createFactorStore(db),
+    teamStore: createTeamStore(db),
     secretKey: TEST_SECRET_KEY,
     gate: setup.gate,
     now: () => 0,
