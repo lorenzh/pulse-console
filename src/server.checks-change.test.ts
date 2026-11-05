@@ -403,6 +403,69 @@ describe("edit and delete targets", () => {
     });
   }
 
+  const grownWeb = {
+    ...checkConfig.checks[0],
+    headers: {
+      Authorization: { env: "PULSE_HEADER_TOKEN" },
+      "X-Api-Key": { keep: true },
+      "X-Other": { keep: true },
+    },
+  };
+  const layoutCases: Array<{ name: string; config: unknown; status: number; text: string }> = [
+    {
+      name: "stale",
+      config: {
+        ...checkConfig,
+        revision: REV_NEW,
+        checks: [grownWeb, ...checkConfig.checks.slice(1)],
+      },
+      status: 409,
+      text: "Changed since you opened it",
+    },
+    {
+      name: "shadowed",
+      config: {
+        ...checkConfig,
+        revision: REV_NEW,
+        shadowed: [{ ...grownWeb, source: "database" }],
+        checks: [{ ...grownWeb, source: "file" }, ...checkConfig.checks.slice(1)],
+      },
+      status: 409,
+      text: "Shadowed by checks.json: only Delete and Export are possible.",
+    },
+  ];
+  for (const tc of layoutCases) {
+    test(`a ${tc.name} refusal after a new literal header keeps the posted env name`, async () => {
+      const api = fakeApi();
+      const c = await teamConsole(api);
+      const page = await getPage(c, "/checks/edit?id=web", c.cookies.admin);
+      const token = formTokenOf(page.body, "/checks/edit?id=web");
+      api.reply("/admin/config", jsonReply(tc.config));
+      api.seen.length = 0;
+      const res = await postForm(
+        c,
+        "/checks/edit?id=web",
+        {
+          csrf: c.csrfs.admin,
+          form_token: token,
+          ...WEB_EDIT,
+          header_0_intent: "replace",
+          header_0_value: HEADER_SECRET,
+          header_1_value: "PULSE_EDITED_TOKEN",
+        },
+        { cookie: c.cookies.admin },
+      );
+      expect(res.status).toBe(tc.status);
+      expect(res.body).toContain(tc.text);
+      expect(res.body).toContain("<dt>header_1_value</dt><dd>PULSE_EDITED_TOKEN</dd>");
+      expect(res.body).toContain(
+        "<dt>header_0_value</dt><dd>Not kept for safety: enter it again.</dd>",
+      );
+      expect(res.body).not.toContain(HEADER_SECRET);
+      expect(calls(api)).toEqual(["GET /admin/config"]);
+    });
+  }
+
   test("a file check answers 409 and an unknown id 404", async () => {
     const api = fakeApi();
     const c = await teamConsole(api);

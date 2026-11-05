@@ -585,12 +585,6 @@ async function showEdit(
   });
 }
 
-/** The stored rows of `id` wherever it now sits, so a refused edit drops the right values. */
-function anyStoredRowsOf(config: AdminConfigResponse, id: string): StoredRows | undefined {
-  const view = [...config.shadowed, ...config.checks].find((check) => check.id === id);
-  return view === undefined ? undefined : storedRowsOf(view);
-}
-
 /** R5 commit order after the dispatcher: read, target, revision, fields, size, guard, PUT. */
 async function editCheck(
   deps: CheckRouteDeps,
@@ -606,15 +600,15 @@ async function editCheck(
   }
   const target = editTargetOf(read.config, id, request.role);
   if (target.kind === "page") {
-    return withKeptInput(
-      target.page,
-      retainedInputOf(request.fields, anyStoredRowsOf(read.config, id)),
-    );
+    return withKeptInput(target.page, retainedInputOf(request.fields, undefined));
+  }
+  const revision = postedRevisionOf(request.fields);
+  // The form was built from an older layout: classify by posted kind, not by the new stored rows.
+  if (revision !== read.config.revision) {
+    return stalePage(retainedInputOf(request.fields, undefined), reopen);
   }
   const stored = storedRowsOf(target.value);
   const input = retainedInputOf(request.fields, stored);
-  const revision = postedRevisionOf(request.fields);
-  if (revision !== read.config.revision) return stalePage(input, reopen);
   const formOf = (errors: readonly FieldError[], status: number): PageResult =>
     editEditorPage(request, { stored, input, errors, revision, status });
   const parsed = parseEditForm(request.fields, target.value);
