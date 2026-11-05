@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { selfToken } from "../test/token-fixtures.ts";
 import { type ConnectionTestDeps, type FetchLike, testConnection } from "./connection-test.ts";
 
 const TOKEN = "console-test-token-0123456789abcdefghij";
@@ -82,8 +83,21 @@ const wire1 = { "x-pulse-contract": "1", "content-type": "application/json" };
 const okConfig = (count = 3): Reply => ({ status: 200, body: configBody(count), headers: wire1 });
 const okTokens: Reply = { status: 200, body: JSON.stringify({ tokens: [] }), headers: wire1 };
 
-type FakeApi = { url: string; seen: Seen[]; set: (config: Reply, tokens?: Reply) => void };
+const selfMissing: Reply = { status: 404 };
+const okSelf: Reply = { status: 200, body: JSON.stringify(selfToken()), headers: wire1 };
+
+type FakeApi = {
+  url: string;
+  seen: Seen[];
+  /** `self` defaults to `404`, an api older than the self route, so `tokens` is the fallback. */
+  set: (config: Reply, tokens?: Reply, self?: Reply) => void;
+};
 const servers: { stop: (force: boolean) => unknown }[] = [];
+
+function replyName(path: string): "config" | "self" | "tokens" {
+  if (path.endsWith("/admin/config")) return "config";
+  return path.endsWith("/admin/tokens/self") ? "self" : "tokens";
+}
 
 function startApi(): FakeApi {
   const seen: Seen[] = [];
@@ -94,7 +108,7 @@ function startApi(): FakeApi {
     fetch(req) {
       const path = new URL(req.url).pathname;
       seen.push({ path, authorization: req.headers.get("authorization") });
-      const name = path.endsWith("/admin/config") ? "config" : "tokens";
+      const name = replyName(path);
       const reply = replies[name] ?? { status: 500 };
       return new Response(reply.body ?? SENTINEL, {
         status: reply.status,
@@ -106,10 +120,11 @@ function startApi(): FakeApi {
   return {
     url: `http://127.0.0.1:${server.port}`,
     seen,
-    set(config, tokens = okTokens) {
+    set(config, tokens = okTokens, self = selfMissing) {
       seen.length = 0;
       replies.config = config;
       replies.tokens = tokens;
+      replies.self = self;
     },
   };
 }
@@ -140,8 +155,8 @@ const api = startApi();
 const target = startApi();
 
 describe("testConnection success", () => {
-  test("calls config then tokens with bearer, manual redirect and 5 s timeout", async () => {
-    api.set(okConfig(3));
+  test("calls config then self with bearer, manual redirect and 5 s timeout", async () => {
+    api.set(okConfig(3), okTokens, okSelf);
     const { deps, calls, timeouts } = recordingDeps();
     const result = await testConnection(api.url, deps);
     expect(result).toEqual({
@@ -152,10 +167,37 @@ describe("testConnection success", () => {
     });
     expect(api.seen).toEqual([
       { path: "/admin/config", authorization: `Bearer ${TOKEN}` },
-      { path: "/admin/tokens", authorization: `Bearer ${TOKEN}` },
+      { path: "/admin/tokens/self", authorization: `Bearer ${TOKEN}` },
     ]);
     expect(calls.map((c) => c.redirect)).toEqual(["manual", "manual"]);
     expect(timeouts).toEqual([5000, 5000]);
+  });
+
+  test("self 404 falls back to the token list: 200 confirms", async () => {
+    api.set(okConfig(3), okTokens, selfMissing);
+    expect(await testConnection(api.url, recordingDeps().deps)).toEqual({
+      isOk: true,
+      wireVersion: 1,
+      checkCount: 3,
+      adminScope: "confirmed",
+    });
+    expect(api.seen.map((s) => s.path)).toEqual([
+      "/admin/config",
+      "/admin/tokens/self",
+      "/admin/tokens",
+    ]);
+  });
+
+  test("a self answer that fails validation is an invalid answer, with no fallback", async () => {
+    api.set(okConfig(3), okTokens, {
+      status: 200,
+      body: JSON.stringify({ ...selfToken(), secret: SENTINEL }),
+      headers: wire1,
+    });
+    const result = await testConnection(api.url, recordingDeps().deps);
+    expect(result).toEqual({ isOk: false, text: "pulse-api sent an invalid answer." });
+    expect(JSON.stringify(result)).not.toContain(SENTINEL);
+    expect(api.seen.map((s) => s.path)).toEqual(["/admin/config", "/admin/tokens/self"]);
   });
 
   test("a 1.x answer with header names and hasBody counts 2 checks", async () => {
@@ -188,8 +230,8 @@ describe("testConnection success", () => {
     });
   });
 
-  test("tokens 404 gives not-checked", async () => {
-    api.set(okConfig(3), { status: 404 });
+  test("self 404 and tokens 404 give not-checked", async () => {
+    api.set(okConfig(3), { status: 404 }, selfMissing);
     expect(await testConnection(api.url, recordingDeps().deps)).toEqual({
       isOk: true,
       wireVersion: 1,
@@ -202,7 +244,11 @@ describe("testConnection success", () => {
     api.set(okConfig(1));
     const result = await testConnection(`${api.url}/pulse`, recordingDeps().deps);
     expect(result.isOk).toBe(true);
-    expect(api.seen.map((s) => s.path)).toEqual(["/pulse/admin/config", "/pulse/admin/tokens"]);
+    expect(api.seen.map((s) => s.path)).toEqual([
+      "/pulse/admin/config",
+      "/pulse/admin/tokens/self",
+      "/pulse/admin/tokens",
+    ]);
   });
 });
 
@@ -330,6 +376,38 @@ describe("testConnection failures", () => {
     const shown = JSON.stringify(result);
     expect(shown).not.toContain(SENTINEL);
     expect(shown).not.toContain(TOKEN);
+  });
+
+  const selfCases: [string, Reply, string][] = [
+    ["self 401", { status: 401 }, "pulse-api rejected the console token."],
+    ["self 403", { status: 403 }, "The console token lacks the admin scope."],
+    ["self 429", { status: 429 }, "pulse-api is throttling the console. Try again in a minute."],
+    ["self 503", { status: 503 }, "pulse-api answered 503."],
+    [
+      "self 307",
+      { status: 307, headers: { location: "/elsewhere" } },
+      "pulse-api answered with a redirect (307); redirects are not followed.",
+    ],
+    [
+      "self without wire header",
+      { status: 200, body: JSON.stringify(selfToken()) },
+      "pulse-api sent no x-pulse-contract header.",
+    ],
+    [
+      "self wire 3",
+      { status: 200, body: JSON.stringify(selfToken()), headers: { "x-pulse-contract": "3" } },
+      "pulse-api speaks wire version 3; this console needs 1.",
+    ],
+  ];
+
+  test.each(selfCases)("%s keeps its text and never falls back", async (_name, self, text) => {
+    api.set(okConfig(), okTokens, self);
+    const result = await testConnection(api.url, recordingDeps().deps);
+    expect(result).toEqual({ isOk: false, text });
+    const shown = JSON.stringify(result);
+    expect(shown).not.toContain(SENTINEL);
+    expect(shown).not.toContain(TOKEN);
+    expect(api.seen.map((s) => s.path)).toEqual(["/admin/config", "/admin/tokens/self"]);
   });
 
   test("a 302 target receives no request", async () => {

@@ -124,6 +124,63 @@ test("appends user, invite, instance and container events with literal columns",
   ]);
 });
 
+test("token events store the token id or unknown as target_name and target_id NULL", () => {
+  const db = fresh();
+  const actor = { kind: "user", person: OWNER } as const;
+  appendPeopleEvent(db, {
+    at: 20,
+    actor,
+    action: "token.create",
+    target: { kind: "token", id: "tok_ad0000000000000000000002" },
+    value: "scopes=read,checks,admin",
+  });
+  appendPeopleEvent(db, {
+    at: 21,
+    actor,
+    action: "token.rotate",
+    target: { kind: "token", id: "tok_b0be00000000000000000003" },
+    value: "location=eu (unknown)",
+  });
+  appendPeopleEvent(db, {
+    at: 22,
+    actor,
+    action: "token.revoke",
+    target: { kind: "token", id: undefined },
+    value: "scopes=read (unknown)",
+  });
+  const columns = db
+    .query(
+      "SELECT action, target_kind, target_id, target_email, target_name, value FROM people_events ORDER BY id",
+    )
+    .all();
+  expect(columns).toEqual([
+    {
+      action: "token.create",
+      target_kind: "token",
+      target_id: null,
+      target_email: null,
+      target_name: "tok_ad0000000000000000000002",
+      value: "scopes=read,checks,admin",
+    },
+    {
+      action: "token.rotate",
+      target_kind: "token",
+      target_id: null,
+      target_email: null,
+      target_name: "tok_b0be00000000000000000003",
+      value: "location=eu (unknown)",
+    },
+    {
+      action: "token.revoke",
+      target_kind: "token",
+      target_id: null,
+      target_email: null,
+      target_name: "unknown",
+      value: "scopes=read (unknown)",
+    },
+  ]);
+});
+
 test("rows are append-only", () => {
   const db = fresh();
   appendPeopleEvent(db, {

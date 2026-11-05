@@ -4,6 +4,7 @@ import {
   type FetchJsonResult,
   fetchJson,
   validateAdminConfigSummary,
+  validateTokenMetadata,
   validateTokensResponse,
   WIRE_VERSION,
   WIRE_VERSION_HEADER,
@@ -82,7 +83,8 @@ function errorText(call: Call, error: FetchJsonError, origin: string, wire: stri
 
 /**
  * Tests the pulse-api at `apiUrl` (no trailing `/`) with `GET /admin/config`, then
- * `GET /admin/tokens`. Failure texts hold no upstream body and no token. The token list is dropped.
+ * `GET /admin/tokens/self`. Only a `404` there (an api older than the self route) falls back to
+ * `GET /admin/tokens`. Failure texts hold no upstream body and no token; the bodies are dropped.
  */
 export async function testConnection(
   apiUrl: string,
@@ -126,6 +128,15 @@ export async function testConnection(
     return failed(configFailure ?? "pulse-api sent an invalid answer.");
   }
   const checkCount = config.value.checks.length;
+
+  const self = await get("/admin/tokens/self", (raw) => validateTokenMetadata(raw));
+  const isSelfMissing = !self.ok && self.error.kind === "http" && self.error.status === 404;
+  if (!isSelfMissing) {
+    const selfFailure = check("tokens", self);
+    return selfFailure === undefined
+      ? { isOk: true, wireVersion: WIRE_VERSION, checkCount, adminScope: "confirmed" }
+      : failed(selfFailure);
+  }
 
   const tokens = await get("/admin/tokens", (raw) => validateTokensResponse(raw));
   if (!tokens.ok && tokens.error.kind === "http" && tokens.error.status === 404) {

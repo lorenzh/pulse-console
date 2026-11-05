@@ -16,6 +16,7 @@ import {
   type SignedInConsole,
   startSignedInConsole,
 } from "../test/signed-in-console.ts";
+import { selfToken } from "../test/token-fixtures.ts";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
 import { createFactorStore } from "./factor-store.ts";
@@ -59,6 +60,9 @@ function startApi(): string {
           { revision, checks: [], components: [], maintenance: [] },
           { headers },
         );
+      }
+      if (path.endsWith("/admin/tokens/self")) {
+        return Response.json(selfToken(), { headers });
       }
       return Response.json({ tokens: [] }, { headers });
     },

@@ -36,12 +36,18 @@ export type CheckWriteDeps = {
   log: Logger;
 };
 
+/** What the live guard reads: the session row and the stored role. */
+export type WriteGuardDeps = {
+  store: Pick<AccountStore, "isGuardHeld" | "userById">;
+  roleOf?: ((user: User) => ConsoleRole) | undefined;
+};
+
 /**
  * R8: right before the write, the request's session row must still exist (`409` `Not saved`)
  * and the user's stored role, read again, must still meet `requiredRole` (`403`).
  */
 export function writeGuardProblem(
-  deps: CheckWriteDeps,
+  deps: WriteGuardDeps,
   request: PageRequest,
   requiredRole: ConsoleRole,
   reloadHref: string,
