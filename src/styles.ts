@@ -12,7 +12,8 @@ button.secondary { background: #fff; color: #1b4f9c; }
 input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #e3a008; outline-offset: 2px; }
 .error { color: #a4161a; font-weight: 400; margin: 0; }
 .notice { padding: 0.5rem; border-left: 4px solid #1b4f9c; background: #fff; }
-.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+form + form { margin-top: 1rem; }
 code, .secret { font-family: ui-monospace, monospace; overflow-wrap: anywhere; word-break: break-all; }
 #recovery-codes { padding-left: 1.5rem; }
 #sessions { width: 100%; border-collapse: collapse; }
@@ -25,8 +26,10 @@ body, p, h1, h2, li, label, a { overflow-wrap: anywhere; }
 .shell-header { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; padding: 0.75rem 1rem; background: #fff; border-bottom: 1px solid #d0d5db; }
 .shell-header p { margin: 0; }
 .instance { font-weight: 700; }
+.account-email { display: inline-block; max-width: 100%; }
 .account { flex: 1 1 12rem; min-width: 0; }
 .sign-out { display: block; }
+a, a:visited { color: #1b4f9c; }
 nav ul { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; list-style: none; margin: 0; padding: 0.5rem 1rem; background: #fff; border-bottom: 1px solid #d0d5db; }
 nav a { color: #1b4f9c; }
 nav a[aria-current="page"] { font-weight: 700; text-decoration-thickness: 3px; }

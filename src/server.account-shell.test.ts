@@ -45,7 +45,9 @@ function expectAccountShell(res: Reply, title: string): void {
   expect(res.body).toContain('<script src="/console.js" defer></script>');
   expect(res.body).toContain('<a href="/">Overview</a>');
   expect(res.body).not.toContain("aria-current");
-  expect(res.body).toContain("Signed in as Owner (owner@example.com)");
+  expect(res.body).toContain(
+    'Signed in as Owner <span class="account-email">(owner@example.com)</span>',
+  );
   expect(res.body).toContain("Role: Owner");
   expect(res.body).not.toContain("style=");
   expect(res.body).not.toMatch(/\son[a-z]+=/);

@@ -91,7 +91,9 @@ describe("GET / Overview summary", () => {
       expect(res.body).toContain(overall);
       expect(res.body).toContain(count);
       expect(res.body).toContain(`pulse-api: ${api.url}`);
-      expect(res.body).toContain("Signed in as Owner (owner@example.com)");
+      expect(res.body).toContain(
+        'Signed in as Owner <span class="account-email">(owner@example.com)</span>',
+      );
       expect(res.body).toContain('<a href="/" aria-current="page">Overview</a>');
       expectClean(c, res.body);
     });

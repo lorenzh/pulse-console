@@ -598,7 +598,13 @@ describe("signed-in unknown paths and the Overview", () => {
     const c = await signedIn();
     const res = await getPage(c, "/no-such-page");
     expect(res.status).toBe(404);
-    expect(res.body).toContain("<h2>Page not found</h2>");
+    expect(res.body.split("Page not found")).toHaveLength(3);
+    expect(res.body).toContain("<title>Page not found");
+    expect(res.body).toContain("<h1>Page not found</h1>");
+    expect(res.body).not.toContain("<h2>Page not found</h2>");
+    expect(res.body).toContain(
+      "<p>There is no page at this address. Check the address, or go to the overview.</p>",
+    );
     expect(res.body).toContain('<a href="/">Go to the overview</a>');
     expectShell(res);
     const head = await fetch(`${c.base}/no-such-page`, {

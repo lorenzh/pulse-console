@@ -44,7 +44,7 @@ ${documentHead({ title: view.title, instanceName: view.instanceName, hasScript: 
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="shell-header">
 <p class="instance">${escapeHtml(view.instanceName)}</p>
-<p class="account">Signed in as ${escapeHtml(view.user.name)} (${escapeHtml(view.user.email)})<br>Role: ${roleLabel(view.role)}</p>
+<p class="account">Signed in as ${escapeHtml(view.user.name)} <span class="account-email">(${escapeHtml(view.user.email)})</span><br>Role: ${roleLabel(view.role)}</p>
 <a href="/account/security">Account security</a>
 <div class="sign-out">
 <form method="post" action="/sign-out">

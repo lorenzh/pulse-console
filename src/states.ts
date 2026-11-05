@@ -89,7 +89,8 @@ export function forbiddenState(
 
 /** The 404 body. */
 export function notFoundState(): string {
-  return state("error", "Page not found", link("/", "Go to the overview"));
+  return `<p>There is no page at this address. Check the address, or go to the overview.</p>
+${link("/", "Go to the overview")}`;
 }
 
 /** A 409 or 412 answer: the target changed since the form was opened. */

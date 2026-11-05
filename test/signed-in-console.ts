@@ -45,6 +45,8 @@ export type SignedInConsole = {
 
 export type SignedInOptions = {
   apiUrl: string;
+  /** The owner e-mail; defaults to OWNER_EMAIL. */
+  ownerEmail?: string | undefined;
   adminToken?: string | undefined;
   fetch?: typeof fetch | undefined;
   schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
@@ -67,12 +69,13 @@ export async function startSignedInConsole(options: SignedInOptions): Promise<Si
   });
   const store = createAccountStore(db);
   ownerHash ??= await Bun.password.hash(OWNER_PASSWORD, PASSWORD_HASH_OPTIONS);
+  const ownerEmail = options.ownerEmail ?? OWNER_EMAIL;
   store.completeSetup(
-    { email: OWNER_EMAIL, name: "Owner", passwordHash: ownerHash },
+    { email: ownerEmail, name: "Owner", passwordHash: ownerHash },
     options.apiUrl,
     START,
   );
-  const owner = store.userByEmail(OWNER_EMAIL);
+  const owner = store.userByEmail(ownerEmail);
   if (owner === undefined) throw new Error("owner missing");
   // Protected-page fixtures start with an enrolled owner, just as production requires.
   db.query(

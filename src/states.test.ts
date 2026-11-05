@@ -83,7 +83,10 @@ test("forbidden and not found", () => {
   expect(html).toContain("<h2>Access denied</h2>");
   expect(html).toContain("<p>This page needs the Admin role or higher. Your role is Viewer.</p>");
   const notFound = notFoundState();
-  expect(notFound).toContain("<h2>Page not found</h2>");
+  expect(notFound).not.toContain("Page not found");
+  expect(notFound).toBe(
+    '<p>There is no page at this address. Check the address, or go to the overview.</p>\n<p><a href="/">Go to the overview</a></p>\n',
+  );
   expect(notFound).toContain('<a href="/">Go to the overview</a>');
 });
 
