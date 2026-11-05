@@ -5,6 +5,7 @@ import {
   isAllowed,
   minimumRole,
   NoMinimumRoleError,
+  PERMISSION_MATRIX,
   routeRole,
   targetDecision,
 } from "./permissions.ts";
@@ -185,5 +186,20 @@ describe("target rules", () => {
     ],
   ] as const)("%s %s of %s (to %p)", (actor, kind, target, toRole, expected) => {
     expect(targetDecision(actor, kind, target, toRole)).toEqual(expected);
+  });
+});
+
+describe("exported matrix data", () => {
+  test("PERMISSION_MATRIX holds the spec rows and the two Team actions", () => {
+    const expected: Record<string, ConsoleRole | null> = {
+      "team.view": "admin",
+      "team.require-2fa": "owner",
+    };
+    for (const [, action, cells] of MATRIX) {
+      const first = cells.indexOf("Y");
+      expected[action] = first === -1 ? null : (ROLES[first] ?? null);
+    }
+    expect(Object.fromEntries(Object.entries(PERMISSION_MATRIX))).toEqual(expected);
+    expect(Object.keys(PERMISSION_MATRIX)).toHaveLength(29);
   });
 });

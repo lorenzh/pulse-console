@@ -35,9 +35,9 @@ export type MatrixAction = (typeof MATRIX_ACTIONS)[number];
 /** A matrix row, or one of the two console actions that name where a row's rule applies. */
 export type Action = MatrixAction | "team.view" | "team.require-2fa";
 
-// The lowest allowed role of each action; null where no role is allowed (rows 6, 22, 26).
-// Every row with an allowed role is monotonic in viewer < member < admin < owner.
-const MINIMUM: Readonly<Record<Action, ConsoleRole | null>> = {
+/** The permission matrix as data: the lowest allowed role of each action; null where no role is allowed (rows 6, 22, 26).
+ * Every row with an allowed role is monotonic in viewer < member < admin < owner. */
+export const PERMISSION_MATRIX: Readonly<Record<Action, ConsoleRole | null>> = {
   "overview.view": "viewer",
   "check.write": "member",
   "check.delete": "admin",
@@ -71,7 +71,7 @@ const MINIMUM: Readonly<Record<Action, ConsoleRole | null>> = {
 
 /** The lowest role allowed to do `action`, or undefined when no role may do it. */
 export function minimumRole(action: Action): ConsoleRole | undefined {
-  return MINIMUM[action] ?? undefined;
+  return PERMISSION_MATRIX[action] ?? undefined;
 }
 
 /** Whether `role` may do `action`. */
