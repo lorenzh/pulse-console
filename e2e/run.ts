@@ -608,6 +608,12 @@ async function checkMobileNavFocus(env: Env, browser: Browser): Promise<void> {
   const page = await context.newPage();
   await signIn(page, env);
   await page.goto(`${env.console.base}/`);
+  const tops = await page.evaluate(() =>
+    [...document.querySelectorAll(".sidebar nav .nav-item")].map((el) =>
+      Math.round(el.getBoundingClientRect().top),
+    ),
+  );
+  assert(new Set(tops).size === 1, `mobile nav: items on ${new Set(tops).size} rows`);
   await page.keyboard.press("Tab");
   for (const text of ["Overview", "Checks", "Tokens", "Probes", "Team"]) {
     await page.keyboard.press("Tab");
