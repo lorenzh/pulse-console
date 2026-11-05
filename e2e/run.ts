@@ -69,7 +69,11 @@ async function startEnv(waitMs: number, ownerEmail = DEMO_EMAIL): Promise<Env> {
   api.reply("/checks", jsonReply([checkWithState("web", "up")]));
   // The Tokens list of the manual `--serve` console: its own token and one other.
   api.reply("/admin/tokens/self", jsonReply(E2E_SELF));
-  api.replyTo("GET", "/admin/tokens", jsonReply({ tokens: [E2E_SELF, E2E_OPS] }));
+  api.replyTo("GET", "/admin/tokens", jsonReply({ tokens: [E2E_SELF, E2E_OPS, E2E_PROBE] }));
+  for (const row of [E2E_SELF, E2E_OPS, E2E_PROBE]) {
+    api.replyTo("GET", `/admin/tokens/${row.id}`, jsonReply(row));
+  }
+  api.reply("/locations", jsonReply([]));
   const recorder: Recorder = { actions: [] };
   const target: ConfirmTargetHolder = { current: { name: "Checkout API", revision: "rev-1" } };
   const role: { current: ConsoleRole } = { current: "owner" };
@@ -1709,6 +1713,221 @@ async function checkTokensWith(browser: Browser, hasScript: boolean): Promise<vo
   }
 }
 
+const E2E_PROBE = adminTokenRow({
+  id: "tok_b0be00000000000000000003",
+  name: "probe eu",
+  scopes: ["probe"],
+  location: "eu",
+});
+const E2E_NEW_PROBE = adminTokenRow({
+  id: "tok_b0be00000000000000abc123",
+  name: "probe eu-west",
+  scopes: ["probe"],
+  location: "eu-west",
+});
+const E2E_PROBE_SECRET = "pulse_e2eProbeSecret0123456789abcdef";
+const PROBE_PRE_IDS = [
+  "probe-env-command",
+  "probe-docker-run",
+  "probe-compose-file",
+  "probe-compose-command",
+];
+
+function startProbesApi(): TokensApi {
+  const state = startTokensApi();
+  state.setTokens([...state.rows(), E2E_PROBE]);
+  state.api.reply("/locations", jsonReply([]));
+  state.api.replyTo("POST", "/admin/tokens", {
+    status: 201,
+    body: JSON.stringify({
+      token: E2E_NEW_PROBE,
+      secret: E2E_PROBE_SECRET,
+      previousValidUntil: null,
+    }),
+    headers: WIRE,
+    after: () => state.setTokens([...state.rows(), E2E_NEW_PROBE]),
+  });
+  state.api.replyTo("POST", `/admin/tokens/${E2E_PROBE.id}/revoke`, {
+    status: 200,
+    body: JSON.stringify({ token: { ...E2E_PROBE, revokedAt: Date.now() } }),
+    headers: WIRE,
+  });
+  return state;
+}
+
+async function addProbeInBrowser(page: Page, base: string, label: string): Promise<void> {
+  await page.goto(`${base}/probes/new`);
+  const names = await page
+    .locator('form[action="/probes/new"] input:not([type="hidden"])')
+    .evaluateAll((els) => els.map((el) => (el as HTMLInputElement).name));
+  assert(
+    names.join(",") === "location,name,api_url,image,network",
+    `${label}: the add form has the five fields, got ${names.join(",")}`,
+  );
+  const text = (await page.content()).toLowerCase();
+  assert(!text.includes("private"), `${label}: the add form has 0 private-range controls`);
+  await page.fill('input[name="location"]', "eu-west");
+  await page.fill('input[name="api_url"]', "https://api.example.test");
+  await page.fill('input[name="image"]', "ghcr.io/lorenzh/pulse-probe:main");
+  await submitForm(page);
+  for (const id of PROBE_PRE_IDS) {
+    assert((await page.locator(`pre#${id}`).count()) === 1, `${label}: the result has pre#${id}`);
+  }
+  const env = await page.locator("#probe-env-command").textContent();
+  assert(env?.includes(E2E_PROBE_SECRET) === true, `${label}: the env command holds the secret`);
+  const run = (await page.locator("#probe-docker-run").textContent()) ?? "";
+  assert(
+    run.includes("-e 'PULSE_PROBE_BLOCK_PRIVATE_RANGES=false'") && !run.includes("=true"),
+    `${label}: docker run keeps the private-range default false`,
+  );
+  const explanation = "is the probe's default: its checks may connect to private, loopback";
+  assert((await page.getByText(explanation).count()) === 1, `${label}: the default-false text`);
+  const selected = await page.evaluate(() => {
+    const pre = document.getElementById("probe-docker-run");
+    const selection = window.getSelection();
+    if (pre === null || selection === null) return "";
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return selection.toString();
+  });
+  assert(selected.startsWith("docker run -d"), `${label}: the snippet text is selectable`);
+}
+
+async function revokeProbeInBrowser(page: Page, base: string, state: TokensApi, label: string) {
+  await page.goto(`${base}/probes/revoke?id=${E2E_PROBE.id}`);
+  await page.fill('input[name="confirm_name"]', "EU");
+  await submitForm(page);
+  assert(
+    state.api.seen.every((s) => !s.path.endsWith("/revoke")),
+    `${label}: a wrong typed location sends no revoke`,
+  );
+  await page.goto(`${base}/probes/revoke?id=${E2E_PROBE.id}`);
+  await page.fill('input[name="confirm_name"]', "eu");
+  await submitForm(page);
+  assert(page.url().startsWith(`${base}/probes?revoked=`), `${label}: probe revoke redirects`);
+}
+
+async function checkProbeCountdown(page: Page, base: string, state: TokensApi): Promise<void> {
+  await page.goto(`${base}/probes`);
+  assert((await intervalsOf(page)).set === 0, "no interval on /probes");
+  await page.goto(`${base}/probes/rotate?id=${E2E_NEW_PROBE.id}`);
+  const until = Date.now() + OVERLAP_MS;
+  state.api.replyTo("POST", `/admin/tokens/${E2E_NEW_PROBE.id}/rotate`, {
+    status: 200,
+    body: JSON.stringify({
+      token: { ...E2E_NEW_PROBE, rotatedAt: Date.now(), previousValidUntil: until },
+      secret: E2E_ROTATED,
+      previousValidUntil: until,
+    }),
+    headers: WIRE,
+  });
+  await submitForm(page);
+  const time = page.locator("time[data-countdown]");
+  const first = await time.textContent();
+  const started = await intervalsOf(page);
+  assert(
+    started.set === 1 && started.active === 1,
+    `probe rotate starts 1 interval, got ${JSON.stringify(started)}`,
+  );
+  await page.waitForTimeout(1100);
+  assert((await time.textContent()) !== first, "the probe countdown changes after 1100 ms");
+  await page.waitForTimeout(3500 - 1100);
+  const ended = await intervalsOf(page);
+  assert((await time.textContent()) === "ended" && ended.active === 0, "the probe countdown ended");
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide")));
+  assert((await secretCount(page)) === 0, "pagehide clears the probe env command");
+  await page.evaluate(() => {
+    document.querySelectorAll("[data-secret]").forEach((el) => {
+      el.textContent = "pulse_restored";
+    });
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+  });
+  assert((await secretCount(page)) === 0, "a persisted pageshow clears the probe env command");
+  ok(
+    "Probes countdown: set=0 on /probes, set=1 on the rotate result, text changed after 1100 ms, ended with active=0 after 3500 ms; pagehide and persisted pageshow leave 0 pulse_",
+  );
+}
+
+async function checkProbeLayout(page: Page, base: string): Promise<void> {
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 800 });
+    for (const path of ["/probes", "/probes/new", `/probes/revoke?id=${E2E_NEW_PROBE.id}`]) {
+      await page.goto(`${base}${path}`);
+      await assertFits(page, width, `${path} at ${width}`);
+    }
+  }
+}
+
+async function checkProbeFocus(page: Page, base: string): Promise<void> {
+  await page.goto(`${base}/probes/new`);
+  await page.focus('input[name="location"]');
+  const order: string[] = [];
+  for (let i = 0; i < 6; i += 1) {
+    await page.keyboard.press("Tab");
+    order.push(
+      await page.evaluate(() => {
+        const el = document.activeElement;
+        if (el instanceof HTMLInputElement) return el.name;
+        return (el?.textContent ?? "").trim();
+      }),
+    );
+  }
+  assert(
+    order.join(" | ") === "name | api_url | image | network | Add location | Cancel",
+    `Probes add focus order: ${order.join(" | ")}`,
+  );
+}
+
+/** Probes in a real browser: add with four snippets, typed revoke, countdown, layout. */
+async function checkProbesWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const env = await startEnv(0);
+  env.api.stop();
+  const state = startProbesApi();
+  const server = await startSignedInConsole({
+    apiUrl: state.api.url,
+    ownerEmail: env.ownerEmail,
+    adminToken: ADMIN_TOKEN,
+  });
+  await env.console.close();
+  server.setNow(Date.now());
+  const local: Env = { ...env, console: server, api: state.api };
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+  });
+  if (hasScript) await context.addInitScript(INTERVAL_PROBE);
+  const page = await newPage(context, violations);
+  try {
+    await signIn(page, local);
+    await addProbeInBrowser(page, server.base, label);
+    if (hasScript) assert((await intervalsOf(page)).set === 0, "no interval on the add result");
+    await page.goto(`${server.base}/checks`);
+    await goBackToAnswer(page);
+    assert((await secretCount(page)) === 0, `${label}: Back leaves 0 pulse_ after the add`);
+    await revokeProbeInBrowser(page, server.base, state, label);
+    await checkProbeLayout(page, server.base);
+    if (hasScript) {
+      await checkProbeFocus(page, server.base);
+      await axeOn(page, `${server.base}/probes`, "/probes");
+      await axeOn(page, `${server.base}/probes/new`, "/probes/new");
+      await axeOn(page, `${server.base}/probes/revoke?id=${E2E_NEW_PROBE.id}`, "/probes/revoke");
+      await checkProbeCountdown(page, server.base, state);
+    }
+    assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
+    ok(
+      `Probes, ${label}: the add form has exactly 5 fields and 0 private-range controls, the result has the 4 pre blocks with the default-false text and selectable snippets, Back leaves 0 pulse_, typed revoke (wrong case sent nothing), no overflow at 390 and 1280 px${hasScript ? ", focus order Location > Name > API URL > Image > Network > Add location > Cancel, axe 0" : ""}, 0 CSP violations`,
+    );
+  } finally {
+    await context.close();
+    await server.close();
+    state.api.stop();
+  }
+}
+
 async function runChecks(): Promise<void> {
   const env = await startEnv(0);
   const browser = await chromium.launch();
@@ -1730,6 +1949,8 @@ async function runChecks(): Promise<void> {
     await checkWriteFlowsWith(browser, false);
     await checkTokensWith(browser, true);
     await checkTokensWith(browser, false);
+    await checkProbesWith(browser, true);
+    await checkProbesWith(browser, false);
     // A console of its own: each check signs in with a fixture recovery code.
     const shellEnv = await startEnv(0);
     try {

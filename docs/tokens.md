@@ -2,8 +2,8 @@
 
 The Tokens screen lists the admin-side tokens of pulse-api, creates one from a preset, rotates
 one with an overlap and revokes one. Only an Admin or the Owner opens it (`token.write`); the
-navigation shows Tokens to them only. Probe tokens and locations get their own Probes screen in a
-later change; the Tokens list only counts them and links to `/probes`.
+navigation shows Tokens to them only. Probe tokens are on the Probes screen (below); the Tokens
+list only counts them and links to `/probes`.
 
 ## Routes
 
@@ -107,3 +107,85 @@ Each sent change adds one People log row (`token.create`, `token.rotate` or `tok
 target the token id, value `scopes=<list>`, ` (unknown)` when the outcome is not known). A row
 that cannot be written logs `token change not logged` and, after a confirmed change, adds `Saved
 in pulse-api. The People log row could not be written.` to the page.
+
+# Probes
+
+The Probes screen (`probe.write`, Admin and Owner) lists the probe locations with their
+credentials, adds a location with the snippets that start a probe, and rotates or revokes one
+credential. A probe credential is a token with scopes exactly `["probe"]` and a location.
+
+| Route                    | Methods   | What it does                                                               |
+| ------------------------ | --------- | -------------------------------------------------------------------------- |
+| `/probes`                | GET       | Locations with their credentials                                           |
+| `/probes/new`            | GET, POST | The add-location form; POST creates a probe token and shows snippets once  |
+| `/probes/rotate?id=<id>` | GET, POST | A plain confirmation; POST rotates one credential                          |
+| `/probes/revoke?id=<id>` | GET, POST | Confirmation by typing the location; POST revokes, then `303` to `/probes` |
+
+The own-token rule, the `/self` failures, the POST order, the stale and inactive states and the
+pulse-api answers are the same as on the Tokens screen. An admin-side token id on `/probes/*`
+is not found (`404`). Probes have no last-admin rule.
+
+## Locations
+
+The list reads `GET /admin/tokens`, `GET /admin/tokens/self` and the public `GET /locations`
+(sent without the token). It groups by the exact location string (case-sensitive), one group per
+name in either source, sorted in code-unit order:
+
+| In `/locations` | Active credentials | State text                     |
+| --------------- | ------------------ | ------------------------------ |
+| `reporting`     | any                | `Reporting, last result <UTC>` |
+| `silent`        | 1 or more          | `Silent since <UTC>`           |
+| `silent`        | 0                  | `Silent, no active token`      |
+| not listed      | 1 or more          | `Awaiting first result`        |
+| not listed      | 0                  | `No active token`              |
+
+A `reporting` group with no active credential adds `No active token: new results will be
+refused.` Every credential is listed with name, id, source, created, last used, state and, when
+active, `Rotate this token` and `Revoke this token`. A probe that only used its token but posted
+no result stays `Awaiting first result`. A group with only revoked credentials and no result is
+listed under `Revoked`. When `/locations` fails, every group says `Last result unknown (pulse-api
+answered <reason>)` and the credentials still show. Revoking keeps the location's results.
+
+## Add location
+
+The form has five fields and nothing else:
+
+| Field      | Rule                                                                                  | Prefill                       |
+| ---------- | ------------------------------------------------------------------------------------- | ----------------------------- |
+| `location` | trimmed, 1 to 64 characters, no control character, not `heartbeat`                    | empty                         |
+| `name`     | optional, trimmed 1 to 100, no control character; default `probe <location>`          | empty                         |
+| `api_url`  | http(s), no whitespace, credentials, query or fragment, at most 2048; one `/` dropped | `PULSE_CONSOLE_PROBE_API_URL` |
+| `image`    | 1 to 255 characters of `[A-Za-z0-9._/:@-]`, first a letter or digit                   | `PULSE_CONSOLE_PROBE_IMAGE`   |
+| `network`  | optional Docker network name `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`                       | `PULSE_CONSOLE_PROBE_NETWORK` |
+
+The prefills can be changed before the token is created. The console token needs `checks` (the
+grant rule; `probe` counts as `checks`); without it the form is replaced by a notice and a POST
+answers `403`. A location may have several active credentials; the result page says
+`<location> now has <n> active tokens.`
+
+There is no private-range control. Other POST fields (such as `block_private` or
+`PULSE_PROBE_BLOCK_PRIVATE_RANGES`) are ignored, and every snippet sets
+`PULSE_PROBE_BLOCK_PRIVATE_RANGES=false`, the probe's default. The page explains how to change it
+to `true` before the probe starts.
+
+## Snippets
+
+The answer of the POST shows four blocks, each with a copy button. `<base>` is
+`pulse-probe-<slug>-<last 6 characters of the token id>`; it stays the same on a rotation.
+
+- `#probe-env-command` writes `PULSE_PROBE_TOKEN=<secret>` to `<base>.env` with mode 600. Only
+  this block holds the secret, and it is cleared on `pagehide`.
+- `#probe-docker-run` starts the probe with `--env-file`, `PULSE_API_URL`, `PULSE_LOCATION` and
+  the network when one is set.
+- `#probe-compose-file` is `<base>.compose.yaml`.
+- `#probe-compose-command` is `docker compose -p '<base>' -f '<base>.compose.yaml' up -d`. `-p`
+  and `-f` win over an inherited `COMPOSE_PROJECT_NAME` or `COMPOSE_FILE`.
+
+Prerequisites: the image must be pullable on the probe host; the API URL must be reachable from
+the probe (the console's own address often is not); `network` is only for a probe on the Docker
+host of pulse-api, and the network must exist.
+
+A rotation shows a new env command for the same `<base>.env`, the overlap countdown, and the
+lines that recreate the container (`... up -d --force-recreate`, or `docker rm -f '<base>'` and
+the docker run line again). A plain `docker restart` keeps the old token, because the env file is
+read when the container is created.
