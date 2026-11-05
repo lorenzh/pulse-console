@@ -27,7 +27,7 @@ body, p, h1, h2, li, label, a { overflow-wrap: anywhere; }
 .shell-header p { margin: 0; }
 .instance { font-weight: 700; }
 .account-email { display: inline-block; max-width: 100%; }
-.account { flex: 1 1 12rem; min-width: 0; }
+.account { flex: 1 0 auto; max-width: 100%; min-width: 0; }
 .sign-out { display: block; }
 a, a:visited { color: #1b4f9c; }
 nav ul { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; list-style: none; margin: 0; padding: 0.5rem 1rem; background: #fff; border-bottom: 1px solid #d0d5db; }
