@@ -81,7 +81,7 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 
 ## End-to-end checks
 
-- `src/server.test.ts`, `src/server.setup.test.ts`, `src/server.sign-in.test.ts`, `src/server.security.test.ts`, `src/server.factor.test.ts`, `src/server.recovery.test.ts`, `src/server.sessions.test.ts`, `src/server.upgrade.test.ts`, `src/server.roles.test.ts`, `src/server.team.test.ts`, `src/server.invite.test.ts`, `src/server.reset.test.ts`, `src/server.password.test.ts`, `src/server.checks.test.ts`, `src/server.checks-write.test.ts`, `src/server.checks-change.test.ts`, `src/server.tokens.test.ts`, `src/server.probes.test.ts` and `src/server.races.test.ts` start the real server on port `0` and drive it over HTTP; `src/main.startup.test.ts` spawns `bun src/main.ts` and `src/owner-reset.test.ts` spawns `bun --no-env-file src/owner-reset.ts`.
+- `src/server.test.ts`, `src/server.setup.test.ts`, `src/server.sign-in.test.ts`, `src/server.security.test.ts`, `src/server.factor.test.ts`, `src/server.recovery.test.ts`, `src/server.sessions.test.ts`, `src/server.upgrade.test.ts`, `src/server.roles.test.ts`, `src/server.team.test.ts`, `src/server.invite.test.ts`, `src/server.reset.test.ts`, `src/server.password.test.ts`, `src/server.checks.test.ts`, `src/server.checks-write.test.ts`, `src/server.checks-change.test.ts`, `src/server.tokens.test.ts`, `src/server.probes.test.ts`, `src/server.fonts.test.ts` and `src/server.races.test.ts` start the real server on port `0` and drive it over HTTP; `src/main.startup.test.ts` spawns `bun src/main.ts` and `src/owner-reset.test.ts` spawns `bun --no-env-file src/owner-reset.ts`.
 - The CI job `deploy-dev` starts the dev stack of `pulse-deploy` `main` with this checkout and runs `E2E_CONSOLE_FLOW=two-factor bash e2e/console-setup.sh dev/compose.yaml`. A failure in a two-factor step where the console follows the spec is a deploy defect: hold the issue, never edit deploy from here or weaken the job.
 - A change to an endpoint or a response shape gets such a test; once the console reads the API, the response is typed by the contract.
 - Before handoff of a user-visible change, start the service with `bun start` and exercise the changed behavior once; report the command and result.
@@ -110,7 +110,7 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
   `/console.css`, and the one script `CONSOLE_JS` in `src/console-script.ts`, served at
   `/console.js`. The script holds the busy button, the copy buttons, the `[data-secret]` clearing and the
   `time[data-countdown]` timer; later features extend it instead of adding another script. The CSP in `src/server.ts` is `default-src 'none'; script-src 'self';
-  style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors
+  style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors
   'none'`: no inline script or style and no external asset. A change that needs more widens the
   CSP in the same change.
 - Every form POST follows the fixed order in `docs/configuration.md` (Origin, content type, body

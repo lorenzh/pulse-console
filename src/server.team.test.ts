@@ -16,7 +16,7 @@ import { sessionDigest } from "./account-store.ts";
 
 const START = 9_000_000;
 const CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {

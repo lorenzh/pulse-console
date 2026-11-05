@@ -16,7 +16,7 @@ import {
 import type { ConsoleRole } from "./roles.ts";
 
 const CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const SECRET = "s3cret-sentinel";
 
 const cleanups: (() => void | Promise<void>)[] = [];

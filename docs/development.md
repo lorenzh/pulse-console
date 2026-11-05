@@ -20,7 +20,8 @@ Open <http://127.0.0.1:8082>. Bun runs the TypeScript source directly (no build 
 - `src/setup-code.ts` makes the setup code and the grant; `src/auth-throttle.ts` is the failure limiter; `src/passwords.ts` holds the password rules and hash parameters; `src/cookies.ts` names and serializes cookies; `src/connection-test.ts` calls pulse-api.
 - `src/request-guard.ts` holds the loopback `Host`, `Origin`, CSRF and `next` rules; `src/forms.ts` the content type, repeated-field and field rules.
 - `src/server.ts` is the HTTP server: security headers and CSP, the raw path rule, routes, phases and the POST order, the ops routes through pulse-kit's `handleOps`, and `404`. `listen` reports a bind failure with the error code only.
-- `src/pages.ts` holds the setup and sign-in templates; `src/html.ts` the shared document head and form helpers (`csrfField`, `formTokenField`, `field`, `textareaField`, `submitButton`, `formErrorSummary`); `src/styles.ts` the stylesheet served at `/console.css`.
+- `src/pages.ts` holds the setup and sign-in templates; `src/html.ts` the shared document head and form helpers (`csrfField`, `formTokenField`, `field`, `textareaField`, `submitButton`, `formErrorSummary`); `src/styles.ts` the stylesheet served at `/console.css`; `src/fonts.ts` the fixed font routes and `loadFonts`.
+- The fonts in `assets/fonts/` are the latin static files of the npm tarballs `@fontsource/space-grotesk@5.3.0` and `@fontsource/jetbrains-mono@5.3.0` (`package/files/<name>`), byte for byte, with each tarball's `package/LICENSE` as `OFL-*.txt`. Check the tarball `dist.integrity` and `sha256sum assets/fonts/*` against the table in the spec; nothing is added to `package.json`. The server reads them once at start and fails when one is missing. The routes are served `immutable` without a content hash, so a changed font file gets a new file name and route.
 - `src/shell.ts` renders the signed-in shell (skip link, header, sign-out form, navigation, banner slot, `main`); `src/navigation.ts` holds the nine-entry registry and `visibleNavigation`; `src/roles.ts` the `ConsoleRole` order, `hasRole` and role labels.
 - `src/states.ts` holds the shared UI state renderers; `src/api-failure.ts` maps a contract `fetchJson` error to an `ApiFailure` and its fixed texts.
 - `src/confirm.ts` renders the typed-name and plain confirmation pages and holds `isTypedNameConfirmed` (both names trimmed, NFC, case-sensitive, inner spaces count); `typedNameError` names the trimmed expected name.
@@ -77,13 +78,14 @@ Work test first. Tests sit next to the code as `src/<module>.test.ts`, use hand-
   5. checks that `id -u` in the container is not `0` (non-root);
   6. follows the redirect of `/` and checks that the page holds `pulse Console` and carries `x-frame-options: DENY` (page and headers);
   7. checks that `GET /__test/states/empty` answers `404` (no test route in the image) and `GET /console.js` answers `200` with `text/javascript; charset=utf-8`;
-  8. checks that the log holds exactly one `pulse-console setup code:` line;
-  9. checks that `/data/console.db` belongs to `bun` with mode `600`;
-  10. scans the database file and its sidecars for the sentinel token: the file must be readable, start with `SQLite format 3`, and `grep -c` must exit `1` with `0` for each file;
-  11. checks that the sentinel token is in neither the container logs nor the page (no secret leaks);
-  12. checks that `docker stop` gives exit code `0` (graceful shutdown);
-  13. checks that a container without `PULSE_API_URL` exits `2` with `PULSE_API_URL must be set` (settings are validated);
-  14. checks that a malformed secret key file exits `2` with the required error text and without disclosing its content.
+  8. checks that two font routes answer `200 font/woff2` with the pinned SHA-256 and that the image holds both `OFL-*.txt` files;
+  9. checks that the log holds exactly one `pulse-console setup code:` line;
+  10. checks that `/data/console.db` belongs to `bun` with mode `600`;
+  11. scans the database file and its sidecars for the sentinel token: the file must be readable, start with `SQLite format 3`, and `grep -c` must exit `1` with `0` for each file;
+  12. checks that the sentinel token is in neither the container logs nor the page (no secret leaks);
+  13. checks that `docker stop` gives exit code `0` (graceful shutdown);
+  14. checks that a container without `PULSE_API_URL` exits `2` with `PULSE_API_URL must be set` (settings are validated);
+  15. checks that a malformed secret key file exits `2` with the required error text and without disclosing its content.
 - `deploy-dev` builds the dev stack of pulse-deploy main with this checkout and runs `E2E_CONSOLE_FLOW=two-factor bash e2e/console-setup.sh dev/compose.yaml`. It keeps logs on failure and always tears down the stack.
 - `browser` runs on `ubuntu-24.04` with a 15 minute limit and read-only contents: install from the lockfile, `bunx playwright install --with-deps chromium`, `bun run check:browser`.
 - `release` runs only on a tag. It needs `check`, both `docker` legs and `browser`, and calls the shared `release.yml` workflow of `lorenzh/pulse-config` (see [Releasing](#releasing)). On pull requests and on `main` it is skipped.

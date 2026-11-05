@@ -23,7 +23,7 @@ import { createConsoleServer, listen } from "./server.ts";
 import { createTeamStore } from "./team-store.ts";
 
 const CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const LINK_NOT_VALID =
   "This link is not valid. It may have expired or been used. Ask an admin for a new one.";
 const PASSWORD = "invited-person-password-1";

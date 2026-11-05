@@ -92,6 +92,27 @@ jobs:
             exit 1
           fi
           echo "ok: /console.js answers $type"
+      - name: Check the fonts are served from the image
+        run: |
+          for pair in \
+            space-grotesk-latin-700-normal.woff2:35f8aec56cfd5cbfdb03cc68733a54a0b05bb3617ffcd5fd332badc0b045ca55 \
+            jetbrains-mono-latin-400-normal.woff2:14425ba9c695763c1547f48a206b7aa60350a33ae23de09f0407877f3fcd89eb; do
+            name="${pair%%:*}"
+            want="${pair##*:}"
+            type=$(curl -s -o font.bin -w '%{http_code} %{content_type}' "http://127.0.0.1:8082/fonts/$name")
+            if [ "$type" != "200 font/woff2" ]; then
+              echo "GET /fonts/$name answered $type"
+              exit 1
+            fi
+            got=$(sha256sum font.bin | cut -d ' ' -f 1)
+            if [ "$got" != "$want" ]; then
+              echo "GET /fonts/$name has sha256 $got"
+              exit 1
+            fi
+            echo "ok: /fonts/$name answers $type with the pinned sha256"
+          done
+          docker exec console test -f /app/assets/fonts/OFL-space-grotesk.txt -a -f /app/assets/fonts/OFL-jetbrains-mono.txt
+          echo "ok: the image holds both OFL license texts"
       - name: Check the log holds one setup code line
         run: |
           count=$(docker logs console 2>&1 | grep -cE 'pulse-console setup code: [0-9a-f]{4}(-[0-9a-f]{4}){7}' || true)

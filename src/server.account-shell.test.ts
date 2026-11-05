@@ -11,7 +11,7 @@ import {
 } from "../test/signed-in-console.ts";
 
 const CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {

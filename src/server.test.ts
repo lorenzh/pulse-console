@@ -18,7 +18,7 @@ const TEST_SECRET_KEY = Uint8Array.from(Buffer.from("0123456789abcdef".repeat(4)
 
 const HEADERS = {
   "content-security-policy":
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
   "referrer-policy": "same-origin",
@@ -334,6 +334,7 @@ describe("other paths and methods", () => {
     await fetch(`${base}/`, { redirect: "manual" });
     await fetch(`${base}/setup`);
     await fetch(`${base}/console.css`);
+    await fetch(`${base}/fonts/space-grotesk-latin-700-normal.woff2`);
     await fetch(`${base}/healthz`);
     await fetch(`${base}/readyz`);
     await fetch(`${base}/nope`);
@@ -343,6 +344,7 @@ describe("other paths and methods", () => {
       'pulse_console_http_requests_total{path="/",code="303"} 1',
       'pulse_console_http_requests_total{path="/",code="405"} 1',
       'pulse_console_http_requests_total{path="/console.css",code="200"} 1',
+      'pulse_console_http_requests_total{path="/fonts/:file",code="200"} 1',
       'pulse_console_http_requests_total{path="/healthz",code="200"} 1',
       'pulse_console_http_requests_total{path="/readyz",code="200"} 1',
       'pulse_console_http_requests_total{path="/setup",code="200"} 1',
@@ -359,7 +361,7 @@ describe("/console.js", () => {
     expect(res.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.get("content-security-policy")).toBe(
-      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     );
     expectSecurityHeaders(res);
     const js = await res.text();

@@ -66,6 +66,8 @@ export type State = {
   factorThrottle: AuthThrottle<"account" | "client">;
   formTokens: FormTokens;
   protectedRoutes: ReadonlyMap<string, ProtectedRoute>;
+  /** Font bytes per fixed route, read once at server creation. */
+  fonts: ReadonlyMap<string, Uint8Array>;
 };
 
 /** A live session of this request with its effective stage. */
@@ -87,7 +89,7 @@ export function send(
   ctx: Ctx,
   status: number,
   contentType: string,
-  body: string,
+  body: string | Uint8Array,
   headers: Record<string, string> = {},
 ): void {
   if (ctx.cookies.length > 0) ctx.res.setHeader("set-cookie", ctx.cookies);

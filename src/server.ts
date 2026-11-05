@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { clientKeyOf, handleOps, type OpsHandlers, StartupError } from "@lorenzh/pulse-kit";
@@ -35,6 +36,7 @@ import { checkRoutes } from "./check-routes.ts";
 import { NO_TOKEN_TEXT, testConnection } from "./connection-test.ts";
 import { CONSOLE_JS } from "./console-script.ts";
 import { serializeCookie, serializeCookieDeletion } from "./cookies.ts";
+import { FONT_FILES, loadFonts } from "./fonts.ts";
 import { createFormTokens, type FormTokenResult } from "./form-tokens.ts";
 import { checkApiUrl, checkEmail, checkName, type FormFields, passwordText } from "./forms.ts";
 import { paragraph } from "./html.ts";
@@ -95,7 +97,7 @@ import { isSecondFactorRequired, signInStage } from "./two-factor-policy.ts";
 export type { ConsoleServerDeps };
 
 export const CONTENT_SECURITY_POLICY =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "content-security-policy": CONTENT_SECURITY_POLICY,
@@ -141,7 +143,15 @@ const ROUTES: Readonly<Record<string, Route>> = {
     access: "full",
     isNewInPhase2: true,
   },
+  ...Object.fromEntries(
+    FONT_FILES.map((file): [string, Route] => [
+      file.route,
+      { methods: ["GET", "HEAD"], access: "public" },
+    ]),
+  ),
 };
+const FONT_ROUTES: ReadonlySet<string> = new Set(FONT_FILES.map((file) => file.route));
+const FONT_CACHE = "public, max-age=31536000, immutable";
 
 const CODE_FIELDS = ["code", "csrf", "form_token"] as const;
 const OWNER_FIELDS = [
@@ -216,6 +226,7 @@ function pathLabel(path: string): PathLabel {
     case "/checks/delete":
       return path;
     default: {
+      if (FONT_ROUTES.has(path)) return "/fonts/:file";
       const link = linkOfPath(path);
       return link === undefined ? "other" : linkPathLabel(link.kind);
     }
@@ -405,6 +416,14 @@ function anonForm(ctx: Ctx, csrf: string): { csrf: string; formToken: string } {
   return { csrf, formToken: issueFormToken(ctx, anonBinding(csrf), ctx.path) };
 }
 
+/** Sends the bytes of a fixed font route; false when the path is not one. */
+function sendFont(ctx: Ctx): boolean {
+  const bytes = ctx.state.fonts.get(ctx.path);
+  if (bytes === undefined) return false;
+  send(ctx, 200, "font/woff2", bytes, { "cache-control": FONT_CACHE });
+  return true;
+}
+
 function handleGet(ctx: Ctx, isSetUp: boolean): void {
   switch (ctx.path) {
     case "/setup":
@@ -439,7 +458,7 @@ function handleGet(ctx: Ctx, isSetUp: boolean): void {
       send(ctx, 200, "text/css; charset=utf-8", CONSOLE_CSS);
       return;
     default:
-      handleAccountGet(ctx);
+      if (!sendFont(ctx)) handleAccountGet(ctx);
   }
 }
 
@@ -1164,6 +1183,7 @@ export function createConsoleServer(deps: ConsoleServerDeps): Server {
     }),
     formTokens: createFormTokens({ now: deps.now, randomBytes: deps.randomBytes }),
     protectedRoutes: protectedRoutesOf(deps),
+    fonts: loadFonts(readFileSync),
   };
   return createServer((req, res) => {
     const path = rawPath(req);
