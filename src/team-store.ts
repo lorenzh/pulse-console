@@ -1,8 +1,14 @@
 import type { Database } from "bun:sqlite";
 import { type CredentialGuard, isCredentialGuardHeld } from "./factor-store.ts";
 import { appendPeopleEvent, type PeoplePerson } from "./people-log.ts";
-import { type TargetDecision, targetDecision } from "./permissions.ts";
-import { type ConsoleRole, parseRole } from "./roles.ts";
+import {
+  type Action,
+  routeRole,
+  type TargetDecision,
+  type TeamActionKind,
+  targetDecision,
+} from "./permissions.ts";
+import { type ConsoleRole, hasRole, parseRole } from "./roles.ts";
 
 /** An invite lives this long after it was made. */
 export const INVITE_TTL_MS = 604_800_000;
@@ -60,7 +66,42 @@ export interface PendingInvite {
   expiresAt: number;
 }
 
+/** The person a team change names, as the form showed it. */
+export type TargetInput = { userId: number; revision: string; now: number };
+
+/** A refusal of a guarded change of one person, in the order the commit checks them. */
+export type TargetRefusal =
+  | { ok: false; reason: "session-gone" | "not-found" | "stale" | "no-authenticator" }
+  | { ok: false; reason: "forbidden"; denial: TargetDenial };
+
+export type TargetChangeResult = { ok: true; target: PeoplePerson } | TargetRefusal;
+
+export type SwitchResult = { ok: true } | TargetRefusal;
+
 export interface TeamStore {
+  /** One person of the People list, or undefined. */
+  member: (id: number) => TeamMember | undefined;
+  /**
+   * Each change of one person runs in one BEGIN IMMEDIATE transaction: the session guard, the
+   * actor's stored role, the target, its revision, the target rule, then the change, the end of
+   * the changed people's sessions and its People event.
+   */
+  changeRole: (
+    actor: CredentialGuard,
+    input: TargetInput & { toRole: InviteRole },
+  ) => TargetChangeResult;
+  /** Removes the user; sessions, factors and reset links cascade, their invites stop working. */
+  removeUser: (actor: CredentialGuard, input: TargetInput) => TargetChangeResult;
+  /** Deletes the target's authenticators, recovery codes, pending setup keys and sessions. */
+  resetTwoFactor: (actor: CredentialGuard, input: TargetInput) => TargetChangeResult;
+  /** The actor becomes Admin, the enrolled Admin target the Owner; both lose every session. */
+  transferOwnership: (actor: CredentialGuard, input: TargetInput) => TargetChangeResult;
+  /** The Owner turns the organisation-wide 2FA requirement on or off; no session ends. */
+  setTwoFactorRequiredForAll: (
+    actor: CredentialGuard,
+    input: { isOn: boolean; now: number },
+  ) => SwitchResult;
+
   /** Every user, Owner first, then by role and name. */
   members: () => TeamMember[];
   /** Every invite that is not used and not revoked, oldest first. */
@@ -241,9 +282,183 @@ function inviteMutations(db: Database) {
   };
 }
 
+type TargetRow = PersonRow & { created_at: number; has_authenticator: number };
+
+const TARGET_SQL = `SELECT u.id, u.email, u.name, u.role, u.created_at,
+  EXISTS (SELECT 1 FROM authenticators a WHERE a.user_id = u.id) AS has_authenticator
+  FROM users u WHERE u.id = ?`;
+
+function revisionOf(row: { created_at: number; role: string }): string {
+  return `${row.created_at}-${row.role}`;
+}
+
+type Admitted = { actor: Actor; target: PeoplePerson & { role: ConsoleRole } };
+
+/** The commit checks of section 3: session, actor role, target, revision, rule. */
+function admit(
+  db: Database,
+  guard: CredentialGuard,
+  check: { action: Action; kind: TeamActionKind; toRole?: ConsoleRole },
+  input: TargetInput,
+): Admitted | TargetRefusal {
+  const actor = actorOf(db, guard);
+  if (actor === undefined) return { ok: false, reason: "session-gone" };
+  const coarse = coarseDenial(actor.role, check.action);
+  if (coarse !== undefined) return coarse;
+  const row = db.query<TargetRow, [number]>(TARGET_SQL).get(input.userId);
+  if (row === null) return { ok: false, reason: "not-found" };
+  if (revisionOf(row) !== input.revision) return { ok: false, reason: "stale" };
+  const role = parseRole(row.role);
+  const decision = targetDecision(actor.role, check.kind, role, check.toRole);
+  if (!decision.isAllowed) return { ok: false, reason: "forbidden", denial: decision };
+  if (check.kind === "transfer" && row.has_authenticator !== 1) {
+    return { ok: false, reason: "no-authenticator" };
+  }
+  return { actor, target: { id: row.id, email: row.email, name: row.name, role } };
+}
+
+/** The actor's re-read role against the route's coarse action (its lowest allowed role). */
+function coarseDenial(role: ConsoleRole, action: Action): TargetRefusal | undefined {
+  const needed = routeRole(action);
+  if (hasRole(role, needed)) return undefined;
+  return {
+    ok: false,
+    reason: "forbidden",
+    denial: { isAllowed: false, reason: "role", requiredRole: needed },
+  };
+}
+
+function targetPerson(target: Admitted["target"]): PeoplePerson {
+  return { id: target.id, email: target.email, name: target.name };
+}
+
+function memberMutations(db: Database) {
+  const endSessions = db.query("DELETE FROM sessions WHERE user_id = ?");
+  const setRole = db.query("UPDATE users SET role = ? WHERE id = ?");
+  const changeRole = db.transaction(
+    (guard: CredentialGuard, input: TargetInput & { toRole: InviteRole }): TargetChangeResult => {
+      const toRole = input.toRole;
+      const admitted = admit(
+        db,
+        guard,
+        { action: "role.member-viewer", kind: "role-change", toRole },
+        input,
+      );
+      if (!("actor" in admitted)) return admitted;
+      const { actor, target } = admitted;
+      setRole.run(toRole, target.id);
+      endSessions.run(target.id);
+      appendPeopleEvent(db, {
+        at: input.now,
+        actor: { kind: "user", person: personOf(actor) },
+        action: "user.role-change",
+        target: { kind: "user", person: targetPerson(target) },
+        fromRole: target.role,
+        toRole,
+      });
+      return { ok: true, target: targetPerson(target) };
+    },
+  );
+  const removeUser = db.transaction(
+    (guard: CredentialGuard, input: TargetInput): TargetChangeResult => {
+      const admitted = admit(db, guard, { action: "remove.member", kind: "remove" }, input);
+      if (!("actor" in admitted)) return admitted;
+      const { actor, target } = admitted;
+      appendPeopleEvent(db, {
+        at: input.now,
+        actor: { kind: "user", person: personOf(actor) },
+        action: "user.remove",
+        target: { kind: "user", person: targetPerson(target) },
+        fromRole: target.role,
+      });
+      db.query("DELETE FROM users WHERE id = ?").run(target.id);
+      return { ok: true, target: targetPerson(target) };
+    },
+  );
+  const resetTwoFactor = db.transaction(
+    (guard: CredentialGuard, input: TargetInput): TargetChangeResult => {
+      const admitted = admit(db, guard, { action: "2fa-reset.member", kind: "2fa-reset" }, input);
+      if (!("actor" in admitted)) return admitted;
+      const { actor, target } = admitted;
+      for (const table of ["authenticators", "recovery_codes", "pending_authenticators"]) {
+        db.query(`DELETE FROM ${table} WHERE user_id = ?`).run(target.id);
+      }
+      endSessions.run(target.id);
+      appendPeopleEvent(db, {
+        at: input.now,
+        actor: { kind: "user", person: personOf(actor) },
+        action: "user.2fa-reset",
+        target: { kind: "user", person: targetPerson(target) },
+      });
+      return { ok: true, target: targetPerson(target) };
+    },
+  );
+  const transfer = db.transaction(
+    (guard: CredentialGuard, input: TargetInput): TargetChangeResult => {
+      const admitted = admit(db, guard, { action: "owner.transfer", kind: "transfer" }, input);
+      if (!("actor" in admitted)) return admitted;
+      const { actor, target } = admitted;
+      // The former Owner first: the unique index users_one_owner allows one owner at a time.
+      setRole.run("admin", actor.id);
+      setRole.run("owner", target.id);
+      endSessions.run(actor.id);
+      endSessions.run(target.id);
+      appendPeopleEvent(db, {
+        at: input.now,
+        actor: { kind: "user", person: personOf(actor) },
+        action: "owner.transfer",
+        target: { kind: "user", person: targetPerson(target) },
+        fromRole: "admin",
+        toRole: "owner",
+      });
+      return { ok: true, target: targetPerson(target) };
+    },
+  );
+  const setSwitch = db.transaction(
+    (guard: CredentialGuard, input: { isOn: boolean; now: number }): SwitchResult => {
+      const actor = actorOf(db, guard);
+      if (actor === undefined) return { ok: false, reason: "session-gone" };
+      const denied = coarseDenial(actor.role, "team.require-2fa");
+      if (denied !== undefined) return denied;
+      db.query("UPDATE instance SET require_2fa_all = ?").run(input.isOn ? 1 : 0);
+      appendPeopleEvent(db, {
+        at: input.now,
+        actor: { kind: "user", person: personOf(actor) },
+        action: "team.require-2fa",
+        target: { kind: "instance" },
+        value: input.isOn ? "on" : "off",
+      });
+      return { ok: true };
+    },
+  );
+  return {
+    changeRole: (guard: CredentialGuard, input: TargetInput & { toRole: InviteRole }) =>
+      changeRole.immediate(guard, input),
+    removeUser: (guard: CredentialGuard, input: TargetInput) => removeUser.immediate(guard, input),
+    resetTwoFactor: (guard: CredentialGuard, input: TargetInput) =>
+      resetTwoFactor.immediate(guard, input),
+    transferOwnership: (guard: CredentialGuard, input: TargetInput) =>
+      transfer.immediate(guard, input),
+    setTwoFactorRequiredForAll: (guard: CredentialGuard, input: { isOn: boolean; now: number }) =>
+      setSwitch.immediate(guard, input),
+  };
+}
+
 /** An INSERT … RETURNING gave no row. */
 export class InviteInsertError extends Error {
   override name = "InviteInsertError";
+}
+
+function toMember(row: MemberRow): TeamMember {
+  const role = parseRole(row.role);
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name,
+    role,
+    hasAuthenticator: row.has_authenticator === 1,
+    revision: `${row.created_at}-${role}`,
+  };
 }
 
 /** The team store over an open console database. */
@@ -262,19 +477,14 @@ export function createTeamStore(db: Database): TeamStore {
      WHERE i.used_at IS NULL AND i.revoked_at IS NULL
      ORDER BY i.id`,
   );
+  const selectMember = db.query<TargetRow, [number]>(TARGET_SQL);
   return {
-    members: () =>
-      selectMembers.all().map((row) => {
-        const role = parseRole(row.role);
-        return {
-          id: row.id,
-          email: row.email,
-          name: row.name,
-          role,
-          hasAuthenticator: row.has_authenticator === 1,
-          revision: `${row.created_at}-${role}`,
-        };
-      }),
+    ...memberMutations(db),
+    members: () => selectMembers.all().map(toMember),
+    member: (id) => {
+      const row = selectMember.get(id);
+      return row === null ? undefined : toMember(row);
+    },
     pendingInvites: () =>
       selectInvites.all().map((row) => ({
         id: row.id,

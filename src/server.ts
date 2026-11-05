@@ -187,6 +187,11 @@ function pathLabel(path: string): PathLabel {
     case "/team":
     case "/team/invites":
     case "/team/invites/revoke":
+    case "/team/role":
+    case "/team/remove":
+    case "/team/reset-2fa":
+    case "/team/transfer":
+    case "/team/require-2fa":
       return path;
     default:
       return linkOfPath(path)?.kind === "invite" ? "/invite/:token" : "other";
@@ -457,6 +462,7 @@ function signInNotice(ctx: Ctx): string | undefined {
     ctx.cookies.push(serializeCookieDeletion("session", ctx.deps.mode));
     return EXPIRED;
   }
+  if (ctx.query.get("transfer") === "done") return "Ownership is transferred. Sign in again.";
   return ctx.query.get("setup") === "done" ? "Setup is complete. Sign in." : undefined;
 }
 
@@ -831,6 +837,9 @@ function sendShell(ctx: Ctx, signedIn: SignedIn, status: number, page: ShellPart
 
 function sendPageResult(ctx: Ctx, signedIn: SignedIn, route: ProtectedRoute, result: PageResult) {
   if (result.kind === "redirect") {
+    if (result.isSessionCleared === true) {
+      ctx.cookies.push(serializeCookieDeletion("session", ctx.deps.mode));
+    }
     redirect(ctx, result.location);
     return;
   }

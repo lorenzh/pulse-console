@@ -56,7 +56,7 @@ The Owner and every Admin must have a TOTP authenticator. The Owner can require 
 
 ## Team page
 
-`GET /team` (Admin and Owner) lists every person with name, email, role and `2FA: on` or `2FA: off`, and every invite that is neither used nor revoked, with email, role, creator name (or `removed`), expiry (`YYYY-MM-DD HH:MM UTC`) and `pending` or `expired`. The Owner also sees the state of the organisation 2FA switch. Each pending invite has a `Revoke` link when the actor may revoke it. The page ends with the invite form. Reset links, role changes, removal, 2FA reset and transfer arrive in later steps of #564.
+`GET /team` (Admin and Owner) lists every person with name, email, role and `2FA: on` or `2FA: off`, and every invite that is neither used nor revoked, with email, role, creator name (or `removed`), expiry (`YYYY-MM-DD HH:MM UTC`) and `pending` or `expired`. Each person row has the action links the actor may use on that person: `Change role`, `Reset 2FA`, `Remove` and `Make owner`. The Owner's row has none, and an Admin sees none on Admin rows. A link only opens a page; it never acts. Each pending invite has a `Revoke` link when the actor may revoke it. The page holds only two forms besides sign-out: the invite form and, for the Owner, the organisation 2FA switch. One form per person and action would evict its own form tokens (100 per session) on a team of about 25. Reset links arrive in a later step of #564.
 
 ## Invites
 
@@ -69,6 +69,18 @@ The Owner and every Admin must have a TOTP authenticator. The Owner can require 
 - `GET /invite/<token>` shows the email and role as text and a form with `name`, `password` and `password_confirm`. It works only while the invite is live and its creator still exists and still may make it. Every other case answers the same `404` page `Link not valid`, which names no case and no email.
 - `POST /invite/<token>` creates the account with the bound email and role (no field can change them), marks the invite used and starts a session: `enrol` (`303` to `/account/authenticator`) for an Admin or while the switch is on, else `full` (`303` to `/`). A session cookie the browser already sent is ended, as at sign-in.
 - Creation, revocation and acceptance each append one People-log row: `invite.create`, `invite.revoke`, `invite.accept`.
+
+## Changes of one person
+
+Every route takes `user=<id>` (`^[1-9][0-9]{0,15}$`, else `404`) and a hidden `revision`, `<created_at>-<role>` of the person as shown. Another revision answers `409` `Changed since you opened it`, so a removed and re-used id or a changed role is a stale form. Each commit runs in one `BEGIN IMMEDIATE` transaction: the request's session row (`409` `Not saved`), the actor's stored role (`403`), the target (`404`), its revision (`409`), the target rule (`403`), then the change and one People-log row.
+
+- **Role change** (`/team/role`, Owner only): a choice of the other roles among `admin`, `member` and `viewer`. `owner` or another value answers `422` `Choose admin, member or viewer.`; the current role answers `422` `Choose a different role.` Every session of the person ends. A promoted Admin without an authenticator reaches only enrolment after the next sign-in. Row `user.role-change` with `from_role` and `to_role`.
+- **2FA reset** (`/team/reset-2fa`, plain confirmation): deletes the person's authenticators, recovery codes and pending setup keys and every session. The password stays. Row `user.2fa-reset`.
+- **Removal** (`/team/remove`, typed confirmation): the page says `<name> loses access to the console now. Their invites stop working. API tokens are not tied to people: tokens that <name> created or copied stay valid until someone revokes them in pulse-api.` The `user.remove` row keeps email, name and role; then the user row goes, and with it sessions, authenticators, pending setup keys, recovery codes and reset links. Invites the person made stay with no creator and stop working. The email can be invited again.
+- **Ownership transfer** (`/team/transfer`, typed confirmation, Owner only): the target must be an Admin (`403` `Only an admin can become the owner.`) with an authenticator (`409` `<name> has not set up two-factor sign-in yet.`). The Owner becomes an Admin first, then the target becomes the Owner, so there is always one Owner. Every session of both people ends, the requesting one included; the answer is `303` to `/sign-in?transfer=done` with the session cookie deleted, and the sign-in page says `Ownership is transferred. Sign in again.` Of two concurrent transfers the second commit finds its session gone and answers `409` `Not saved`. Row `owner.transfer`.
+- **Organisation 2FA** (`POST /team/require-2fa`, Owner only): `value` `on` or `off` (else `422` `Choose on or off.`). No session ends. Row `team.require-2fa` with `value`.
+
+Each committed change logs `info` `team change` with `action`, `actorId` and `targetId` (`null` for the switch).
 
 ## People log
 

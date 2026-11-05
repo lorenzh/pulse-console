@@ -509,6 +509,74 @@ async function checkInvites(env: Env, browser: Browser): Promise<void> {
   }
 }
 
+/**
+ * At 390 px without JavaScript: an invitee joins, then the Owner opens the role form, the 2FA
+ * reset and the removal confirmation from the Team page links and removes the person.
+ */
+async function checkTeamActions(env: Env, browser: Browser): Promise<void> {
+  const violations: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  const owner = await browser.newContext({ viewport, javaScriptEnabled: false });
+  const invitee = await browser.newContext({ viewport, javaScriptEnabled: false });
+  const scriptedContext = await browser.newContext({ viewport });
+  try {
+    watchCsp(scriptedContext, violations);
+    const scripted = await newPage(scriptedContext, violations);
+    watchCsp(owner, violations);
+    watchCsp(invitee, violations);
+    const page = await newPage(owner, violations);
+    const base = env.console.base;
+    await signIn(page, env);
+    // The same session in the scripted context: one sign-in, one fixture recovery code.
+    await scriptedContext.addCookies(await owner.cookies());
+    await page.goto(`${base}/team`);
+    await page.fill('input[name="email"]', "removable@example.com");
+    await page.selectOption('select[name="role"]', "member");
+    await Promise.all([
+      page.waitForURL(`${base}/team/invites`),
+      page.getByRole("button", { name: "Create invite link" }).click(),
+    ]);
+    const link = await page.inputValue("#invite-link");
+    const anon = await newPage(invitee, violations);
+    await anon.goto(link);
+    await anon.fill('input[name="name"]', "Rem Ovable");
+    await anon.fill('input[name="password"]', "removable-person-password");
+    await anon.fill('input[name="password_confirm"]', "removable-person-password");
+    await Promise.all([
+      anon.waitForURL((url) => !url.pathname.startsWith("/invite/")),
+      anon.getByRole("button", { name: "Create account" }).click(),
+    ]);
+    await page.goto(`${base}/team`);
+    await assertFits(page, 390, "390px team with action links");
+    for (const [name, label] of [
+      ["Change role for Rem Ovable", "role form"],
+      ["Reset 2FA for Rem Ovable", "2FA reset confirmation"],
+      ["Remove for Rem Ovable", "removal confirmation"],
+    ] as const) {
+      await page.goto(`${base}/team`);
+      const href = await page.getByRole("link", { name }).getAttribute("href");
+      await page.goto(`${base}${href ?? ""}`);
+      await assertFits(page, 390, `390px ${label}`);
+      // axe needs JavaScript, so it runs in a second, scripted context.
+      await axeOn(scripted, `${base}${href ?? ""}`, label);
+    }
+    await page.fill('input[name="confirm_name"]', "Rem Ovable");
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === "/team"),
+      page.getByRole("button", { name: "Remove" }).click(),
+    ]);
+    assert(!(await page.content()).includes("removable@example.com"), "the person is removed");
+    assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
+    ok(
+      "390px, no JavaScript: role form, 2FA reset and removal fit, pass axe and remove the person",
+    );
+  } finally {
+    await owner.close();
+    await invitee.close();
+    await scriptedContext.close();
+  }
+}
+
 async function runChecks(): Promise<void> {
   const env = await startEnv(0);
   const browser = await chromium.launch();
@@ -517,6 +585,7 @@ async function runChecks(): Promise<void> {
     await checkLayout(env, browser, 1280, 800);
     await checkAxe(env, browser);
     await checkInvites(env, browser);
+    await checkTeamActions(env, browser);
     await checkFocus(env, browser);
     await checkNoScript(env, browser);
     await checkBusyScript(env, browser);

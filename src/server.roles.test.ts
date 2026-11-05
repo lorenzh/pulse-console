@@ -69,6 +69,44 @@ describe("route inventory", () => {
     ["/", "viewer"],
     ["/team", "admin"],
   ];
+  // Literal required role of every member route of section 8; GET on a Viewer target.
+  const MEMBER_ROUTES: readonly (readonly [string, ConsoleRole])[] = [
+    ["/team/role", "owner"],
+    ["/team/remove", "admin"],
+    ["/team/reset-2fa", "admin"],
+  ];
+
+  test.each(MEMBER_ROUTES)("%s?user=<viewer> needs %s", async (path, needed) => {
+    const { c } = await team();
+    const index = ORDER.indexOf(needed);
+    for (const [i, role] of ORDER.entries()) {
+      if (role === "viewer") continue; // the target itself: a self action, checked elsewhere
+      const r = await getPage(c, `${path}?user=${c.ids.viewer}`, c.cookies[role]);
+      expect([role, r.status]).toEqual([role, i >= index ? 200 : 403]);
+    }
+  });
+
+  test("/team/transfer and POST /team/require-2fa need the Owner", async () => {
+    const { c } = await team();
+    for (const role of ["viewer", "member", "admin"] as const) {
+      expect((await getPage(c, `/team/transfer?user=${c.ids.admin}`, c.cookies[role])).status).toBe(
+        403,
+      );
+      const r = await postForm(
+        c,
+        "/team/require-2fa",
+        { csrf: c.csrfs[role], form_token: "x", value: "on" },
+        { cookie: c.cookies[role] },
+      );
+      expect([role, r.status]).toEqual([role, 403]);
+    }
+    expect((await getPage(c, `/team/transfer?user=${c.ids.admin}`, c.cookies.owner)).status).toBe(
+      200,
+    );
+    const r = await fetch(`${c.base}/team/require-2fa`, { headers: { cookie: c.cookies.owner } });
+    expect(r.status).toBe(405);
+    expect(r.headers.get("allow")).toBe("POST");
+  });
   const ORDER: readonly ConsoleRole[] = ["viewer", "member", "admin", "owner"];
 
   test.each(PROTECTED)("%s needs %s", async (path, needed) => {
@@ -158,5 +196,207 @@ describe("rows 14 and 15: invites at HTTP level", () => {
       expect(page.status).toBe(403);
     }
     expect((await getPage(c, "/team/invites/revoke?invite=1", c.cookies.admin)).status).toBe(404);
+  });
+});
+
+describe("rows 16 to 19 and 23 to 25 and team.require-2fa at HTTP level", () => {
+  const TABLES = ["users", "invites", "reset_links", "sessions", "authenticators", "people_events"];
+
+  function snapshot(c: TeamConsole): unknown[] {
+    return TABLES.map((t) => c.db.query(`SELECT * FROM ${t} ORDER BY rowid`).all());
+  }
+
+  function revisionOf(c: TeamConsole, id: number): string {
+    const row = c.db
+      .query<{ created_at: number; role: string }, [number]>(
+        "SELECT created_at, role FROM users WHERE id = ?",
+      )
+      .get(id);
+    return `${row?.created_at}-${row?.role}`;
+  }
+
+  /**
+   * POSTs `path?user=<target>` as `as`. The form token comes from the GET of `tokenFrom` (a target
+   * the actor may open), because the token binds to the path without the query.
+   */
+  async function act(
+    c: TeamConsole,
+    as: ConsoleRole,
+    path: string,
+    target: ConsoleRole,
+    fields: Record<string, string> = {},
+    tokenFrom: ConsoleRole = target,
+  ) {
+    const page = await getPage(c, `${path}?user=${c.ids[tokenFrom]}`, c.cookies[as]);
+    return postForm(
+      c,
+      `${path}?user=${c.ids[target]}`,
+      {
+        csrf: c.csrfs[as],
+        form_token: formTokenOf(page.body, `${path}?user=${c.ids[tokenFrom]}`),
+        revision: revisionOf(c, c.ids[target]),
+        ...fields,
+      },
+      { cookie: c.cookies[as] },
+    );
+  }
+
+  async function denied(
+    c: TeamConsole,
+    api: FakeApi,
+    run: () => Promise<{ status: number; body: string }>,
+    text: string,
+  ) {
+    const before = snapshot(c);
+    const r = await run();
+    expect(r.status).toBe(403);
+    expect(r.body).toContain(text);
+    expect(snapshot(c)).toEqual(before);
+    expect(api.seen).toHaveLength(0);
+  }
+
+  function roleOf(c: TeamConsole, id: number): string | undefined {
+    return c.db.query<{ role: string }, [number]>("SELECT role FROM users WHERE id = ?").get(id)
+      ?.role;
+  }
+
+  test("row 16: Admin removes a Viewer 303; Member 403", async () => {
+    const { c, api } = await team();
+    await denied(
+      c,
+      api,
+      () => act(c, "member", "/team/remove", "viewer", { confirm_name: "Vi Viewer" }),
+      "needs the Admin role",
+    );
+    const r = await act(c, "admin", "/team/remove", "viewer", { confirm_name: "Vi Viewer" });
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe("/team");
+    expect(roleOf(c, c.ids.viewer)).toBeUndefined();
+  });
+
+  test("row 17: Owner removes an Admin 303; Admin 403", async () => {
+    const { c, api } = await team();
+    await denied(
+      c,
+      api,
+      () => act(c, "admin", "/team/remove", "admin", { confirm_name: "Ada Admin" }, "viewer"),
+      "needs the Owner role",
+    );
+    expect(
+      (await act(c, "owner", "/team/remove", "admin", { confirm_name: "Ada Admin" })).status,
+    ).toBe(303);
+    expect(roleOf(c, c.ids.admin)).toBeUndefined();
+  });
+
+  test("row 18: Owner changes Member to Viewer 303; Admin 403", async () => {
+    const { c, api } = await team();
+    await denied(
+      c,
+      api,
+      () => act(c, "admin", "/team/role", "member", { role: "viewer" }),
+      "needs the Owner role",
+    );
+    expect((await act(c, "owner", "/team/role", "member", { role: "viewer" })).status).toBe(303);
+    expect(roleOf(c, c.ids.member)).toBe("viewer");
+  });
+
+  test("row 19: Owner promotes a Member to Admin 303; Admin 403", async () => {
+    const { c, api } = await team();
+    await denied(
+      c,
+      api,
+      () => act(c, "admin", "/team/role", "member", { role: "admin" }),
+      "needs the Owner role",
+    );
+    expect((await act(c, "owner", "/team/role", "member", { role: "admin" })).status).toBe(303);
+    expect(roleOf(c, c.ids.member)).toBe("admin");
+  });
+
+  test("row 23: Admin resets a Viewer's 2FA 303; Member 403", async () => {
+    const { c, api } = await team();
+    await denied(
+      c,
+      api,
+      () => act(c, "member", "/team/reset-2fa", "viewer"),
+      "needs the Admin role",
+    );
+    expect((await act(c, "admin", "/team/reset-2fa", "viewer")).status).toBe(303);
+  });
+
+  test("row 24: Owner resets an Admin's 2FA 303; Admin 403", async () => {
+    const { c, api } = await team();
+    await denied(
+      c,
+      api,
+      () => act(c, "admin", "/team/reset-2fa", "admin", {}, "viewer"),
+      "needs the Owner role",
+    );
+    expect((await act(c, "owner", "/team/reset-2fa", "admin")).status).toBe(303);
+    const n = c.db
+      .query<{ n: number }, [number]>("SELECT count(*) AS n FROM authenticators WHERE user_id = ?")
+      .get(c.ids.admin)?.n;
+    expect(n).toBe(0);
+  });
+
+  test("row 25: Owner transfers to an enrolled Admin 303 to /sign-in?transfer=done; Admin 403", async () => {
+    const { c, api } = await team();
+    await denied(
+      c,
+      api,
+      () => act(c, "admin", "/team/transfer", "admin", { confirm_name: "Ada Admin" }),
+      "needs the Owner role",
+    );
+    const r = await act(c, "owner", "/team/transfer", "admin", { confirm_name: "Ada Admin" });
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe("/sign-in?transfer=done");
+  });
+
+  test("row 22 for the other routes: the Owner as target is 403 with the Owner-target text", async () => {
+    const { c, api } = await team();
+    const text = "No one can change the owner account in the console.";
+    await denied(
+      c,
+      api,
+      () => act(c, "owner", "/team/remove", "owner", { confirm_name: "Owner" }, "viewer"),
+      text,
+    );
+    await denied(
+      c,
+      api,
+      () => act(c, "owner", "/team/role", "owner", { role: "admin" }, "viewer"),
+      text,
+    );
+    await denied(c, api, () => act(c, "owner", "/team/reset-2fa", "owner", {}, "viewer"), text);
+    await denied(
+      c,
+      api,
+      () => act(c, "admin", "/team/remove", "owner", { confirm_name: "Owner" }, "viewer"),
+      text,
+    );
+  });
+
+  test("team.require-2fa: Owner 303; Admin 403", async () => {
+    const { c, api } = await team();
+    const before = snapshot(c);
+    const page = await getPage(c, "/team", c.cookies.admin);
+    const r = await postForm(
+      c,
+      "/team/require-2fa",
+      { csrf: c.csrfs.admin, form_token: formTokenOf(page.body, "/team/invites"), value: "on" },
+      { cookie: c.cookies.admin },
+    );
+    expect(r.status).toBe(403);
+    expect(r.body).toContain("This page needs the Owner role or higher. Your role is Admin.");
+    expect(snapshot(c)).toEqual(before);
+    const own = await getPage(c, "/team", c.cookies.owner);
+    const ok = await postForm(
+      c,
+      "/team/require-2fa",
+      { csrf: c.csrfs.owner, form_token: formTokenOf(own.body, "/team/require-2fa"), value: "on" },
+      { cookie: c.cookies.owner },
+    );
+    expect(ok.status).toBe(303);
+    expect(ok.headers.get("location")).toBe("/team");
+    expect(api.seen).toHaveLength(0);
   });
 });

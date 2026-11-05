@@ -343,3 +343,202 @@ describe("invites", () => {
     expect(store.pendingInvite(1)).toBeDefined();
   });
 });
+
+describe("guarded changes of one person", () => {
+  type Seeded = {
+    db: Database;
+    owner: number;
+    admin: number;
+    member: number;
+    guard: { sessionId: string; userId: number };
+  };
+
+  function seeded(actorRole: "owner" | "admin"): Seeded {
+    const db = fresh();
+    const owner = addUser(db, "o@example.com", "Ow", "owner", 1);
+    const admin = addUser(db, "a@example.com", "Ad", "admin", 2);
+    const member = addUser(db, "m@example.com", "Mo", "member", 3);
+    db.query(
+      "INSERT INTO authenticators (user_id, secret, last_step, confirmed_at) VALUES (?, 's', -1, 1)",
+    ).run(admin);
+    const actor = actorRole === "owner" ? owner : admin;
+    for (const [id, sid] of [
+      [actor, "actor-session"],
+      [member, "member-session"],
+      [admin === actor ? owner : admin, "other-session"],
+    ] as const) {
+      db.query(
+        "INSERT INTO sessions (id_digest, user_id, csrf_token, created_at, last_seen_at, stage) VALUES (?, ?, 'c', 1, 1, 'full')",
+      ).run(sessionDigest(sid), id);
+    }
+    return { db, owner, admin, member, guard: { sessionId: "actor-session", userId: actor } };
+  }
+
+  function n(db: Database, sql: string, ...args: number[]): number {
+    return (
+      db.query<{ n: number }, number[]>(`SELECT count(*) AS n FROM ${sql}`).get(...args)?.n ?? -1
+    );
+  }
+
+  type Op = {
+    name: string;
+    actor: "owner" | "admin";
+    run: (s: Seeded) => { ok: boolean; reason?: string };
+    action: string;
+    /** The effect after a commit, as a literal check. */
+    check: (s: Seeded) => void;
+  };
+  const OPS: Op[] = [
+    {
+      name: "changeRole",
+      actor: "owner",
+      run: (s) =>
+        createTeamStore(s.db).changeRole(s.guard, {
+          userId: s.member,
+          revision: "3-member",
+          now: 10,
+          toRole: "viewer",
+        }),
+      action: "user.role-change",
+      check: (s) => {
+        expect(
+          s.db
+            .query<{ role: string }, [number]>("SELECT role FROM users WHERE id = ?")
+            .get(s.member)?.role,
+        ).toBe("viewer");
+        expect(n(s.db, "sessions WHERE user_id = ?", s.member)).toBe(0);
+      },
+    },
+    {
+      name: "removeUser",
+      actor: "admin",
+      run: (s) =>
+        createTeamStore(s.db).removeUser(s.guard, {
+          userId: s.member,
+          revision: "3-member",
+          now: 10,
+        }),
+      action: "user.remove",
+      check: (s) => {
+        expect(n(s.db, "users WHERE id = ?", s.member)).toBe(0);
+        expect(n(s.db, "sessions WHERE user_id = ?", s.member)).toBe(0);
+      },
+    },
+    {
+      name: "resetTwoFactor",
+      actor: "owner",
+      run: (s) =>
+        createTeamStore(s.db).resetTwoFactor(s.guard, {
+          userId: s.admin,
+          revision: "2-admin",
+          now: 10,
+        }),
+      action: "user.2fa-reset",
+      check: (s) => {
+        expect(n(s.db, "authenticators WHERE user_id = ?", s.admin)).toBe(0);
+        expect(n(s.db, "sessions WHERE user_id = ?", s.admin)).toBe(0);
+      },
+    },
+    {
+      name: "transferOwnership",
+      actor: "owner",
+      run: (s) =>
+        createTeamStore(s.db).transferOwnership(s.guard, {
+          userId: s.admin,
+          revision: "2-admin",
+          now: 10,
+        }),
+      action: "owner.transfer",
+      check: (s) => {
+        expect(
+          s.db.query<{ id: number }, []>("SELECT id FROM users WHERE role = 'owner'").all(),
+        ).toEqual([{ id: s.admin }]);
+        expect(n(s.db, "sessions WHERE user_id IN (?, ?)", s.owner, s.admin)).toBe(0);
+      },
+    },
+    {
+      name: "setTwoFactorRequiredForAll",
+      actor: "owner",
+      run: (s) =>
+        createTeamStore(s.db).setTwoFactorRequiredForAll(s.guard, { isOn: true, now: 10 }),
+      action: "team.require-2fa",
+      check: (s) => {
+        expect(
+          s.db.query<{ v: number }, []>("SELECT require_2fa_all AS v FROM instance").get()?.v,
+        ).toBe(1);
+        expect(n(s.db, "sessions")).toBe(3);
+      },
+    },
+  ];
+
+  test.each(OPS)("$name with the actor session present commits with one People event", (op) => {
+    const s = seeded(op.actor);
+    if (op.name === "setTwoFactorRequiredForAll")
+      s.db.run(
+        "INSERT INTO instance (id, api_url, setup_completed_at) VALUES (1, 'http://127.0.0.1:9', 1)",
+      );
+    expect(op.run(s).ok).toBe(true);
+    op.check(s);
+    expect(s.db.query<{ action: string }, []>("SELECT action FROM people_events").all()).toEqual([
+      { action: op.action },
+    ]);
+  });
+
+  test.each(OPS)(
+    "$name with the actor session deleted is session-gone and changes nothing",
+    (op) => {
+      const s = seeded(op.actor);
+      s.db.query("DELETE FROM sessions WHERE id_digest = ?").run(sessionDigest("actor-session"));
+      const tables = ["users", "sessions", "authenticators", "people_events", "instance"];
+      const before = tables.map((t) => s.db.query(`SELECT * FROM ${t}`).all());
+      expect(op.run(s)).toEqual({ ok: false, reason: "session-gone" });
+      expect(tables.map((t) => s.db.query(`SELECT * FROM ${t}`).all())).toEqual(before);
+    },
+  );
+
+  test("the commit re-reads the actor, the target, its revision and the rule in that order", () => {
+    const s = seeded("admin");
+    const store = createTeamStore(s.db);
+    s.db.query("UPDATE users SET role = 'member' WHERE id = ?").run(s.admin);
+    expect(store.removeUser(s.guard, { userId: s.member, revision: "3-member", now: 1 })).toEqual({
+      ok: false,
+      reason: "forbidden",
+      denial: { isAllowed: false, reason: "role", requiredRole: "admin" },
+    });
+    s.db.query("UPDATE users SET role = 'admin' WHERE id = ?").run(s.admin);
+    expect(store.removeUser(s.guard, { userId: 999, revision: "3-member", now: 1 })).toEqual({
+      ok: false,
+      reason: "not-found",
+    });
+    expect(store.removeUser(s.guard, { userId: s.member, revision: "3-viewer", now: 1 })).toEqual({
+      ok: false,
+      reason: "stale",
+    });
+    expect(store.removeUser(s.guard, { userId: s.owner, revision: "1-owner", now: 1 })).toEqual({
+      ok: false,
+      reason: "forbidden",
+      denial: { isAllowed: false, reason: "owner-target" },
+    });
+    expect(store.removeUser(s.guard, { userId: s.admin, revision: "2-admin", now: 1 })).toEqual({
+      ok: false,
+      reason: "forbidden",
+      denial: { isAllowed: false, reason: "role", requiredRole: "owner" },
+    });
+    expect(n(s.db, "people_events")).toBe(0);
+  });
+
+  test("a transfer to an Admin without an authenticator is no-authenticator", () => {
+    const s = seeded("owner");
+    s.db.run("DELETE FROM authenticators");
+    expect(
+      createTeamStore(s.db).transferOwnership(s.guard, {
+        userId: s.admin,
+        revision: "2-admin",
+        now: 1,
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "no-authenticator",
+    });
+  });
+});

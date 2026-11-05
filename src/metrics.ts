@@ -21,6 +21,11 @@ export type PathLabel =
   | "/team"
   | "/team/invites"
   | "/team/invites/revoke"
+  | "/team/role"
+  | "/team/remove"
+  | "/team/reset-2fa"
+  | "/team/transfer"
+  | "/team/require-2fa"
   | "/invite/:token"
   | "other";
 

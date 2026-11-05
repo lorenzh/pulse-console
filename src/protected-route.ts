@@ -34,7 +34,12 @@ export type PageResult =
       body: string;
       banner?: string | undefined;
     }
-  | { kind: "redirect"; location: string };
+  | {
+      kind: "redirect";
+      location: string;
+      /** The change ended the request's own session: the answer deletes the session cookie. */
+      isSessionCleared?: boolean | undefined;
+    };
 
 export type ProtectedRoute = {
   path: string;

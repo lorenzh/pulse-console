@@ -1,6 +1,6 @@
 import { escapeHtml } from "@lorenzh/pulse-kit";
 import { utcMinute } from "./account-pages.ts";
-import { plainConfirmPage } from "./confirm.ts";
+import { plainConfirmPage, typedConfirmPage } from "./confirm.ts";
 import {
   csrfField,
   field,
@@ -32,6 +32,10 @@ export type TeamView = {
   csrf: string;
   /** The form token of the invite form, bound to `/team/invites`. */
   inviteFormToken: string;
+  /** The form token of the Owner's 2FA switch, bound to `/team/require-2fa`. */
+  switchFormToken?: string | undefined;
+  /** An error or expired notice above the 2FA switch. */
+  switchNotice?: string | undefined;
   inviteForm?: InviteFormState | undefined;
 };
 
@@ -40,12 +44,29 @@ export const NOT_SAVED_TEXT =
 export const LINK_NOT_VALID_TEXT =
   "This link is not valid. It may have expired or been used. Ask an admin for a new one.";
 
-function memberRow(m: TeamMember): string {
+const MEMBER_ACTIONS = [
+  { kind: "role-change", path: "/team/role", label: "Change role" },
+  { kind: "2fa-reset", path: "/team/reset-2fa", label: "Reset 2FA" },
+  { kind: "remove", path: "/team/remove", label: "Remove" },
+  { kind: "transfer", path: "/team/transfer", label: "Make owner" },
+] as const;
+
+/** Decision 9: each action is a link to its own page, never a form in the row. */
+function memberActions(m: TeamMember, actor: ConsoleRole): string {
+  const links = MEMBER_ACTIONS.filter((a) => targetDecision(actor, a.kind, m.role).isAllowed).map(
+    (a) =>
+      `<a href="${a.path}?user=${m.id}">${a.label}<span class="visually-hidden"> for ${escapeHtml(m.name)}</span></a>`,
+  );
+  return links.length === 0 ? "" : `<span class="row-actions">${links.join(" ")}</span>`;
+}
+
+function memberRow(m: TeamMember, actor: ConsoleRole): string {
   return `<tr>
 <td>${escapeHtml(m.name)}</td>
 <td>${escapeHtml(m.email)}</td>
 <td>${escapeHtml(roleLabel(m.role))}</td>
 <td>${m.hasAuthenticator ? "2FA: on" : "2FA: off"}</td>
+<td>${memberActions(m, actor)}</td>
 </tr>`;
 }
 
@@ -125,11 +146,25 @@ ${view.invites.map((i) => inviteRow(i, view)).join("\n")}
 
 function organisationSection(view: TeamView): string {
   if (view.role !== "owner") return "";
-  const state = view.isTwoFactorRequiredForAll ? "on" : "off";
+  const isOn = view.isTwoFactorRequiredForAll;
+  const next = isOn ? "off" : "on";
+  const label = isOn ? "Turn off" : "Turn on";
+  const form =
+    view.switchFormToken === undefined
+      ? ""
+      : `
+<form method="post" action="/team/require-2fa">
+${csrfField(view.csrf)}
+${formTokenField(view.switchFormToken)}
+<input type="hidden" name="value" value="${next}">
+<div class="actions">${submitButton({ label, busyLabel: "Saving…" })}</div>
+</form>`;
   return `
 <section aria-labelledby="org-2fa-heading">
 <h2 id="org-2fa-heading">Organisation 2FA</h2>
-<p>Two-factor sign-in for everyone: ${state}.</p>
+<p>Two-factor sign-in for everyone: ${isOn ? "on" : "off"}.</p>
+<p>When it is on, every person must set up an authenticator before they can use the console.</p>
+${paragraph(view.switchNotice, ' role="alert"')}${form}
 </section>`;
 }
 
@@ -139,9 +174,9 @@ export function teamPageBody(view: TeamView): string {
 <h2 id="people-heading">People</h2>
 <div class="table-wrap">
 <table>
-<thead><tr><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Role</th><th scope="col">2FA</th></tr></thead>
+<thead><tr><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Role</th><th scope="col">2FA</th><th scope="col">Actions</th></tr></thead>
 <tbody>
-${view.members.map(memberRow).join("\n")}
+${view.members.map((m) => memberRow(m, view.role)).join("\n")}
 </tbody>
 </table>
 </div>
@@ -236,4 +271,103 @@ ${field({ label: "Confirm password", name: "password_confirm", type: "password",
 <div class="actions"><button type="submit">Create account</button></div>
 </form>`,
   );
+}
+
+/** The common parts of a confirmation of one person. */
+export type MemberConfirmView = {
+  member: TeamMember;
+  csrf: string;
+  formToken: string;
+  notice?: string | undefined;
+};
+
+/** The role change form: the other roles among admin, member and viewer. */
+export function roleFormBody(
+  view: MemberConfirmView & { selected?: string | undefined; error?: string | undefined },
+): string {
+  const m = view.member;
+  const options = (["admin", "member", "viewer"] as const)
+    .filter((r) => r !== m.role)
+    .map((r) => roleOption(r, roleLabel(r), view.selected))
+    .join("\n");
+  const described =
+    view.error === undefined ? "" : ' aria-describedby="field-role-error" aria-invalid="true"';
+  const error =
+    view.error === undefined
+      ? ""
+      : `\n<span class="error" id="field-role-error">${escapeHtml(view.error)}</span>`;
+  const summary = formErrorSummary(
+    view.error === undefined ? [] : [{ name: "role", text: view.error }],
+  );
+  return `${paragraph(view.notice, ' role="alert"')}${summary}<p>${escapeHtml(m.name)} (${escapeHtml(m.email)}) is ${escapeHtml(roleLabel(m.role))} now. A new role signs them out.</p>
+<form method="post" action="/team/role?user=${m.id}" class="confirm">
+${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
+<input type="hidden" name="revision" value="${escapeHtml(m.revision)}">
+<label for="field-role">New role
+<select id="field-role" name="role"${described}>
+${options}
+</select>${error}
+</label>
+<div class="actions">${submitButton({ label: "Change role", busyLabel: "Saving…" })}
+<a class="cancel" href="/team">Cancel</a></div>
+</form>
+`;
+}
+
+/** The typed confirmation of removing one person. */
+export function removeBody(
+  view: MemberConfirmView & { typed?: string | undefined; error?: string | undefined },
+): string {
+  const name = view.member.name;
+  return typedConfirmPage({
+    consequence: `${name} loses access to the console now. Their invites stop working. API tokens are not tied to people: tokens that ${name} created or copied stay valid until someone revokes them in pulse-api.`,
+    action: `/team/remove?user=${view.member.id}`,
+    csrf: view.csrf,
+    formToken: view.formToken,
+    revision: view.member.revision,
+    submitLabel: "Remove",
+    busyLabel: "Removing…",
+    cancelHref: "/team",
+    notice: view.notice,
+    targetName: name,
+    typed: view.typed,
+    error: view.error,
+  });
+}
+
+/** The typed confirmation of the ownership transfer. */
+export function transferBody(
+  view: MemberConfirmView & { typed?: string | undefined; error?: string | undefined },
+): string {
+  const name = view.member.name;
+  return typedConfirmPage({
+    consequence: `Make ${name} the owner? You become an admin. Both of you are signed out and sign in again.`,
+    action: `/team/transfer?user=${view.member.id}`,
+    csrf: view.csrf,
+    formToken: view.formToken,
+    revision: view.member.revision,
+    submitLabel: "Make owner",
+    busyLabel: "Transferring…",
+    cancelHref: "/team",
+    notice: view.notice,
+    targetName: name,
+    typed: view.typed,
+    error: view.error,
+  });
+}
+
+/** The plain confirmation of resetting another person's two-factor sign-in. */
+export function resetTwoFactorBody(view: MemberConfirmView): string {
+  return plainConfirmPage({
+    consequence: `Reset two-factor sign-in for ${view.member.name}? Their authenticator and recovery codes stop working and they are signed out. They set up two-factor sign-in again if their role needs it.`,
+    action: `/team/reset-2fa?user=${view.member.id}`,
+    csrf: view.csrf,
+    formToken: view.formToken,
+    revision: view.member.revision,
+    submitLabel: "Reset 2FA",
+    busyLabel: "Resetting…",
+    cancelHref: "/team",
+    notice: view.notice,
+  });
 }
