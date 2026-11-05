@@ -12,6 +12,8 @@ import { type ConsoleRole, hasRole, parseRole } from "./roles.ts";
 
 /** A password reset link lives this long after it was made. */
 export const RESET_LINK_TTL_MS = 86_400_000;
+/** An owner-recovery link lives 15 minutes. */
+export const OWNER_RECOVERY_TTL_MS = 900_000;
 
 /** The two kinds of password reset link. */
 export type ResetLinkKind = "team" | "owner-recovery";
@@ -142,6 +144,12 @@ export interface TeamStore {
    * owner-recovery link also deletes the Owner's second factors.
    */
   redeemResetLink: (input: RedeemInput) => RedeemResult;
+  /**
+   * In one BEGIN IMMEDIATE transaction: the Owner's unused owner-recovery links are replaced by
+   * one new link (`issued_by` null) and `owner.recovery-link` is written with actor `container`.
+   * False when there is no Owner.
+   */
+  issueOwnerRecoveryLink: (input: { tokenDigest: string; now: number }) => boolean;
 
   /** Every user, Owner first, then by role and name. */
   members: () => TeamMember[];
@@ -565,7 +573,30 @@ function resetLinkMutations(db: Database) {
     });
     return { ok: true, userId: row.user_id, kind };
   });
+  const issueOwner = db.transaction((input: { tokenDigest: string; now: number }): boolean => {
+    const owner = db
+      .query<{ id: number; email: string; name: string }, []>(
+        "SELECT id, email, name FROM users WHERE role = 'owner'",
+      )
+      .get();
+    if (owner === null) return false;
+    db.query(
+      "DELETE FROM reset_links WHERE user_id = ? AND kind = 'owner-recovery' AND used_at IS NULL",
+    ).run(owner.id);
+    db.query(
+      "INSERT INTO reset_links (token_digest, kind, user_id, target_role, issued_by, created_at, expires_at) VALUES (?, 'owner-recovery', ?, 'owner', NULL, ?, ?)",
+    ).run(input.tokenDigest, owner.id, input.now, input.now + OWNER_RECOVERY_TTL_MS);
+    appendPeopleEvent(db, {
+      at: input.now,
+      actor: { kind: "container" },
+      action: "owner.recovery-link",
+      target: { kind: "user", person: owner },
+    });
+    return true;
+  });
   return {
+    issueOwnerRecoveryLink: (input: { tokenDigest: string; now: number }) =>
+      issueOwner.immediate(input),
     issueResetLink: (guard: CredentialGuard, input: TargetInput & { tokenDigest: string }) =>
       issue.immediate(guard, input),
     liveResetLink: (tokenDigest: string, now: number): LiveResetLink | undefined => {

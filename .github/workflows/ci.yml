@@ -100,6 +100,21 @@ jobs:
             exit 1
           fi
           echo "ok: one setup code line"
+      - name: Check the owner recovery command refuses before setup
+        run: |
+          set +e
+          err=$(docker exec console bun --no-env-file src/owner-reset.ts 2>&1 >/dev/null)
+          code=$?
+          set -e
+          if [ "$code" != "2" ]; then
+            echo "owner-reset exited $code"
+            exit 1
+          fi
+          case "$err" in
+            *"pulse-console: no owner account: finish setup first"*) ;;
+            *) echo "owner-reset stderr: $err"; exit 1 ;;
+          esac
+          echo "ok: owner-reset exits 2 before setup"
       - name: Check the database file owner and mode
         run: |
           bun_uid=$(docker exec console id -u bun)

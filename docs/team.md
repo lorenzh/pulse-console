@@ -85,6 +85,8 @@ Every route takes `user=<id>` (`^[1-9][0-9]{0,15}$`, else `404`) and a hidden `r
 
 Each committed change logs `info` `team change` with `action`, `actorId` and `targetId` (`null` for the switch).
 
+- **Owner recovery** (container only): `bun --no-env-file src/owner-reset.ts` prints a single-use `/reset/<token>` link that works for 900000 ms (15 minutes); a new run replaces the unused one. Using it sets the password, ends every Owner session and deletes the Owner's authenticators, recovery codes and pending setup keys, so the next sign-in leads into enrolment. Rows `owner.recovery-link` and `owner.recover` with actor `container`. No page offers an Owner reset.
+
 ## People log
 
 Every team change appends one row to `people_events` in the same transaction as the change. If the row cannot be written, the change rolls back. Rows are append-only: an update or delete fails with `people_events is append-only`. A row keeps the actor's and target's email and name as they were then. It never holds a token, a link, a password, a TOTP seed or code, a recovery code, a cookie, a form token, a header value or a request body. Failed or denied attempts write no row.
@@ -92,5 +94,9 @@ Every team change appends one row to `people_events` in the same transaction as 
 ## API tokens and console roles
 
 - Roles are console rules. The console calls pulse-api with its one token from `PULSE_CONSOLE_ADMIN_TOKEN_FILE` or `PULSE_CONSOLE_ADMIN_TOKEN`; pulse-api cannot tell console users apart.
-- An Admin may create, rotate and revoke api tokens (row 11). pulse-api lets the console's token create any token whose scopes it holds, including `admin`. A person who copies such a token can use those scopes directly against the api, outside console roles.
-- A removed Admin's api tokens stay valid, because they belong to no person.
+- An Admin may create, rotate and revoke api tokens (row 11). pulse-api lets the console's token create any token whose scopes it holds, including `admin` (pulse-api's `canGrant` rule; "Full access" stays Admin and Owner). A person who copies such a token can use those scopes directly against the api, outside console roles.
+- A removed Admin's api tokens stay valid, because they belong to no person. The removal page says so.
+
+## Rollback
+
+Migration 3 is not reversible by an older console: it stops on a schema-3 file. Roll back by restoring the database backup made before the upgrade, with its `-wal` and `-shm` files.

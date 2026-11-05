@@ -86,3 +86,13 @@ export function readSettings(env: Env, readFile: (path: string) => string): Sett
   const mode = consoleMode(publicOrigin);
   return { apiUrl, port, host, adminToken, publicOrigin, mode, dbPath, secretKey };
 }
+
+/** The settings of the owner recovery command: the database and the public origin only. Pure. */
+export function readRecoverySettings(env: Env): {
+  dbPath: string;
+  publicOrigin: string | undefined;
+} {
+  const publicOrigin = readPublicOrigin(env);
+  const dbPath = readString(env, "PULSE_CONSOLE_DB") ?? DEFAULT_DB;
+  return { dbPath, publicOrigin };
+}
