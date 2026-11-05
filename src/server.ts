@@ -210,6 +210,8 @@ function pathLabel(path: string): PathLabel {
     case "/checks/shadowed":
     case "/checks/export":
     case "/checks/new":
+    case "/checks/edit":
+    case "/checks/delete":
       return path;
     default: {
       const link = linkOfPath(path);

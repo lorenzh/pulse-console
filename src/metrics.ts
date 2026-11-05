@@ -33,6 +33,8 @@ export type PathLabel =
   | "/checks/shadowed"
   | "/checks/export"
   | "/checks/new"
+  | "/checks/edit"
+  | "/checks/delete"
   | "/invite/:token"
   | "/reset/:token"
   | "other";

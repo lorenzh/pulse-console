@@ -22,6 +22,8 @@ export type ConfirmView = {
   cancelHref: string;
   /** A notice above the form, such as the expired-token notice. */
   notice?: string | undefined;
+  /** More hidden fields after `revision`, written by the caller from its own data. */
+  hidden?: ReadonlyArray<readonly [string, string]> | undefined;
 };
 
 export type TypedConfirmView = ConfirmView & {
@@ -48,12 +50,21 @@ function notice(text: string | undefined): string {
   return text === undefined ? "" : paragraph(text, ' role="alert"');
 }
 
+function hiddenFields(hidden: ConfirmView["hidden"]): string {
+  return (hidden ?? [])
+    .map(
+      ([name, value]) =>
+        `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}">\n`,
+    )
+    .join("");
+}
+
 function confirmForm(view: ConfirmView, inner: string): string {
   return `<form method="post" action="${escapeHtml(view.action)}" class="confirm">
 ${csrfField(view.csrf)}
 ${formTokenField(view.formToken)}
 <input type="hidden" name="revision" value="${escapeHtml(view.revision)}">
-${inner}<div class="actions">${submitButton({ label: view.submitLabel, busyLabel: view.busyLabel })}
+${hiddenFields(view.hidden)}${inner}<div class="actions">${submitButton({ label: view.submitLabel, busyLabel: view.busyLabel })}
 <a class="cancel" href="${escapeHtml(view.cancelHref)}">Cancel</a></div>
 </form>
 `;
