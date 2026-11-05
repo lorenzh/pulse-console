@@ -64,6 +64,16 @@ export function failFactor(ctx: Ctx, attempt: Attempt, kind: AuthKind): void {
 }
 
 /** The 500 answer of a seed that the key cannot open; the reservation is not a failed guess. */
+/** Runs a store commit; a thrown failure releases the reservation before it propagates. */
+export function settleOnThrow<T>(attempt: Attempt, commit: () => T): T {
+  try {
+    return commit();
+  } catch (err) {
+    attempt.release();
+    throw err;
+  }
+}
+
 export function sendDecryptFailed(ctx: Ctx, attempt: Attempt, userId: number): void {
   attempt.release();
   ctx.deps.log.error("authenticator secret cannot be decrypted", { userId });
@@ -149,13 +159,15 @@ function verifyTotp(ctx: Ctx, current: Current, code: string): void {
     return;
   }
   const session = newFullSession(ctx);
-  const result = deps.factorStore.completeTotpSignIn({
-    sessionId: current.id,
-    userId,
-    newSession: session,
-    now,
-    step,
-  });
+  const result = settleOnThrow(attempt, () =>
+    deps.factorStore.completeTotpSignIn({
+      sessionId: current.id,
+      userId,
+      newSession: session,
+      now,
+      step,
+    }),
+  );
   finishFactor(ctx, current, attempt, "totp", { result, session });
 }
 
@@ -164,13 +176,15 @@ function verifyRecovery(ctx: Ctx, current: Current, normalized: string): void {
   const attempt = admitFactor(ctx, userId, "recovery-code", throttledPage(current));
   if (attempt === undefined) return;
   const session = newFullSession(ctx);
-  const result = ctx.deps.factorStore.completeRecoverySignIn({
-    sessionId: current.id,
-    userId,
-    newSession: session,
-    now: ctx.deps.now(),
-    candidate: recoveryCodeDigest(normalized),
-  });
+  const result = settleOnThrow(attempt, () =>
+    ctx.deps.factorStore.completeRecoverySignIn({
+      sessionId: current.id,
+      userId,
+      newSession: session,
+      now: ctx.deps.now(),
+      candidate: recoveryCodeDigest(normalized),
+    }),
+  );
   finishFactor(ctx, current, attempt, "recovery-code", { result, session });
 }
 

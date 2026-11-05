@@ -35,6 +35,7 @@ import {
   newFullSession,
   sendDecryptFailed,
   sendThrottled,
+  settleOnThrow,
   TOO_MANY,
 } from "./sign-in-factor.ts";
 import { base32Encode, matchTotpStep, normalizeTotpInput, TOTP_SEED_BYTES } from "./totp.ts";
@@ -205,12 +206,11 @@ function confirmPending(ctx: Ctx, current: Current, input: string): void {
     return;
   }
   const step = matchTotpStep(opened.plaintext, code, now, -1);
-  const view = pendingView(current, pending, key);
   opened.plaintext.fill(0);
   if (step === undefined) {
     failFactor(ctx, attempt, "enrolment");
-    const page = view === undefined ? startView(ctx, current) : view;
-    sendHtml(ctx, 401, authenticatorPage({ ...page, error: "Wrong code." }));
+    const csrf = current.session.csrfToken;
+    sendHtml(ctx, 401, authenticatorPage({ kind: "retry", csrf, error: "Wrong code." }));
     return;
   }
   commitConfirmation(ctx, current, attempt, { secret: pending.secret, step, now });
@@ -228,15 +228,17 @@ function commitConfirmation(
     recoveryCodeDigest(normalizeRecoveryCode(code) ?? "").toString("hex"),
   );
   const session = newFullSession(ctx);
-  const result = deps.factorStore.confirmAuthenticator({
-    sessionId: current.id,
-    userId: current.user.id,
-    secret: input.secret,
-    step: input.step,
-    recoveryDigests,
-    newSession: session,
-    now: input.now,
-  });
+  const result = settleOnThrow(attempt, () =>
+    deps.factorStore.confirmAuthenticator({
+      sessionId: current.id,
+      userId: current.user.id,
+      secret: input.secret,
+      step: input.step,
+      recoveryDigests,
+      newSession: session,
+      now: input.now,
+    }),
+  );
   if (!result.ok) {
     attempt.release();
     sendHtml(ctx, 409, pendingExpiredPage(current.session.csrfToken, current.stage === "full"));

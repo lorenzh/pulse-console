@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   base32Decode,
   Client,
+  type Console,
   closeAll,
   count,
   csrfIn,
@@ -137,6 +138,10 @@ describe("enrolment", () => {
     });
     expect(wrong.status).toBe(401);
     expect(wrong.body).toContain("Wrong code.");
+    expect(wrong.body).not.toContain(plain);
+    expect(wrong.body).not.toContain(key);
+    expect(wrong.body).not.toContain("otpauth://");
+    expect(wrong.body).not.toContain("totp-secret");
     expect(
       (
         await owner.post("/account/authenticator", {
@@ -444,6 +449,90 @@ describe("factor throttle", () => {
     expect((await next.factor({ code: totpCode(seed, stepAt(c.clock.now) + 5) })).status).toBe(401);
     expect((await next.factor({ code: totpCode(seed, stepAt(c.clock.now)) })).status).toBe(429);
   });
+});
+
+function blockFullSessions(dbPath: string, isBlocked: boolean): void {
+  const db = new Database(dbPath);
+  db.run(
+    isBlocked
+      ? "CREATE TRIGGER block_full BEFORE INSERT ON sessions WHEN NEW.stage = 'full' BEGIN SELECT RAISE(ABORT, 'blocked'); END"
+      : "DROP TRIGGER block_full",
+  );
+  db.close();
+}
+
+type FailingFlow = {
+  name: string;
+  prepare: () => Promise<{ c: Console; attempt: (client: Client) => Promise<Reply> }>;
+  success: number;
+};
+
+const failingFlows: FailingFlow[] = [
+  {
+    name: "totp sign-in",
+    success: 303,
+    prepare: async () => {
+      const { c, seed } = await enrolledConsole();
+      return {
+        c,
+        attempt: async (client) => {
+          await client.password();
+          const reply = await client.factor({ code: totpCode(seed, stepAt(c.clock.now)) });
+          return reply;
+        },
+      };
+    },
+  },
+  {
+    name: "recovery sign-in",
+    success: 303,
+    prepare: async () => {
+      const { c, codes } = await enrolledConsole();
+      return {
+        c,
+        attempt: async (client) => {
+          await client.password();
+          return client.factor({ recovery_code: codes[0] ?? "" });
+        },
+      };
+    },
+  },
+  {
+    name: "enrolment",
+    success: 200,
+    prepare: async () => {
+      const c = await startConsole();
+      return {
+        c,
+        attempt: async (client) => {
+          await client.password();
+          const start = await client.get("/account/authenticator");
+          await client.post("/account/authenticator", { csrf: csrfIn(start.body), action: "new" });
+          const page = await client.get("/account/authenticator");
+          const key = /id="totp-secret">([A-Z2-7 ]+)</.exec(page.body)?.[1] ?? "";
+          return client.post("/account/authenticator", {
+            csrf: csrfIn(page.body),
+            action: "confirm",
+            code: totpCode(base32Decode(key), stepAt(c.clock.now)),
+          });
+        },
+      };
+    },
+  },
+];
+
+describe("a thrown store commit releases the factor reservation", () => {
+  for (const flow of failingFlows) {
+    test(flow.name, async () => {
+      const { c, attempt } = await flow.prepare();
+      blockFullSessions(c.dbPath, true);
+      for (let i = 0; i < 5; i += 1) {
+        expect((await attempt(new Client(c))).status).toBe(500);
+      }
+      blockFullSessions(c.dbPath, false);
+      expect((await attempt(new Client(c))).status).toBe(flow.success);
+    });
+  }
 });
 
 function filesOf(dbPath: string): Buffer {

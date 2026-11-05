@@ -65,6 +65,7 @@ ${password}<div class="actions"><button type="submit">${label}</button></div>
 
 export type AuthenticatorView =
   | { kind: "pending"; csrf: string; email: string; key: string; error?: string | undefined }
+  | { kind: "retry"; csrf: string; error?: string | undefined }
   | { kind: "new"; csrf: string; error?: string | undefined }
   | { kind: "replace"; csrf: string; confirmedAt: number; error?: string | undefined };
 
@@ -73,8 +74,18 @@ function pendingBody(view: { csrf: string; email: string; key: string }): string
 <p>Setup key: <code class="secret" id="totp-secret">${escapeHtml(groupKey(view.key))}</code></p>
 <p>Type: time-based (TOTP), SHA-1, 6 digits, 30 seconds.</p>
 <p>URI: <code class="secret" id="totp-uri">${escapeHtml(otpauthUri(view.email, view.key))}</code></p>
-<form method="post" action="/account/authenticator">
-${csrfField(view.csrf)}
+${confirmForm(view.csrf)}`;
+}
+
+// Only GET shows the setup key; a failed confirmation links back to it.
+function retryBody(csrf: string): string {
+  return `<p>Enter the current code from your authenticator app. <a href="/account/authenticator">Show the setup key again</a>.</p>
+${confirmForm(csrf)}`;
+}
+
+function confirmForm(csrf: string): string {
+  return `<form method="post" action="/account/authenticator">
+${csrfField(csrf)}
 <input type="hidden" name="action" value="confirm">
 <label for="field-code">Code from your authenticator app
 <input id="field-code" name="code" type="text" autocomplete="one-time-code" inputmode="numeric" maxlength="64" required>
@@ -87,6 +98,8 @@ function authenticatorBody(view: AuthenticatorView): string {
   switch (view.kind) {
     case "pending":
       return pendingBody(view);
+    case "retry":
+      return retryBody(view.csrf);
     case "new":
       return `<p>Your account needs an authenticator app. Create a setup key to start.</p>\n${newForm(view.csrf, false)}`;
     case "replace":
