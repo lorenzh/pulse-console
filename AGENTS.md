@@ -21,6 +21,8 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 | Typecheck                                                     | `bun run typecheck`                             |
 | Lint and format check / apply fixes                           | `bun run lint` / `bun run format`               |
 | Run locally                                                   | `PULSE_API_URL=http://localhost:3000 bun start` |
+| Browser checks (after `bunx playwright install chromium`)     | `bun run check:browser`                         |
+| Fixture console for a manual browser check                    | `bun e2e/run.ts --serve`                        |
 - A change is done when `bun run check` passes; the pre-commit hook runs Biome and ESLint. Never run `git commit --no-verify`, and never weaken `biome.json`, `tsconfig.json`, or CI to pass.
 
 ## Repository boundaries
