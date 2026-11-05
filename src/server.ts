@@ -11,9 +11,11 @@ import {
 import {
   postAuthenticator,
   postNewCodes,
+  postPassword,
   postSignOutAll,
   sendAuthenticator,
   sendNewCodesForm,
+  sendPasswordForm,
   sendSecurity,
   sendSessions,
   sendSignOutAllForm,
@@ -129,6 +131,7 @@ const ROUTES: Readonly<Record<string, Route>> = {
     isNewInPhase2: true,
   },
   "/account/sessions": { methods: ["GET", "HEAD"], access: "full", isNewInPhase2: true },
+  "/account/password": { methods: ["GET", "HEAD", "POST"], access: "full", isNewInPhase2: true },
   "/account/sessions/sign-out-all": {
     methods: ["GET", "HEAD", "POST"],
     access: "full",
@@ -189,6 +192,7 @@ function pathLabel(path: string): PathLabel {
     case "/account/recovery-codes":
     case "/account/sessions":
     case "/account/sessions/sign-out-all":
+    case "/account/password":
     case "/console.js":
     case "/team":
     case "/team/invites":
@@ -445,6 +449,9 @@ function handleAccountGet(ctx: Ctx): void {
       return;
     case "/account/sessions/sign-out-all":
       sendSignOutAllForm(ctx);
+      return;
+    case "/account/password":
+      sendPasswordForm(ctx);
       return;
     default:
       sendText(ctx, 404, NOT_FOUND);
@@ -815,6 +822,9 @@ async function handlePost(ctx: Ctx): Promise<void> {
       return;
     case "/account/sessions/sign-out-all":
       await postSignOutAll(ctx);
+      return;
+    case "/account/password":
+      await postPassword(ctx);
       return;
     default:
       sendText(ctx, 404, NOT_FOUND);

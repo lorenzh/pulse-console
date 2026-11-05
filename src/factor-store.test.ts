@@ -311,3 +311,52 @@ describe("completeRecoverySignIn", () => {
     expect(recover(f, f, "p", CODES[9] ?? "")).toMatchObject({ ok: true, remaining: 0 });
   });
 });
+
+describe("guarded writes", () => {
+  type Case = [string, (f: Fixture) => void, boolean];
+  const cases: Case[] = [
+    ["session and hash unchanged", () => undefined, true],
+    ["session gone", (f) => f.accounts.deleteSession("s"), false],
+    ["hash changed", (f) => f.db.run("UPDATE users SET password_hash = 'h2'"), false],
+  ];
+
+  test.each(cases)("replaceRecoveryCodesFor: %s", (_name, change, isOk) => {
+    const f = fixture();
+    f.accounts.createSession("s", f.userId, "c", 0);
+    f.factors.replaceRecoveryCodes(f.userId, DIGESTS.slice(0, 2));
+    change(f);
+    const result = f.factors.replaceRecoveryCodesFor(
+      { sessionId: "s", userId: f.userId, passwordHash: "h" },
+      DIGESTS,
+    );
+    expect(result.ok).toBe(isOk);
+    expect(count(f.db, "SELECT count(*) AS n FROM recovery_codes")).toBe(isOk ? 10 : 2);
+  });
+
+  test.each(cases)("savePendingAuthenticatorFor: %s", (_name, change, isOk) => {
+    const f = fixture();
+    f.accounts.createSession("s", f.userId, "c", 0);
+    change(f);
+    const result = f.factors.savePendingAuthenticatorFor(
+      { sessionId: "s", userId: f.userId, passwordHash: "h" },
+      "sealed",
+      0,
+    );
+    expect(result.ok).toBe(isOk);
+    expect(count(f.db, "SELECT count(*) AS n FROM pending_authenticators")).toBe(isOk ? 1 : 0);
+  });
+
+  test("savePendingAuthenticatorFor without a hash checks only the session row", () => {
+    const f = fixture();
+    f.accounts.createSession("s", f.userId, "c", 0, { stage: "enrol" });
+    f.db.run("UPDATE users SET password_hash = 'h2'");
+    expect(
+      f.factors.savePendingAuthenticatorFor({ sessionId: "s", userId: f.userId }, "x", 0),
+    ).toEqual({
+      ok: true,
+    });
+    expect(
+      f.factors.savePendingAuthenticatorFor({ sessionId: "s", userId: f.userId + 1 }, "x", 0),
+    ).toEqual({ ok: false });
+  });
+});

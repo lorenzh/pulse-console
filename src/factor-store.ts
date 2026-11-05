@@ -85,6 +85,14 @@ export interface FactorStore {
   unusedRecoveryCodeCount: (userId: number) => number;
   /** In one transaction: delete every code of the user, insert the new set. */
   replaceRecoveryCodes: (userId: number, digests: readonly string[]) => void;
+  /** `replaceRecoveryCodes` for the guard's user, only while the guard holds. */
+  replaceRecoveryCodesFor: (guard: CredentialGuard, digests: readonly string[]) => GuardedResult;
+  /** `savePendingAuthenticator` for the guard's session, only while the guard holds. */
+  savePendingAuthenticatorFor: (
+    guard: CredentialGuard,
+    secret: string,
+    now: number,
+  ) => GuardedResult;
   /**
    * In one BEGIN IMMEDIATE transaction: delete the live pending row, replace the authenticator
    * and the recovery codes, delete every session of the user and insert the new `full` session.
@@ -97,6 +105,9 @@ export interface FactorStore {
     input: FactorSignInBase & { candidate: Uint8Array; canCommit?: () => boolean },
   ) => FactorSignInResult;
 }
+
+/** The answer of a guarded write: `ok: false` when the guard failed and nothing was written. */
+export type GuardedResult = { ok: true } | { ok: false };
 
 class CommitAborted extends Error {
   override name = "CommitAborted";
@@ -191,6 +202,20 @@ export function createFactorStore(db: Database): FactorStore {
   const replaceCodes = db.transaction((userId: number, digests: readonly string[]): void => {
     writeCodes(userId, digests);
   });
+  const replaceCodesFor = db.transaction(
+    (guard: CredentialGuard, digests: readonly string[]): GuardedResult => {
+      if (!isCredentialGuardHeld(db, guard)) return { ok: false };
+      writeCodes(guard.userId, digests);
+      return { ok: true };
+    },
+  );
+  const savePendingFor = db.transaction(
+    (guard: CredentialGuard, secret: string, now: number): GuardedResult => {
+      if (!isCredentialGuardHeld(db, guard)) return { ok: false };
+      upsertPending.run(sessionDigest(guard.sessionId), guard.userId, secret, now);
+      return { ok: true };
+    },
+  );
   const totpSignIn = db.transaction(
     (input: FactorSignInBase & { step: number }): FactorSignInResult => {
       const nextPath = endFactorSession(input);
@@ -233,6 +258,9 @@ export function createFactorStore(db: Database): FactorStore {
     },
     unusedRecoveryCodeCount: (userId) => countUnused.get(userId)?.n ?? 0,
     replaceRecoveryCodes: (userId, digests) => replaceCodes.immediate(userId, digests),
+    replaceRecoveryCodesFor: (guard, digests) => replaceCodesFor.immediate(guard, digests),
+    savePendingAuthenticatorFor: (guard, secret, now) =>
+      savePendingFor.immediate(guard, secret, now),
     confirmAuthenticator: (input) => {
       try {
         confirm.immediate(input);

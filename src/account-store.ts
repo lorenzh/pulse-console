@@ -1,5 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { type CredentialGuard, isCredentialGuardHeld } from "./factor-store.ts";
+import { appendPeopleEvent } from "./people-log.ts";
 import { type ConsoleRole, parseRole } from "./roles.ts";
 
 export interface Instance {
@@ -93,6 +95,25 @@ export interface AccountStore {
   listSessions: (userId: number, currentId: string, now: number) => SessionListing[];
   /** One DELETE of every other session row of the user, in every stage; returns how many. */
   deleteOtherSessions: (userId: number, currentId: string) => number;
+  /**
+   * In one BEGIN IMMEDIATE transaction: while the guard's session row exists (and, when set, the
+   * stored hash equals `passwordHash`), delete every other session of the user. Else delete none.
+   */
+  deleteOtherSessionsFor: (
+    guard: CredentialGuard,
+  ) => { ok: true; sessions: number } | { ok: false };
+  /**
+   * In one BEGIN IMMEDIATE transaction: while the session row exists and the stored hash equals
+   * `guard.passwordHash`, set `newHash`, delete every other session and append the
+   * `user.password-change` People event. Else change nothing.
+   */
+  changePassword: (
+    guard: CredentialGuard & { passwordHash: string },
+    newHash: string,
+    now: number,
+  ) => { ok: true; sessions: number } | { ok: false };
+  /** Runs `work` in one BEGIN IMMEDIATE transaction; a throw rolls it back and propagates. */
+  inImmediateTransaction: <T>(work: () => T) => T;
 }
 
 /** The row key of a session: the SHA-256 hex digest of its id. */
@@ -204,6 +225,40 @@ export function createAccountStore(db: Database): AccountStore {
     return { ok: true, userId: row.id };
   });
 
+  const updateHash = db.query<unknown, [string, number]>(
+    "UPDATE users SET password_hash = ? WHERE id = ?",
+  );
+  const othersFor = db.transaction(
+    (guard: CredentialGuard): { ok: true; sessions: number } | { ok: false } => {
+      if (!isCredentialGuardHeld(db, guard)) return { ok: false };
+      return {
+        ok: true,
+        sessions: removeOthers.all(guard.userId, sessionDigest(guard.sessionId)).length,
+      };
+    },
+  );
+  const change = db.transaction(
+    (
+      guard: CredentialGuard & { passwordHash: string },
+      newHash: string,
+      now: number,
+    ): { ok: true; sessions: number } | { ok: false } => {
+      if (!isCredentialGuardHeld(db, guard)) return { ok: false };
+      const user = toUser(selectUserById.get(guard.userId));
+      if (user === undefined) return { ok: false };
+      updateHash.run(newHash, guard.userId);
+      const sessions = removeOthers.all(guard.userId, sessionDigest(guard.sessionId)).length;
+      const person = { id: user.id, email: user.email, name: user.name };
+      appendPeopleEvent(db, {
+        at: now,
+        actor: { kind: "user", person },
+        action: "user.password-change",
+        target: { kind: "user", person },
+      });
+      return { ok: true, sessions };
+    },
+  );
+
   return {
     instance: () => {
       const row = selectInstance.get();
@@ -246,5 +301,8 @@ export function createAccountStore(db: Database): AccountStore {
     },
     deleteOtherSessions: (userId, currentId) =>
       removeOthers.all(userId, sessionDigest(currentId)).length,
+    deleteOtherSessionsFor: (guard) => othersFor.immediate(guard),
+    changePassword: (guard, newHash, now) => change.immediate(guard, newHash, now),
+    inImmediateTransaction: <T>(work: () => T): T => db.transaction(work).immediate(),
   };
 }

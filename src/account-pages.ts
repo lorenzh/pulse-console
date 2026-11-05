@@ -154,6 +154,7 @@ export function securityPage(view: { confirmedAt: number | undefined; codesLeft:
 <li><a href="/account/authenticator">Replace authenticator</a></li>
 <li><a href="/account/recovery-codes">New recovery codes</a></li>
 <li><a href="/account/sessions">Sessions</a></li>
+<li><a href="/account/password">Change password</a></li>
 </ul>`,
   );
 }
@@ -239,5 +240,27 @@ export function recoveryCodesPage(view: { codes: readonly string[]; next: string
 ${items}
 </ol>
 <p><a href="${escapeHtml(view.next)}">Continue</a></p>`,
+  );
+}
+
+/** The text of a guarded write whose session or password changed during the request. */
+export const CREDENTIALS_CHANGED_TEXT =
+  "Your password or session changed while this was saved. Nothing was changed.";
+
+/** The own password change: the current password and the new one twice. */
+export function passwordChangePage(
+  view: SessionForm & { error?: string | undefined; notice?: string | undefined },
+): string {
+  return layout(
+    "Change password",
+    `${alert(view.error)}${paragraph(view.notice, ' role="status" class="notice"')}<p>Other sessions are signed out when the password changes.</p>
+<form method="post" action="/account/password">
+${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
+${field({ label: "Current password", name: "password", type: "password", autocomplete: "current-password" })}
+${field({ label: "New password", name: "new_password", type: "password", autocomplete: "new-password" })}
+${field({ label: "New password again", name: "new_password_confirm", type: "password", autocomplete: "new-password" })}
+<div class="actions"><button type="submit">Change password</button></div>
+</form>`,
   );
 }

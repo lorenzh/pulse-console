@@ -2,9 +2,11 @@ import { clientKeyOf } from "@lorenzh/pulse-kit";
 import {
   type AuthenticatorView,
   authenticatorPage,
+  CREDENTIALS_CHANGED_TEXT,
   DECRYPT_FAILED_TEXT,
   NO_KEY_TEXT,
   newCodesPage,
+  passwordChangePage,
   pendingExpiredPage,
   recoveryCodesPage,
   securityPage,
@@ -13,6 +15,7 @@ import {
 } from "./account-pages.ts";
 import type { Attempt } from "./auth-throttle.ts";
 import type { PendingAuthenticator } from "./factor-store.ts";
+import { passwordText } from "./forms.ts";
 import {
   acceptSessionForm,
   type Ctx,
@@ -48,6 +51,7 @@ import { base32Encode, matchTotpStep, normalizeTotpInput, TOTP_SEED_BYTES } from
 
 const AUTHENTICATOR_FIELDS = ["action", "code", "password", "form_token"] as const;
 const NEW_CODES_FIELDS = ["password", "form_token"] as const;
+const PASSWORD_FIELDS = ["password", "new_password", "new_password_confirm", "form_token"] as const;
 const WRONG_PASSWORD = "Wrong password.";
 const PASSWORD_FORMAT = "Enter your password (at most 128 characters).";
 
@@ -200,7 +204,17 @@ async function createPending(
   const seed = deps.randomBytes(TOTP_SEED_BYTES);
   const secret = sealSecret(key, current.user.id, seed, deps.randomBytes);
   seed.fill(0);
-  deps.factorStore.savePendingAuthenticator(current.id, current.user.id, secret, deps.now());
+  // In stage `enrol` there was no password step, so only the session row is checked.
+  const guard = {
+    sessionId: current.id,
+    userId: current.user.id,
+    passwordHash: current.stage === "full" ? current.user.passwordHash : undefined,
+  };
+  const saved = deps.factorStore.savePendingAuthenticatorFor(guard, secret, deps.now());
+  if (!saved.ok) {
+    sendHtml(ctx, 409, authenticatorPage(startView(ctx, current, CREDENTIALS_CHANGED_TEXT)));
+    return;
+  }
   redirect(ctx, "/account/authenticator");
 }
 
@@ -333,7 +347,15 @@ export async function postNewCodes(ctx: Ctx): Promise<void> {
   )
     return;
   const codes = generateRecoveryCodes(deps.randomBytes);
-  deps.factorStore.replaceRecoveryCodes(current.user.id, codes.map(codeDigest));
+  const guard = {
+    sessionId: current.id,
+    userId: current.user.id,
+    passwordHash: current.user.passwordHash,
+  };
+  if (!deps.factorStore.replaceRecoveryCodesFor(guard, codes.map(codeDigest)).ok) {
+    sendHtml(ctx, 409, newCodesView(ctx, current, CREDENTIALS_CHANGED_TEXT));
+    return;
+  }
   deps.log.info("recovery codes created", { userId: current.user.id });
   sendHtml(ctx, 200, recoveryCodesPage({ codes, next: "/account/security" }));
 }
@@ -366,7 +388,58 @@ export async function postSignOutAll(ctx: Ctx): Promise<void> {
     )
   )
     return;
-  const sessions = ctx.deps.store.deleteOtherSessions(current.user.id, current.id);
-  ctx.deps.log.info("signed out other sessions", { userId: current.user.id, sessions });
+  const result = ctx.deps.store.deleteOtherSessionsFor({
+    sessionId: current.id,
+    userId: current.user.id,
+  });
+  if (!result.ok) {
+    sendHtml(ctx, 409, signOutAllPage(sessionForm(ctx), CREDENTIALS_CHANGED_TEXT));
+    return;
+  }
+  ctx.deps.log.info("signed out other sessions", {
+    userId: current.user.id,
+    sessions: result.sessions,
+  });
   redirect(ctx, "/account/sessions?signed-out=others");
+}
+
+/** `GET /account/password`. */
+export function sendPasswordForm(ctx: Ctx): void {
+  const notice =
+    ctx.query.get("changed") === "1"
+      ? "Your password is changed. Other sessions are signed out."
+      : undefined;
+  sendHtml(ctx, 200, passwordChangePage({ ...sessionForm(ctx), notice }));
+}
+
+/**
+ * `POST /account/password`: the new password, the current one (H0), the form token, the hash,
+ * then a compare-and-set on the session row and H0.
+ */
+export async function postPassword(ctx: Ctx): Promise<void> {
+  const current = currentOf(ctx);
+  const fields = await readPostForm(ctx, PASSWORD_FIELDS, current.session.csrfToken);
+  if (fields === undefined) return;
+  const page = (error: string): string => passwordChangePage({ ...sessionForm(ctx), error });
+  const problem = passwordText(fields.new_password ?? "", fields.new_password_confirm ?? "");
+  if (problem !== undefined) {
+    sendHtml(ctx, 422, page(problem));
+    return;
+  }
+  if (!(await recheckPassword(ctx, current, fields.password ?? "", page))) return;
+  if (!acceptSessionForm(ctx, fields.form_token, () => page(formExpiredResendNotice))) return;
+  const { deps } = ctx;
+  const newHash = await deps.hashPassword(fields.new_password ?? "");
+  const guard = {
+    sessionId: current.id,
+    userId: current.user.id,
+    passwordHash: current.user.passwordHash,
+  };
+  const result = deps.store.changePassword(guard, newHash, deps.now());
+  if (!result.ok) {
+    sendHtml(ctx, 409, page(CREDENTIALS_CHANGED_TEXT));
+    return;
+  }
+  deps.log.info("password changed", { userId: current.user.id, sessions: result.sessions });
+  redirect(ctx, "/account/password?changed=1");
 }
