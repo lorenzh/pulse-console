@@ -4,6 +4,7 @@ pulse-console is the web console of pulse. It is a small web server that will ma
 
 - [configuration.md](configuration.md): every environment variable, the modes, setup, the database, routes, sign-in and sessions, cookies, the image defaults and the security headers.
 - [checks.md](checks.md): the Checks list, its filters, the export and the shell lines.
+- [tokens.md](tokens.md): the Tokens screen, presets, show once, rotation overlap and the console's own token.
 - [team.md](team.md): roles, the permission matrix, target rules, the two-factor requirement and the People log.
 - [development.md](development.md): local run, layout, tests, lint and CI.
 

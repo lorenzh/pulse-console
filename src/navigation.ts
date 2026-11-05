@@ -38,7 +38,7 @@ export const NAVIGATION: readonly NavEntry[] = [
     minRole: "viewer",
     isAvailable: false,
   },
-  { id: "tokens", label: "Tokens", path: "/tokens", minRole: "admin", isAvailable: false },
+  { id: "tokens", label: "Tokens", path: "/tokens", minRole: "admin", isAvailable: true },
   { id: "probes", label: "Probes", path: "/probes", minRole: "admin", isAvailable: false },
   { id: "team", label: "Team", path: "/team", minRole: "admin", isAvailable: true },
   { id: "activity", label: "Activity", path: "/activity", minRole: "admin", isAvailable: false },

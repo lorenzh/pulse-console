@@ -22,6 +22,7 @@ code, .secret { font-family: ui-monospace, monospace; overflow-wrap: anywhere; w
 .table-wrap th, .table-wrap td { text-align: left; padding: 0.25rem 0.5rem 0.25rem 0; vertical-align: top; overflow-wrap: anywhere; }
 .table-scroll { overflow-x: auto; max-width: 100%; }
 .table-scroll table.checks { min-width: 56rem; }
+.table-scroll table.tokens { min-width: 60rem; }
 .table-scroll table.checks td { overflow-wrap: normal; word-break: normal; }
 .filters { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: flex-end; margin: 1rem 0; }
 .filters label { display: flex; flex-direction: column; }
