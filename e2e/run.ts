@@ -1010,6 +1010,7 @@ async function serve(): Promise<void> {
   const env = await startEnv(SERVE_WAIT_MS);
   console.log(`url: ${env.console.base}`);
   console.log(`sign in: ${env.ownerEmail} / ${OWNER_PASSWORD}`);
+  console.log(`fixture recovery codes: ${env.console.recoveryCodes.join(" ")}`);
   console.log(`busy page: ${env.console.base}/__test/states/busy (waits ${SERVE_WAIT_MS} ms)`);
   setInterval(() => {
     console.log(`recorder: ${JSON.stringify(env.recorder.actions)}`);
