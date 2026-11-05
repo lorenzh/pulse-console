@@ -91,6 +91,8 @@ Each committed change logs `info` `team change` with `action`, `actorId` and `ta
 
 Every team change appends one row to `people_events` in the same transaction as the change. If the row cannot be written, the change rolls back. Rows are append-only: an update or delete fails with `people_events is append-only`. A row keeps the actor's and target's email and name as they were then. It never holds a token, a link, a password, a TOTP seed or code, a recovery code, a cookie, a form token, a header value or a request body. Failed or denied attempts write no row.
 
+Check changes in pulse-api also append a row: `check.create`, `check.replace` and `check.delete`, with target kind `check`, the check id in `target_name`, no `target_id`, and in `value` the new revision (`sha256-<hex>`) or `unknown`. A check write is not atomic with its row: the row is written after pulse-api answered. A `saved` and an `unknown` outcome each append one row; a refusal by pulse-api appends none. When the row cannot be written after a save, the page says `Saved in pulse-api. The People log row could not be written.` See `docs/checks.md`.
+
 ## API tokens and console roles
 
 - Roles are console rules. The console calls pulse-api with its one token from `PULSE_CONSOLE_ADMIN_TOKEN_FILE` or `PULSE_CONSOLE_ADMIN_TOKEN`; pulse-api cannot tell console users apart.

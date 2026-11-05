@@ -32,16 +32,16 @@ export type TypedConfirmView = ConfirmView & {
   error?: string | undefined;
 };
 
-/** Decision 7: trimmed and NFC-normalized, case-sensitive, inner whitespace counts. */
+/** Decision 7: both names trimmed and NFC-normalized, case-sensitive, inner whitespace counts. */
 export function isTypedNameConfirmed(typed: string, expected: string): boolean {
-  return typed.trim().normalize("NFC") === expected.normalize("NFC");
+  return typed.trim().normalize("NFC") === expected.trim().normalize("NFC");
 }
 
 /** The error for a typed name that does not confirm, or undefined when it confirms. */
 export function typedNameError(typed: string, expected: string): string | undefined {
   if (typed.trim() === "") return "Type the name to confirm.";
   if (isTypedNameConfirmed(typed, expected)) return undefined;
-  return `The name does not match. Type ${expected} exactly.`;
+  return `The name does not match. Type ${expected.trim()} exactly.`;
 }
 
 function notice(text: string | undefined): string {

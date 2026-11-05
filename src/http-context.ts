@@ -144,9 +144,9 @@ export function pushSessionCookie(ctx: Ctx, id: string, stage: SessionStage): vo
   ctx.cookies.push(serializeSessionCookie(id, stage, ctx.deps.mode));
 }
 
-async function readBodyOrFail(ctx: Ctx): Promise<string | undefined> {
+async function readBodyOrFail(ctx: Ctx, maxBytes: number): Promise<string | undefined> {
   try {
-    return await readBody(ctx.req, MAX_FORM_BYTES);
+    return await readBody(ctx.req, maxBytes);
   } catch (err) {
     if (!(err instanceof BodyError)) throw err;
     ctx.res.setHeader("connection", "close");
@@ -166,6 +166,7 @@ export function sendRefused(ctx: Ctx): void {
 export async function readFormFields<K extends string>(
   ctx: Ctx,
   known: readonly K[],
+  maxBytes: number = MAX_FORM_BYTES,
 ): Promise<FormFields<K | "csrf"> | undefined> {
   const { req, deps } = ctx;
   const origin = expectedOrigin(deps.mode, req.headers.host, deps.publicOrigin);
@@ -177,7 +178,7 @@ export async function readFormFields<K extends string>(
     sendText(ctx, 415, "unsupported content type\n");
     return undefined;
   }
-  const body = await readBodyOrFail(ctx);
+  const body = await readBodyOrFail(ctx, maxBytes);
   if (body === undefined) return undefined;
   const parsed = parseForm<K | "csrf">(body, [...known, "csrf"]);
   if (!parsed.isOk) {
@@ -191,8 +192,9 @@ export async function readPostForm<K extends string>(
   ctx: Ctx,
   known: readonly K[],
   expectedCsrf: string | undefined = cookieOf(ctx, "csrf"),
+  maxBytes: number = MAX_FORM_BYTES,
 ): Promise<FormFields<K | "csrf"> | undefined> {
-  const fields = await readFormFields(ctx, known);
+  const fields = await readFormFields(ctx, known, maxBytes);
   if (fields === undefined) return undefined;
   if (!isCsrfTokenValid(fields.csrf, expectedCsrf)) {
     sendRefused(ctx);

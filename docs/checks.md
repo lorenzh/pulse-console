@@ -160,7 +160,7 @@ or `equals`) and `assert_<i>_equals`, which must be JSON (`"ok"`, `200`, `true`)
 
 ## Editor pages
 
-`src/check-editor-page.ts` renders the create and edit forms; the routes come later.
+`src/check-editor-page.ts` renders the create and edit forms. Create is served at `/checks/new`; edit comes later.
 
 - Create shows an `id` input and a hidden `type`. Edit shows the id and the type as text and
   has neither input: both come from the stored view.
@@ -182,6 +182,48 @@ or `equals`) and `assert_<i>_equals`, which must be JSON (`"ok"`, `200`, `true`)
   reporting location decides alone. Heartbeat forms state instead that the check has no quorum
   and is down at once after the period plus the grace time. No form has a quorum or location
   field.
+
+## Create
+
+`GET /checks/new` (Member and higher; a Viewer gets `403`) without a known `type` shows the six
+types, each a link to `?type=<type>` with one line of explanation. With a known type it shows
+that type's form with its defaults; it reads nothing from pulse-api.
+
+`POST /checks/new` accepts a form of up to 524288 bytes (every other POST keeps 8192). After the
+dispatcher (Origin, content type, size, repeated fields, CSRF, role, form token) it runs, in
+this order:
+
+1. Field checks of the posted type only (`422` with the form). A free header row named exactly
+   `__proto__` and a header name used twice (compared without case) are field errors before
+   any header object is built.
+2. The built JSON must be at most 1048576 bytes: `422` `The check is larger than pulse-api
+   accepts (1 MiB).`
+3. `GET /admin/config`; a failed read answers `502` with the state.
+4. An id that is already in `checks` or `shadowed`: `409` `A check with this id exists.`
+5. The session row must still exist (`409` `Not saved`) and the stored role must still be
+   Member or higher (`403`).
+6. One `POST /admin/checks` with `If-Match: "<revision of that read>"`.
+
+A saved check answers `303` to `/checks/check?id=<encoded id>&saved=1`, which says
+`Check saved.` An expired form token renders the form of the posted type with the kept
+non-secret input (the choice page for an unknown type), `409`. A replayed token answers `409`
+`Already submitted` with a link to `/checks/new`.
+
+## Write outcomes
+
+Every write is sent once with a 5000 ms timeout and never follows a redirect. Its outcome
+comes only from the response status and the wire header, never from the body:
+
+- `saved`: `200`, `201` or `204` with the wire header. pulse-api answers `2xx` only after its
+  commit, so this holds even when the answer body is too large, not JSON or slow. One People
+  row with the unquoted `ETag` revision, or `unknown` when the `ETag` is not a revision.
+- `refused`: `400` to `599` with the wire header. Nothing was changed, and no People row is
+  written. `401` shows the token banner, `403` the scope text, `404` `This check no longer
+  exists.`, `409`, `413` and `422` the form with pulse-api's reason, `412` the stale state,
+  `429` the throttle text (`503`), other statuses a `502` text.
+- `unknown`: no answer in time, a redirect, any other status, or an answer without the wire
+  header or with another wire version. One People row with `unknown`; the page says to open
+  the check. A proxy in front of pulse-api that answers on its own makes such an answer.
 
 ## Write-only values on edit
 

@@ -26,6 +26,10 @@ describe("isTypedNameConfirmed", () => {
     ["", "api", false],
     ["Café", "Café", true],
     ["Café", "Café", true],
+    ["Checkout API", " Checkout API ", true],
+    [" Checkout API ", " Checkout API ", true],
+    ["Checkout  API", " Checkout API ", false],
+    ["checkout api", " Checkout API ", false],
   ];
   for (const [typed, expected, result] of rows) {
     test(`${JSON.stringify(typed)} against ${JSON.stringify(expected)} is ${result}`, () => {
@@ -39,6 +43,9 @@ describe("typedNameError", () => {
     expect(typedNameError("   ", "api")).toBe("Type the name to confirm.");
     expect(typedNameError("API", "api")).toBe("The name does not match. Type api exactly.");
     expect(typedNameError(" api", "api")).toBeUndefined();
+    expect(typedNameError("x", " Checkout API ")).toBe(
+      "The name does not match. Type Checkout API exactly.",
+    );
   });
 });
 

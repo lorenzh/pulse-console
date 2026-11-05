@@ -32,6 +32,7 @@ export type PathLabel =
   | "/checks/check"
   | "/checks/shadowed"
   | "/checks/export"
+  | "/checks/new"
   | "/invite/:token"
   | "/reset/:token"
   | "other";

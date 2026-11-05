@@ -209,6 +209,7 @@ function pathLabel(path: string): PathLabel {
     case "/checks/check":
     case "/checks/shadowed":
     case "/checks/export":
+    case "/checks/new":
       return path;
     default: {
       const link = linkOfPath(path);
@@ -958,7 +959,8 @@ function isProtectedTokenAccepted(
   if (result === "accepted") return true;
   logRefusedToken(ctx, result);
   if (result === "replayed") {
-    const reopenHref = route.methods.includes("GET") ? ctx.path : "/";
+    const reopenHref =
+      route.reopenHrefOf?.(request) ?? (route.methods.includes("GET") ? ctx.path : "/");
     sendShell(ctx, signedIn, 409, {
       title: "Already submitted",
       body: alreadySubmittedState({ reopenHref }),
@@ -1000,7 +1002,7 @@ async function handleProtected(
   let fields: PageRequest["fields"] = {};
   if (method === "POST") {
     const known = [...(route.knownFields ?? []), "form_token"];
-    const read = await readPostForm(ctx, known, signedIn.session.csrfToken);
+    const read = await readPostForm(ctx, known, signedIn.session.csrfToken, route.maxFormBytes);
     if (read === undefined) return;
     fields = read;
   }

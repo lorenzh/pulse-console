@@ -206,3 +206,60 @@ test("password events keep their literal action, target and value", () => {
     { at: 23, actor_user_id: null, action: "owner.recover", target_id: 1, value: null },
   ]);
 });
+
+test("check events keep the check id as target name and no target id", () => {
+  const db = fresh();
+  appendPeopleEvent(db, {
+    at: 30,
+    actor: { kind: "user", person: MEMBER },
+    action: "check.create",
+    target: { kind: "check", id: "web" },
+    value: `sha256-${"a".repeat(64)}`,
+  });
+  appendPeopleEvent(db, {
+    at: 31,
+    actor: { kind: "user", person: MEMBER },
+    action: "check.replace",
+    target: { kind: "check", id: "a/b" },
+    value: "unknown",
+  });
+  appendPeopleEvent(db, {
+    at: 32,
+    actor: { kind: "user", person: MEMBER },
+    action: "check.delete",
+    target: { kind: "check", id: "web" },
+    value: "unknown",
+  });
+  expect(
+    db
+      .query(
+        "SELECT action, target_kind, target_id, target_email, target_name, value FROM people_events ORDER BY id",
+      )
+      .all(),
+  ).toEqual([
+    {
+      action: "check.create",
+      target_kind: "check",
+      target_id: null,
+      target_email: null,
+      target_name: "web",
+      value: "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    },
+    {
+      action: "check.replace",
+      target_kind: "check",
+      target_id: null,
+      target_email: null,
+      target_name: "a/b",
+      value: "unknown",
+    },
+    {
+      action: "check.delete",
+      target_kind: "check",
+      target_id: null,
+      target_email: null,
+      target_name: "web",
+      value: "unknown",
+    },
+  ]);
+});

@@ -5,6 +5,8 @@ import {
   checkEmail,
   checkName,
   isFormContentType,
+  MAX_CHECK_FORM_BYTES,
+  MAX_FORM_BYTES,
   parseForm,
   passwordText,
 } from "./forms.ts";
@@ -107,4 +109,9 @@ describe("password text", () => {
     expect(passwordText("😀".repeat(12), "😀".repeat(12))).toBeUndefined();
     expect(passwordText(`  ${"a".repeat(10)}`, `  ${"a".repeat(10)}`)).toBeUndefined();
   });
+});
+
+test("form limits: 8192 by default, 524288 for the two check editor POSTs", () => {
+  expect(MAX_FORM_BYTES).toBe(8192);
+  expect(MAX_CHECK_FORM_BYTES).toBe(524288);
 });

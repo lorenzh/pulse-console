@@ -56,6 +56,10 @@ export type ProtectedRoute = {
   /** The POST fields of the route; the dispatcher adds `csrf` and `form_token`. */
   knownFields?: readonly string[] | undefined;
   handle: (request: PageRequest) => Promise<PageResult>;
+  /** The POST body limit; defaults to `MAX_FORM_BYTES` (8192). */
+  maxFormBytes?: number | undefined;
+  /** The link of the replayed-token page; defaults to the route path (Decision 13). */
+  reopenHrefOf?: ((request: PageRequest) => string) | undefined;
   /** The GET form with the kept non-secret fields and `notice`, without any action. */
   renderForm?: ((request: PageRequest, notice: string) => PageResult) | undefined;
 };

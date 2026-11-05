@@ -3,6 +3,7 @@ import { escapeHtml } from "@lorenzh/pulse-kit";
 import {
   ASSERT_ROWS,
   CHECK_FORM_FIELDS,
+  CHECK_TYPES,
   type CheckType,
   DNS_RECORD_TYPES,
   type FieldError,
@@ -506,5 +507,27 @@ ${typeField}<input type="hidden" name="revision" value="${escapeHtml(model.revis
 <p>Type: ${TYPE_LABELS[model.type]}</p>
 ${formWideError(ctx)}${commonFields(ctx)}${typeFields(ctx)}${paragraph(quorum, ' class="quorum-rule"')}${submitButton({ label: isEdit ? "Save check" : "Create check", busyLabel: "Saving…" })}
 </form>
+`;
+}
+
+const TYPE_EXPLANATIONS: Record<CheckType, string> = {
+  http: "Requests a URL and checks the status, a keyword or JSON values.",
+  tls: "Warns before the certificate of a host expires.",
+  tcp: "Opens a TCP connection to a host and port.",
+  dns: "Resolves a name and compares the records.",
+  domain: "Warns before a domain registration expires.",
+  heartbeat: "Your job pings pulse-api; no ping in time means down.",
+};
+
+/** R4: the six type choices of `GET /checks/new`, each a link with a one-line explanation. */
+export function checkTypeChoiceHtml(): string {
+  const items = CHECK_TYPES.map(
+    (type) =>
+      `<li><a href="/checks/new?type=${type}">${TYPE_LABELS[type]}</a>: ${escapeHtml(TYPE_EXPLANATIONS[type])}</li>`,
+  ).join("\n");
+  return `<p>Choose the type of the new check.</p>
+<ul class="type-choice">
+${items}
+</ul>
 `;
 }
