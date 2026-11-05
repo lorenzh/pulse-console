@@ -27,6 +27,9 @@ code, .secret { font-family: ui-monospace, monospace; overflow-wrap: anywhere; w
 .filters label { display: flex; flex-direction: column; }
 .settings { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
 .settings dd { margin: 0; overflow-wrap: anywhere; }
+.editor-row { margin: 0.75rem 0; }
+.hint { display: block; font-size: 0.875rem; }
+.quorum-rule { margin-top: 1.5rem; }
 pre { overflow-x: auto; max-width: 100%; padding: 0.5rem; border: 1px solid currentColor; }
 body, p, h1, h2, li, label, a { overflow-wrap: anywhere; }
 .skip-link { position: absolute; left: 0.5rem; top: -3rem; padding: 0.5rem; background: #fff; }

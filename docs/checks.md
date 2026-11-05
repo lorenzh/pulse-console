@@ -158,6 +158,31 @@ an env value.
 JSON assertion row `i` (0 to 9) has `assert_<i>_pointer`, `assert_<i>_mode` (`none`, `exists`
 or `equals`) and `assert_<i>_equals`, which must be JSON (`"ok"`, `200`, `true`).
 
+## Editor pages
+
+`src/check-editor-page.ts` renders the create and edit forms; the routes come later.
+
+- Create shows an `id` input and a hidden `type`. Edit shows the id and the type as text and
+  has neither input: both come from the stored view.
+- Durations are whole milliseconds; each such label ends in `(ms)`. Defaults: method GET, TLS
+  port 443 and warn days 14, domain warn days 30 and interval 86400000, heartbeat grace 0.
+- HTTP has 20 header rows and 10 JSON assertion rows. The first `max(existing + 3, 5)` header
+  rows are open; the rest sit in `More rows`. On edit the stored literal headers come first, as
+  text with `Value: set` and Keep, Replace and Remove; env headers fill the next free rows.
+- The heartbeat secret is a `password` input with `autocomplete="new-password"`. On edit it
+  shows `Secret: set` with Keep and Replace.
+- After a failed POST the form keeps all non-secret input. The secret, the body and every
+  literal header value come back empty with `Not kept for safety: enter it again.` An env
+  header keeps its variable name: it is not a secret.
+- An HTTP form with env headers and a valid URL shows the host-binding line in a `<pre>` with a
+  copy button (see "Lines to paste into a shell"). Paste it in a POSIX shell such as `sh`, `bash`
+  or `dash`; merge its list with the value that the probe already has.
+- Above the submit button, HTTP, TLS, TCP, DNS and domain forms state the fixed quorum rule:
+  every probe runs the check, it is down when at least two locations report down, and one
+  reporting location decides alone. Heartbeat forms state instead that the check has no quorum
+  and is down at once after the period plus the grace time. No form has a quorum or location
+  field.
+
 ## Write-only values on edit
 
 An edit takes the id, the type, the names and order of the stored literal headers, whether a
