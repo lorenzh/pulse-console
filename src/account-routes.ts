@@ -435,11 +435,25 @@ export async function postPassword(ctx: Ctx): Promise<void> {
     userId: current.user.id,
     passwordHash: current.user.passwordHash,
   };
-  const result = deps.store.changePassword(guard, newHash, deps.now());
+  let result: ReturnType<typeof deps.store.changePassword>;
+  try {
+    result = deps.store.changePassword(guard, newHash, deps.now());
+  } catch (err) {
+    // The transaction rolled back; only the error name is logged.
+    deps.log.error("team change could not be saved", {
+      error: err instanceof Error ? err.name : "unknown",
+    });
+    sendHtml(ctx, 500, messagePage("Not saved", "The change could not be saved."));
+    return;
+  }
   if (!result.ok) {
     sendHtml(ctx, 409, page(CREDENTIALS_CHANGED_TEXT));
     return;
   }
-  deps.log.info("password changed", { userId: current.user.id, sessions: result.sessions });
+  deps.log.info("team change", {
+    action: "user.password-change",
+    actorId: current.user.id,
+    targetId: current.user.id,
+  });
   redirect(ctx, "/account/password?changed=1");
 }

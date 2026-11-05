@@ -170,3 +170,32 @@ describe("own password change", () => {
     expect(reply.headers.get("location")).toBe("/sign-in?next=%2Faccount%2Fpassword");
   });
 });
+
+describe("own password change reports like a team change", () => {
+  test.each([
+    ["a failed People-log insert", true],
+    ["a saved change", false],
+  ] as const)("%s logs the team change line", async (_name, isFailing) => {
+    const c = await team();
+    if (isFailing) {
+      c.db.run(
+        "CREATE TRIGGER test_fail BEFORE INSERT ON people_events BEGIN SELECT RAISE(ABORT, 'no'); END",
+      );
+    }
+    const before = hashOf(c, c.ids.owner);
+    const reply = await change(c, {});
+    const logs = c.logs.join("\n");
+    if (isFailing) {
+      expect(reply.status).toBe(500);
+      expect(reply.body).toContain("The change could not be saved.");
+      expect(hashOf(c, c.ids.owner)).toBe(before);
+      expect(logs).toContain("team change could not be saved");
+      expect(logs).toContain("PeopleLogError");
+    } else {
+      expect(reply.status).toBe(303);
+      expect(
+        c.logs.some((l) => l.includes("team change") && l.includes("user.password-change")),
+      ).toBe(true);
+    }
+  });
+});
