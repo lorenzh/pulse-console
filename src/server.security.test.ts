@@ -624,7 +624,10 @@ describe("signed-in unknown paths and the Overview", () => {
     const res = await getPage(c, "/");
     expect(res.status).toBe(200);
     expectShell(res);
-    expect(res.body).toContain("pulse-api cannot be reached at http://127.0.0.1:9.");
+    expect(res.body).toContain("<p>Kind: connection refused</p>");
+    expect(res.body).toContain(
+      "The connection to http://127.0.0.1:9 was refused. Check that pulse-api is running at this address.",
+    );
   });
 
   test("GET / without a session redirects to sign-in with next=/", async () => {

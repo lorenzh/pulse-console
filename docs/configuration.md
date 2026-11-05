@@ -124,6 +124,17 @@ Password work waits for an asynchronous hash, so writes that follow it are check
 
 The Overview reads pulse-api on each visit: `GET <api>/admin/config` with `Authorization: Bearer <admin token>` and `GET <api>/checks` without it, started together, each with a 5000 ms timeout and no redirect followed. It always answers `200`. It shows the overall state and the count per check state, `No checks yet` for zero checks, `pulse-api cannot be reached` or `pulse-api sent an answer the console cannot use` for a failed read, a banner `pulse-api rejected the console token` for a `401`, and the no-token text without any request when no admin token is set. Each failed read logs one `warn` `api read failed` with `call` (`config` or `checks`), `kind` and, for an HTTP answer, `status`; never a URL, body or token.
 
+Under `pulse-api cannot be reached` the Overview names the kind of failure in a `Kind:` paragraph before the detail:
+
+| Failure                      | Kind paragraph             | Detail                                                                                     |
+| ---------------------------- | -------------------------- | ------------------------------------------------------------------------------------------ |
+| the 5000 ms deadline expired | `Kind: timeout`            | `pulse-api did not answer within 5 seconds.`                                               |
+| refused connection           | `Kind: connection refused` | `The connection to <origin> was refused. Check that pulse-api is running at this address.` |
+| any other network failure    | `Kind: network error`      | `pulse-api cannot be reached at <origin>.`                                                 |
+| an HTTP status               | `Kind: status <n>`         | for example `pulse-api answered 503.`                                                      |
+
+A connection counts as refused only when the `fetch` error, or its `cause` one level down, has an own data property `code` of `ConnectionRefused` (Bun) or `ECONNREFUSED`. No getter runs and the message text is never read. An answer the console cannot use (wire mismatch, missing header, invalid body) and the token banner have no `Kind:` paragraph. The log line stays the same: a refused read logs `kind` `network`.
+
 ## Form tokens
 
 Every POST form carries a hidden `form_token` directly after `csrf`: 32 random bytes, base64url. A token is bound to its form's action path and to the client: `/setup`, `/setup/owner` and `/sign-in` bind it to the SHA-256 of the anonymous CSRF token, the sign-out form to the session. Second-factor, enrolment and account forms bind it to their current session as well. A `HEAD` request issues no token.

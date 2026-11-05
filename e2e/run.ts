@@ -42,7 +42,13 @@ type Env = {
   target: ConfirmTargetHolder;
   role: { current: ConsoleRole };
   hold: { current: Promise<void> | undefined };
+  /** When set, every pulse-api read goes to this closed loopback origin. */
+  refuse: { current: string | undefined };
+  /** When true, the 5000 ms read deadline fires after a real 100 ms. */
+  fastDeadline: { current: boolean };
 };
+
+const FAST_DEADLINE_MS = 100;
 
 async function startEnv(waitMs: number): Promise<Env> {
   const api = startFakeApi();
@@ -56,13 +62,28 @@ async function startEnv(waitMs: number): Promise<Env> {
     if (hold.current !== undefined) return hold.current;
     return waitMs > 0 ? new Promise((resolve) => setTimeout(resolve, waitMs)) : Promise.resolve();
   };
+  const refuse: { current: string | undefined } = { current: undefined };
+  const fastDeadline = { current: false };
   const server = await startSignedInConsole({
     apiUrl: api.url,
     adminToken: ADMIN_TOKEN,
     testRoutes: createFixtureRoutes({ recorder, target, wait }),
     roleOf: () => role.current,
+    fetch: Object.assign(
+      (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const closed = refuse.current;
+        if (closed === undefined) return fetch(input, init);
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        return fetch(`${closed}${url.pathname}`, init);
+      },
+      { preconnect: fetch.preconnect },
+    ),
+    schedule: (fn, ms) => {
+      const timer = setTimeout(fn, fastDeadline.current && ms === 5000 ? FAST_DEADLINE_MS : ms);
+      return () => clearTimeout(timer);
+    },
   });
-  return { console: server, api, recorder, target, role, hold };
+  return { console: server, api, recorder, target, role, hold, refuse, fastDeadline };
 }
 
 async function signIn(page: Page, env: Env): Promise<void> {
@@ -105,6 +126,7 @@ const FIXTURE_PAGES = [
   "/__test/states/busy",
   "/__test/states/already-submitted",
   "/__test/states/api-timeout",
+  "/__test/states/api-refused",
   "/__test/states/api-network",
   "/__test/states/api-status",
   "/__test/states/token-rejected",
@@ -236,6 +258,61 @@ async function checkLayout(env: Env, browser: Browser, width: number, height: nu
   assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
   await context.close();
   ok(`${width} x ${height}: sign-in, 4 Overview states, 403, Team and every fixture page fit`);
+}
+
+async function closedOrigin(): Promise<string> {
+  const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  const origin = `http://127.0.0.1:${probe.port}`;
+  await probe.stop(true);
+  return origin;
+}
+
+async function overviewText(page: Page, base: string): Promise<string> {
+  await page.goto(`${base}/`);
+  return (await page.locator("main").textContent()) ?? "";
+}
+
+/** Each failure kind through `/`, `readOverview` and the real `fetchJson`, then recovery. */
+async function checkFailureKinds(env: Env, browser: Browser): Promise<void> {
+  const base = env.console.base;
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const violations: string[] = [];
+  watchCsp(context, violations);
+  const page = await newPage(context, violations);
+  await signIn(page, env);
+  try {
+    env.refuse.current = await closedOrigin();
+    const refused = await overviewText(page, base);
+    assert(refused.includes("Kind: connection refused"), "refused: kind");
+    assert(refused.includes(`The connection to ${env.api.url} was refused.`), "refused: text");
+    assert(!refused.includes("5 seconds"), "refused: no 5 seconds");
+    env.refuse.current = undefined;
+    ok("failure kinds: a bound-then-closed port shows Kind: connection refused without 5 seconds");
+
+    env.api.reply("/checks", { status: 200, isHeld: true });
+    env.fastDeadline.current = true;
+    const timeout = await overviewText(page, base);
+    assert(timeout.includes("Kind: timeout"), "timeout: kind");
+    assert(timeout.includes("pulse-api did not answer within 5 seconds."), "timeout: text");
+    ok("failure kinds: a held /checks with the real 5000 ms deadline shows Kind: timeout");
+
+    env.fastDeadline.current = false;
+    env.api.reply("/checks", { status: 503 });
+    const status = await overviewText(page, base);
+    assert(status.includes("Kind: status 503"), "status: kind");
+    assert(status.includes("pulse-api answered 503."), "status: text");
+    assert(!status.includes("5 seconds"), "status: no 5 seconds");
+    ok("failure kinds: HTTP 503 shows Kind: status 503");
+  } finally {
+    env.refuse.current = undefined;
+    env.fastDeadline.current = false;
+    env.api.reply("/checks", jsonReply([checkWithState("web", "up")]));
+  }
+  const back = await overviewText(page, base);
+  assert(back.includes("Overall state") && !back.includes("Kind:"), "failure kinds: recovery");
+  assert(violations.length === 0, `failure kinds: CSP violations ${violations.join("; ")}`);
+  ok("failure kinds: resetting every switch restores the summary");
+  await context.close();
 }
 
 async function axeOn(page: Page, url: string, label: string): Promise<void> {
@@ -737,6 +814,14 @@ async function runChecks(): Promise<void> {
     await checkBusyScript(env, browser);
     await checkAccountNoScript(env, browser);
     await checkResetAndPassword(env, browser);
+    // A console of its own: the first one has used up its fixture recovery codes.
+    const failureEnv = await startEnv(0);
+    try {
+      await checkFailureKinds(failureEnv, browser);
+    } finally {
+      await failureEnv.console.close();
+      failureEnv.api.stop();
+    }
   } finally {
     await browser.close();
     await env.console.close();

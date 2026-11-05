@@ -17,6 +17,8 @@ export type FakeApi = {
   seen: FakeSeen[];
   /** Sets the reply of `path` (for example `/checks`). */
   reply: (path: string, reply: FakeReply) => void;
+  /** Resolves once the fake api has received a request for `path`. */
+  received: (path: string) => Promise<void>;
   stop: () => void;
 };
 
@@ -56,12 +58,17 @@ export function jsonReply(body: unknown): FakeReply {
 export function startFakeApi(): FakeApi {
   const seen: FakeSeen[] = [];
   const replies = new Map<string, FakeReply>();
+  const waiters: Array<{ path: string; resolve: () => void }> = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     fetch(req) {
       const path = new URL(req.url).pathname;
       seen.push({ path, authorization: req.headers.get("authorization") });
+      for (const waiter of waiters.filter((w) => w.path === path)) {
+        waiters.splice(waiters.indexOf(waiter), 1);
+        waiter.resolve();
+      }
       const reply = replies.get(path) ?? { status: 404 };
       if (reply.isHeld === true) {
         return new Promise<Response>(() => undefined);
@@ -77,6 +84,12 @@ export function startFakeApi(): FakeApi {
     seen,
     reply(path, reply) {
       replies.set(path, reply);
+    },
+    received(path) {
+      if (seen.some((s) => s.path === path)) {
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => waiters.push({ path, resolve }));
     },
     stop() {
       void server.stop(true);

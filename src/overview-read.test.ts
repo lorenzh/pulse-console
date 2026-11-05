@@ -9,7 +9,7 @@ import {
   UPSTREAM_SENTINEL,
   WIRE_HEADERS,
 } from "../test/fake-api.ts";
-import { apiFailureText } from "./api-failure.ts";
+import { apiFailureKind, apiFailureText } from "./api-failure.ts";
 import { type OverviewRead, type OverviewReadDeps, readOverview } from "./overview-read.ts";
 
 const TOKEN = "overview-sentinel-token-0123456789";
@@ -59,6 +59,13 @@ function failureText(read: OverviewRead): string {
     throw new Error(`expected a failure, got ${read.kind}`);
   }
   return apiFailureText(read.failure);
+}
+
+function kindOf(read: OverviewRead): string | undefined {
+  if (read.kind !== "failed") {
+    throw new Error(`expected a failure, got ${read.kind}`);
+  }
+  return apiFailureKind(read.failure);
 }
 
 const okConfig = jsonReply(emptyConfig);
@@ -263,28 +270,116 @@ describe("readOverview", () => {
     expect(second.seen).toEqual([]);
   });
 
-  test("a timeout gives the timeout text", async () => {
+  test("a deadline that fires after the request arrived gives Kind: timeout", async () => {
     setReplies(api, okConfig, { status: 200, isHeld: true });
+    const deadlines: (() => void)[] = [];
     const { deps } = depsWith({
       schedule: (fn, ms) => {
         if (ms === 5000) {
-          queueMicrotask(fn);
+          deadlines.push(fn);
         }
         return () => undefined;
       },
     });
-    expect(failureText(await readOverview(api.url, deps))).toBe(
-      "pulse-api did not answer within 5 seconds.",
-    );
+    const reading = readOverview(api.url, deps);
+    await api.received("/checks");
+    expect(deadlines).toHaveLength(2);
+    for (const fn of deadlines) fn();
+    const read = await reading;
+    expect(kindOf(read)).toBe("timeout");
+    expect(failureText(read)).toBe("pulse-api did not answer within 5 seconds.");
   });
 
-  test("a closed port gives the network text with the origin only", async () => {
+  test("a closed port is refused, with the origin only and no 5 seconds", async () => {
     const closed = startFakeApi();
     const url = closed.url;
     closed.stop();
-    const { deps } = depsWith();
-    expect(failureText(await readOverview(`${url}/base`, deps))).toBe(
-      `pulse-api cannot be reached at ${url}.`,
+    const { deps, logs } = depsWith();
+    const read = await readOverview(`${url}/base`, deps);
+    expect(kindOf(read)).toBe("connection refused");
+    expect(failureText(read)).toBe(
+      `The connection to ${url} was refused. Check that pulse-api is running at this address.`,
     );
+    expect(failureText(read)).not.toContain("5 seconds");
+    expect(logs).toEqual([
+      { message: "api read failed", fields: { call: "config", kind: "network" } },
+      { message: "api read failed", fields: { call: "checks", kind: "network" } },
+    ]);
+  });
+
+  test("Bun's closed-port rejection carries an own data property code ConnectionRefused", async () => {
+    const closed = startFakeApi();
+    const url = closed.url;
+    closed.stop();
+    const error: unknown = await fetch(`${url}/checks`).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(TypeError);
+    const descriptor =
+      typeof error === "object" && error !== null
+        ? Object.getOwnPropertyDescriptor(error, "code")
+        : undefined;
+    expect(descriptor?.value).toBe("ConnectionRefused");
+  });
+
+  const calls = { count: 0 };
+  const getterCause = new TypeError("getter-sentinel");
+  Object.defineProperty(getterCause, "code", {
+    get: () => {
+      calls.count += 1;
+      return "ECONNREFUSED";
+    },
+  });
+  const rejections: Array<[string, unknown, string]> = [
+    [
+      "Node-style nested cause.code",
+      new TypeError("x", { cause: { code: "ECONNREFUSED" } }),
+      "connection refused",
+    ],
+    [
+      "a second nested cause",
+      new TypeError("x", { cause: { cause: { code: "ECONNREFUSED" } } }),
+      "network error",
+    ],
+    ["message only", new TypeError("ECONNREFUSED connection refused sentinel"), "network error"],
+    ["a code getter", getterCause, "network error"],
+    [
+      "a throwing Proxy",
+      new Proxy(
+        {},
+        {
+          getOwnPropertyDescriptor: () => {
+            throw new Error("proxy-sentinel");
+          },
+        },
+      ),
+      "network error",
+    ],
+  ];
+  for (const [name, rejection, kind] of rejections) {
+    test(`a fetch rejection with ${name} gives Kind: ${kind}`, async () => {
+      calls.count = 0;
+      const { deps, logs } = depsWith({ fetch: () => Promise.reject(rejection) });
+      const read = await readOverview(api.url, deps);
+      expect(kindOf(read)).toBe(kind);
+      expect(calls.count).toBe(0);
+      const logged = JSON.stringify(logs);
+      for (const sentinel of ["sentinel", "ECONNREFUSED", "ConnectionRefused"]) {
+        expect(logged).not.toContain(sentinel);
+        expect(failureText(read)).not.toContain(sentinel);
+      }
+    });
+  }
+
+  test("a 503 is a status, not a timeout", async () => {
+    setReplies(api, okConfig, { status: 503 });
+    const { deps, logs } = depsWith();
+    const read = await readOverview(api.url, deps);
+    expect(kindOf(read)).toBe("status 503");
+    expect(failureText(read)).toBe("pulse-api answered 503.");
+    expect(logs).toEqual([
+      { message: "api read failed", fields: { call: "checks", kind: "http", status: 503 } },
+    ]);
   });
 });

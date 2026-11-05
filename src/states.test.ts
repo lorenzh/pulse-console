@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { ApiFailure } from "./api-failure.ts";
 import {
   alreadySubmittedState,
   apiUnavailableState,
@@ -38,6 +39,35 @@ test("api unavailable state", () => {
   expect(apiUnavailableState({ kind: "invalid" }, "/")).toContain(
     "<h2>pulse-api sent an answer the console cannot use</h2>",
   );
+});
+
+test("api unavailable state names the kind before the detail", () => {
+  const rows: Array<[ApiFailure, string, string]> = [
+    [{ kind: "timeout" }, "Kind: timeout", "pulse-api did not answer within 5 seconds."],
+    [
+      { kind: "refused", origin: "http://127.0.0.1:9" },
+      "Kind: connection refused",
+      "The connection to http://127.0.0.1:9 was refused. Check that pulse-api is running at this address.",
+    ],
+    [
+      { kind: "network", origin: "http://127.0.0.1:9" },
+      "Kind: network error",
+      "pulse-api cannot be reached at http://127.0.0.1:9.",
+    ],
+    [{ kind: "http", call: "checks", status: 503 }, "Kind: status 503", "pulse-api answered 503."],
+  ];
+  for (const [failure, kind, detail] of rows) {
+    expect(apiUnavailableState(failure, "/")).toContain(
+      `<h2>pulse-api cannot be reached</h2>\n<p>${kind}</p>\n<p>${detail}</p>\n`,
+    );
+  }
+  for (const failure of [
+    { kind: "invalid" },
+    { kind: "missing-header" },
+    { kind: "wire-mismatch", label: "2" },
+  ] satisfies ApiFailure[]) {
+    expect(apiUnavailableState(failure, "/")).not.toContain("Kind:");
+  }
 });
 
 test("token banner", () => {
