@@ -6,10 +6,10 @@ main { max-width: 32rem; margin: 0 auto; padding: 1.5rem 1rem; }
 h1 { font-size: 1.5rem; margin: 0 0 1rem; }
 form { display: grid; gap: 0.75rem; }
 label { display: grid; gap: 0.25rem; font-weight: 600; }
-input, textarea { width: 100%; font: inherit; padding: 0.5rem; border: 1px solid #8a929c; border-radius: 4px; background: #fff; }
+input, textarea, select { width: 100%; font: inherit; padding: 0.5rem; border: 1px solid #8a929c; border-radius: 4px; background: #fff; }
 button { font: inherit; padding: 0.5rem 1rem; border: 1px solid #1b4f9c; border-radius: 4px; background: #1b4f9c; color: #fff; cursor: pointer; }
 button.secondary { background: #fff; color: #1b4f9c; }
-input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #e3a008; outline-offset: 2px; }
+input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid #e3a008; outline-offset: 2px; }
 .error { color: #a4161a; font-weight: 400; margin: 0; }
 .notice { padding: 0.5rem; border-left: 4px solid #1b4f9c; background: #fff; }
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
@@ -17,6 +17,8 @@ code, .secret { font-family: ui-monospace, monospace; overflow-wrap: anywhere; w
 #recovery-codes { padding-left: 1.5rem; }
 #sessions { width: 100%; border-collapse: collapse; }
 #sessions th, #sessions td { text-align: left; padding: 0.25rem 0.5rem 0.25rem 0; vertical-align: top; }
+.table-wrap table { width: 100%; border-collapse: collapse; }
+.table-wrap th, .table-wrap td { text-align: left; padding: 0.25rem 0.5rem 0.25rem 0; vertical-align: top; overflow-wrap: anywhere; }
 body, p, h1, h2, li, label, a { overflow-wrap: anywhere; }
 .skip-link { position: absolute; left: 0.5rem; top: -3rem; padding: 0.5rem; background: #fff; }
 .skip-link:focus { top: 0.5rem; }
@@ -38,4 +40,7 @@ main.shell-main { max-width: 64rem; }
 .error-summary h2 { font-size: 1.125rem; margin: 0 0 0.5rem; }
 .confirm-target { font-weight: 600; overflow-wrap: anywhere; }
 .confirm .actions { align-items: center; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.link-output { font-family: ui-monospace, monospace; }
+.invite-form { margin-top: 1rem; max-width: 32rem; }
 `;

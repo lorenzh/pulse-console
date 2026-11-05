@@ -1,6 +1,7 @@
 // A real console server on 127.0.0.1 port 0 with a temp database, a completed setup and a
 // signed-in owner session, for the protected-route tests.
 
+import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, mkdtempSync, openSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
@@ -12,10 +13,16 @@ import { type AccountStore, createAccountStore } from "../src/account-store.ts";
 import { openDatabase } from "../src/database.ts";
 import { createFactorStore } from "../src/factor-store.ts";
 import { createMetrics, type Metrics } from "../src/metrics.ts";
-import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "../src/passwords.ts";
+import {
+  type CredentialVerifier,
+  createCredentialVerifier,
+  type HashPassword,
+  PASSWORD_HASH_OPTIONS,
+} from "../src/passwords.ts";
 import type { ProtectedRoute } from "../src/protected-route.ts";
 import type { ConsoleRole } from "../src/roles.ts";
 import { createConsoleServer, listen } from "../src/server.ts";
+import { createTeamStore } from "../src/team-store.ts";
 
 export const OWNER_EMAIL = "owner@example.com";
 export const OWNER_PASSWORD = "signed-in-console-password-42";
@@ -43,6 +50,11 @@ export type SignedInOptions = {
   schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
   testRoutes?: ReadonlyMap<string, ProtectedRoute> | undefined;
   roleOf?: ((user: User) => ConsoleRole) | undefined;
+  /** Replace the real argon2id hash and verifier, for the gated fakes of the race tests. */
+  hashPassword?: HashPassword | undefined;
+  verifier?: CredentialVerifier | undefined;
+  /** Adds rows (more people, sessions) after setup, before the server starts. */
+  prepare?: ((db: Database) => void) | undefined;
 };
 
 let ownerHash: string | undefined;
@@ -76,6 +88,7 @@ export async function startSignedInConsole(options: SignedInOptions): Promise<Si
     );
   }
   store.createSession(SESSION_ID, owner.id, SESSION_CSRF, START);
+  options.prepare?.(db);
   let now = START;
   const logs: string[] = [];
   const metrics = createMetrics();
@@ -89,16 +102,19 @@ export async function startSignedInConsole(options: SignedInOptions): Promise<Si
     adminToken: options.adminToken,
     store,
     factorStore: createFactorStore(db),
+    teamStore: createTeamStore(db),
     secretKey: new Uint8Array(32).fill(7),
     gate: undefined,
     now: () => now,
     randomBytes: (size) => crypto.getRandomValues(new Uint8Array(size)),
-    hashPassword: (pw) => Bun.password.hash(pw, PASSWORD_HASH_OPTIONS),
-    verifier: await createCredentialVerifier({
-      hash: (pw) => Bun.password.hash(pw, PASSWORD_HASH_OPTIONS),
-      verify: (pw, hash) => Bun.password.verify(pw, hash),
-      dummySecret: "dummy secret for tests",
-    }),
+    hashPassword: options.hashPassword ?? ((pw) => Bun.password.hash(pw, PASSWORD_HASH_OPTIONS)),
+    verifier:
+      options.verifier ??
+      (await createCredentialVerifier({
+        hash: (pw) => Bun.password.hash(pw, PASSWORD_HASH_OPTIONS),
+        verify: (pw, hash) => Bun.password.verify(pw, hash),
+        dummySecret: "dummy secret for tests",
+      })),
     fetch: options.fetch ?? fetch,
     schedule: options.schedule,
     testRoutes: options.testRoutes,

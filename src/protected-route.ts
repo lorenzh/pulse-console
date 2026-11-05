@@ -10,6 +10,10 @@ export type PageRequest = {
   /** The raw request path. */
   path: string;
   user: User;
+  /** The id of the request's session, for the commit guard; never rendered or logged. */
+  sessionId: string;
+  /** The origin of links that this request makes (Required behavior 19). */
+  linkOrigin: string;
   /** The server's role of the user, never a value from the request. */
   role: ConsoleRole;
   /** The session CSRF token, for the `csrf` field of a rendered form. */
@@ -30,7 +34,12 @@ export type PageResult =
       body: string;
       banner?: string | undefined;
     }
-  | { kind: "redirect"; location: string };
+  | {
+      kind: "redirect";
+      location: string;
+      /** The change ended the request's own session: the answer deletes the session cookie. */
+      isSessionCleared?: boolean | undefined;
+    };
 
 export type ProtectedRoute = {
   path: string;

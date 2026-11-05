@@ -79,7 +79,7 @@ describe("upgrade of a #562 database", () => {
     const check = new Database(dbPath, { readonly: true });
     expect(
       check.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version,
-    ).toBe(2);
+    ).toBe(3);
     const user = check
       .query<{ email: string; password_hash: string }, []>("SELECT email, password_hash FROM users")
       .get();

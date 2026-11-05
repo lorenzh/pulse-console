@@ -188,12 +188,12 @@ test("database start errors exit 2 with their literal text and print no code", a
   writeFileSync(corrupt, Buffer.alloc(4096, 0xab));
   const newer = join(dir, "newer.db");
   const db = new Database(newer);
-  db.run("PRAGMA user_version = 3");
+  db.run("PRAGMA user_version = 4");
   db.close();
   for (const [path, text] of [
     [missing, `PULSE_CONSOLE_DB=${missing}: cannot open (ENOENT)`],
     [corrupt, `PULSE_CONSOLE_DB=${corrupt}: cannot open (SQLITE_NOTADB)`],
-    [newer, `PULSE_CONSOLE_DB=${newer}: schema version 3 is newer than this console (2)`],
+    [newer, `PULSE_CONSOLE_DB=${newer}: schema version 4 is newer than this console (3)`],
   ] as const) {
     const r = await collect(spawnMain({ PULSE_API_URL: API_URL, PULSE_CONSOLE_DB: path }));
     assertOneLine(r, `pulse-console: ${text}`);
@@ -276,3 +276,39 @@ test("bun src/main.ts serves no /__test/ route", async () => {
   expect(r.code).toBe(0);
   expect(await answer).toEqual({ status: 404, body: "not found\n" });
 }, 10_000);
+
+test.each(["invite", "reset"])(
+  "the production server answers an unknown %s link with 404 Link not valid",
+  async (kind) => {
+    const dbPath = join(tempDir(), "console.db");
+    // The first start creates and migrates the file; setup is then marked complete.
+    await runUntilListening({ PULSE_API_URL: API_URL, PULSE_CONSOLE_DB: dbPath });
+    completeSetup(dbPath, API_URL);
+    const child = spawnMain({ PULSE_API_URL: API_URL, PULSE_CONSOLE_DB: dbPath });
+    let answer: Promise<{ status: number; body: string }> | undefined;
+    const r = await collect(child, (all) => {
+      const line = all.split("\n").find((l) => l.includes("pulse-console listening"));
+      if (answer !== undefined || line === undefined) return;
+      const fields: unknown = JSON.parse(line);
+      const port: unknown =
+        typeof fields === "object" && fields !== null ? Reflect.get(fields, "port") : 0;
+      answer = fetch(`http://127.0.0.1:${String(port)}/${kind}/${"A".repeat(43)}`).then(
+        async (res) => ({ status: res.status, body: await res.text() }),
+      );
+      void answer.finally(() => child.kill("SIGTERM"));
+    });
+    expect(r.code).toBe(0);
+    const reply = await answer;
+    expect(reply?.status).toBe(404);
+    expect(reply?.body).toContain("Link not valid");
+    expect(reply?.body).toContain(
+      "This link is not valid. It may have expired or been used. Ask an admin for a new one.",
+    );
+    const db = new Database(dbPath);
+    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()).toEqual({
+      user_version: 3,
+    });
+    db.close();
+  },
+  20_000,
+);

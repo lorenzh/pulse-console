@@ -1,13 +1,21 @@
-import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { clientKeyOf, handleOps, type OpsHandlers, StartupError } from "@lorenzh/pulse-kit";
 import {
+  isLinkPrefixedPath,
+  type LinkKind,
+  linkOfPath,
+  linkOrigin,
+  linkPathLabel,
+} from "./account-links.ts";
+import {
   postAuthenticator,
   postNewCodes,
+  postPassword,
   postSignOutAll,
   sendAuthenticator,
   sendNewCodesForm,
+  sendPasswordForm,
   sendSecurity,
   sendSessions,
   sendSignOutAllForm,
@@ -30,6 +38,7 @@ import { createFormTokens, type FormTokenResult } from "./form-tokens.ts";
 import { checkApiUrl, checkEmail, checkName, type FormFields, passwordText } from "./forms.ts";
 import { paragraph } from "./html.ts";
 import {
+  anonBinding,
   type ConsoleServerDeps,
   type Ctx,
   type Current,
@@ -46,6 +55,7 @@ import {
   sendHtml,
   sendText,
 } from "./http-context.ts";
+import { postInvite, postReset, sendInviteForm, sendResetForm } from "./link-routes.ts";
 import type { PathLabel } from "./metrics.ts";
 import type { NavId } from "./navigation.ts";
 import { overviewView } from "./overview.ts";
@@ -61,6 +71,7 @@ import {
   signInPage,
 } from "./pages.ts";
 import { isSignInPasswordAcceptable } from "./passwords.ts";
+import { routeRole } from "./permissions.ts";
 import type { PageMethod, PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
 import { isLoopbackHost, safeNext } from "./request-guard.ts";
 import { type ConsoleRole, hasRole } from "./roles.ts";
@@ -74,6 +85,7 @@ import {
   notFoundState,
 } from "./states.ts";
 import { CONSOLE_CSS } from "./styles.ts";
+import { teamRoutes } from "./team-routes.ts";
 import { isSecondFactorRequired, signInStage } from "./two-factor-policy.ts";
 
 export type { ConsoleServerDeps };
@@ -119,6 +131,7 @@ const ROUTES: Readonly<Record<string, Route>> = {
     isNewInPhase2: true,
   },
   "/account/sessions": { methods: ["GET", "HEAD"], access: "full", isNewInPhase2: true },
+  "/account/password": { methods: ["GET", "HEAD", "POST"], access: "full", isNewInPhase2: true },
   "/account/sessions/sign-out-all": {
     methods: ["GET", "HEAD", "POST"],
     access: "full",
@@ -179,11 +192,28 @@ function pathLabel(path: string): PathLabel {
     case "/account/recovery-codes":
     case "/account/sessions":
     case "/account/sessions/sign-out-all":
+    case "/account/password":
     case "/console.js":
+    case "/team":
+    case "/team/invites":
+    case "/team/invites/revoke":
+    case "/team/role":
+    case "/team/remove":
+    case "/team/reset-2fa":
+    case "/team/reset-link":
+    case "/team/transfer":
+    case "/team/require-2fa":
       return path;
-    default:
-      return "other";
+    default: {
+      const link = linkOfPath(path);
+      return link === undefined ? "other" : linkPathLabel(link.kind);
+    }
   }
+}
+
+/** The organisation switch, read live from the instance row. */
+function organisationOf(ctx: Ctx): { isRequiredForAll: boolean } {
+  return { isRequiredForAll: ctx.deps.store.instance()?.isTwoFactorRequiredForAll === true };
 }
 
 /**
@@ -199,7 +229,7 @@ function currentSession(ctx: Ctx): Current | undefined {
   if (user === undefined) return undefined;
   const isMissingFactor =
     session.stage === "full" &&
-    isSecondFactorRequired(user) &&
+    isSecondFactorRequired(user, organisationOf(ctx)) &&
     ctx.deps.factorStore.authenticator(user.id) === undefined;
   return { id, session, user, stage: isMissingFactor ? "enrol" : session.stage };
 }
@@ -257,10 +287,6 @@ function signedInOf(ctx: Ctx): SignedIn | undefined {
   return ctx.current?.stage === "full" ? ctx.current : undefined;
 }
 
-function anonBinding(csrf: string): string {
-  return `a:${createHash("sha256").update(csrf).digest("hex")}`;
-}
-
 function sessionBinding(sessionId: string): string {
   return `s:${sessionDigest(sessionId)}`;
 }
@@ -271,7 +297,13 @@ function issueFormToken(ctx: Ctx, binding: string, path: string): string {
 }
 
 function logRefusedToken(ctx: Ctx, reason: Exclude<FormTokenResult, "accepted">): void {
-  ctx.deps.log.info("form token refused", { reason, path: ctx.path });
+  ctx.deps.log.info("form token refused", { reason, path: logPath(ctx.path) });
+}
+
+/** The path of a log line: a link path is logged by its label, never with its token. */
+function logPath(path: string): string {
+  const link = linkOfPath(path);
+  return link === undefined ? path : linkPathLabel(link.kind);
 }
 
 /**
@@ -331,7 +363,7 @@ function overviewRoute(deps: ConsoleServerDeps): ProtectedRoute {
   return {
     path: "/",
     methods: ["GET"],
-    requiredRole: "viewer",
+    requiredRole: routeRole("overview.view"),
     navId: "overview",
     handle: async () => {
       const apiUrl = deps.store.instance()?.apiUrl ?? deps.defaultApiUrl;
@@ -418,6 +450,9 @@ function handleAccountGet(ctx: Ctx): void {
     case "/account/sessions/sign-out-all":
       sendSignOutAllForm(ctx);
       return;
+    case "/account/password":
+      sendPasswordForm(ctx);
+      return;
     default:
       sendText(ctx, 404, NOT_FOUND);
   }
@@ -443,6 +478,8 @@ function signInNotice(ctx: Ctx): string | undefined {
     ctx.cookies.push(serializeCookieDeletion("session", ctx.deps.mode));
     return EXPIRED;
   }
+  if (ctx.query.get("transfer") === "done") return "Ownership is transferred. Sign in again.";
+  if (ctx.query.get("reset") === "done") return "Your password is set. Sign in.";
   return ctx.query.get("setup") === "done" ? "Setup is complete. Sign in." : undefined;
 }
 
@@ -712,12 +749,22 @@ async function postSignIn(ctx: Ctx): Promise<void> {
     return;
   }
   const stage = passwordStage(ctx, user);
+  let isStarted: boolean;
   try {
-    startSession(ctx, user.id, stage === "full" ? { stage } : { stage, nextPath: next });
+    const options: NewSessionOptions = stage === "full" ? { stage } : { stage, nextPath: next };
+    isStarted = startVerifiedSession(ctx, user.id, user.passwordHash, options);
   } catch (err) {
     // A failed session write must not hold the reservation: it would lock the owner out.
     admission.attempt.release();
     throw err;
+  }
+  if (!isStarted) {
+    // The password changed or the user went while the hash was verified.
+    admission.attempt.fail();
+    deps.log.warn("sign-in failed", { client, reason: "credentials" });
+    deps.metrics.recordAuthAttempt("sign-in", "failure");
+    sendHtml(ctx, 401, formPage(WRONG_CREDENTIALS));
+    return;
   }
   // Only the password throttle succeeds here; the factor throttle is untouched.
   admission.attempt.succeed();
@@ -728,7 +775,7 @@ async function postSignIn(ctx: Ctx): Promise<void> {
 
 function passwordStage(ctx: Ctx, user: User): SessionStage {
   return signInStage({
-    isRequired: isSecondFactorRequired(user),
+    isRequired: isSecondFactorRequired(user, organisationOf(ctx)),
     hasAuthenticator: ctx.deps.factorStore.authenticator(user.id) !== undefined,
   });
 }
@@ -746,6 +793,45 @@ function stageTarget(stage: SessionStage, next: string): string {
       return never;
     }
   }
+}
+
+/**
+ * The rotation of `startSession` in one transaction that inserts the session only when the user
+ * still has the verified hash (section 17). Otherwise it rolls back and writes nothing.
+ */
+function startVerifiedSession(
+  ctx: Ctx,
+  userId: number,
+  verifiedHash: string,
+  options: NewSessionOptions,
+): boolean {
+  const { now } = ctx.deps;
+  const old = cookieOf(ctx, "session");
+  const id = newToken(ctx);
+  const csrf = newToken(ctx);
+  try {
+    ctx.deps.store.inImmediateTransaction(() => {
+      const { store } = ctx.deps;
+      if (old !== undefined) store.deleteSession(old);
+      const time = now();
+      store.deleteExpiredSessions(time, SESSION_IDLE_MS);
+      if (store.userById(userId)?.passwordHash !== verifiedHash) {
+        throw new StaleCredentialError();
+      }
+      store.createSession(id, userId, csrf, time, options);
+    });
+  } catch (err) {
+    // The throw only rolls back the deletions; the caller answers 401.
+    if (err instanceof StaleCredentialError) return false;
+    throw err;
+  }
+  pushSessionCookie(ctx, id, options.stage);
+  return true;
+}
+
+/** Rolls back the sign-in transaction when the verified hash is no longer stored. */
+class StaleCredentialError extends Error {
+  override name = "StaleCredentialError";
 }
 
 /** Rotation: the old session row goes, expired rows go, then a new id is made. */
@@ -786,6 +872,9 @@ async function handlePost(ctx: Ctx): Promise<void> {
     case "/account/sessions/sign-out-all":
       await postSignOutAll(ctx);
       return;
+    case "/account/password":
+      await postPassword(ctx);
+      return;
     default:
       sendText(ctx, 404, NOT_FOUND);
   }
@@ -817,6 +906,9 @@ function sendShell(ctx: Ctx, signedIn: SignedIn, status: number, page: ShellPart
 
 function sendPageResult(ctx: Ctx, signedIn: SignedIn, route: ProtectedRoute, result: PageResult) {
   if (result.kind === "redirect") {
+    if (result.isSessionCleared === true) {
+      ctx.cookies.push(serializeCookieDeletion("session", ctx.deps.mode));
+    }
     redirect(ctx, result.location);
     return;
   }
@@ -833,6 +925,8 @@ function pageRequest(
     method,
     path: ctx.path,
     user: signedIn.user,
+    sessionId: signedIn.id,
+    linkOrigin: linkOrigin(ctx.deps.publicOrigin, ctx.req.headers.host),
     role: roleOfUser(ctx, signedIn.user),
     csrf: signedIn.session.csrfToken,
     fields,
@@ -931,9 +1025,52 @@ function isPageMethod(method: string): method is PageMethod {
   return method === "GET" || method === "HEAD" || method === "POST";
 }
 
+const LINK_METHODS: readonly string[] = ["GET", "HEAD", "POST"];
+
+/**
+ * A public link route: method, phase (404 before setup), loopback Host, then the route's own
+ * order. No step reads the session cookie before the commit.
+ */
+async function handleLink(
+  ctx: Ctx,
+  method: string,
+  isSetUp: boolean,
+  link: { kind: LinkKind; token: string },
+): Promise<void> {
+  if (!LINK_METHODS.includes(method)) {
+    ctx.res.writeHead(405, { allow: LINK_METHODS.join(", "), "content-length": 0 }).end();
+    return;
+  }
+  if (!isSetUp) {
+    sendText(ctx, 404, NOT_FOUND);
+    return;
+  }
+  if (isHostRefused(ctx)) {
+    sendText(ctx, 421, MISDIRECTED);
+    return;
+  }
+  const token = link.token;
+  if (link.kind === "reset") {
+    if (method === "POST") await postReset(ctx, token);
+    else sendResetForm(ctx, token);
+    return;
+  }
+  if (method === "POST") await postInvite(ctx, token, startSession);
+  else sendInviteForm(ctx, token);
+}
+
 async function handleApp(ctx: Ctx): Promise<void> {
   const method = ctx.req.method ?? "GET";
   const isSetUp = ctx.deps.store.instance() !== undefined;
+  const link = linkOfPath(ctx.path);
+  if (link !== undefined) {
+    await handleLink(ctx, method, isSetUp, link);
+    return;
+  }
+  if (isLinkPrefixedPath(ctx.path)) {
+    sendText(ctx, 404, NOT_FOUND);
+    return;
+  }
   const protectedRoute = ctx.state.protectedRoutes.get(ctx.path);
   const route = ROUTES[ctx.path];
   const allowed = protectedRoute === undefined ? route?.methods : allowedMethods(protectedRoute);
@@ -967,6 +1104,7 @@ async function handleApp(ctx: Ctx): Promise<void> {
 /** The protected routes: `/` and the test routes, whose keys must be under /__test/. */
 function protectedRoutesOf(deps: ConsoleServerDeps): Map<string, ProtectedRoute> {
   const routes = new Map<string, ProtectedRoute>([["/", overviewRoute(deps)]]);
+  for (const route of teamRoutes(deps)) routes.set(route.path, route);
   for (const [key, route] of deps.testRoutes ?? []) {
     const isProduction = key in ROUTES || OPS_PATHS.includes(key);
     if (!key.startsWith(TEST_PREFIX) || isProduction || route.path !== key) {

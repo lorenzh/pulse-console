@@ -14,6 +14,22 @@ const LABELS: Readonly<Record<ConsoleRole, string>> = {
   owner: "Owner",
 };
 
+/** A stored role value that is not one of the four roles. */
+export class InvalidRoleError extends Error {
+  override name = "InvalidRoleError";
+}
+
+/** Whether `value` is one of the four console roles. */
+export function isConsoleRole(value: unknown): value is ConsoleRole {
+  return typeof value === "string" && Object.hasOwn(RANK, value);
+}
+
+/** Narrows a stored role; an unknown value throws instead of becoming a role. */
+export function parseRole(value: unknown): ConsoleRole {
+  if (isConsoleRole(value)) return value;
+  throw new InvalidRoleError("invalid role");
+}
+
 /** The display name of a role. */
 export function roleLabel(role: ConsoleRole): string {
   return LABELS[role];

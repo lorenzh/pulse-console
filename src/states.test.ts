@@ -57,6 +57,19 @@ test("forbidden and not found", () => {
   expect(notFound).toContain('<a href="/">Go to the overview</a>');
 });
 
+test("forbidden state of a target denial has a fixed text", () => {
+  const role = forbiddenState({ requiredRole: "owner", role: "admin" });
+  expect(role).toBe(
+    '<section class="state state-error">\n<h2>Access denied</h2>\n<p>This page needs the Owner role or higher. Your role is Admin.</p>\n</section>\n',
+  );
+  expect(forbiddenState({ target: "owner-target" })).toContain(
+    "<p>No one can change the owner account in the console.</p>",
+  );
+  expect(forbiddenState({ target: "transfer-not-admin" })).toContain(
+    "<p>Only an admin can become the owner.</p>",
+  );
+});
+
 test("stale state for 409 and 412", () => {
   for (const status of [409, 412] as const) {
     const html = staleState({ status, reloadHref: "/x?a=1&b=2" });

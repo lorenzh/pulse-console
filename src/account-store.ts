@@ -1,9 +1,14 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { type CredentialGuard, isCredentialGuardHeld } from "./factor-store.ts";
+import { appendPeopleEvent } from "./people-log.ts";
+import { type ConsoleRole, parseRole } from "./roles.ts";
 
 export interface Instance {
   apiUrl: string;
   setupCompletedAt: number;
+  /** The Owner's organisation switch: every role must have a second factor. */
+  isTwoFactorRequiredForAll: boolean;
 }
 
 export interface User {
@@ -11,7 +16,7 @@ export interface User {
   email: string;
   name: string;
   passwordHash: string;
-  role: "owner";
+  role: ConsoleRole;
 }
 
 export interface NewOwner {
@@ -90,6 +95,25 @@ export interface AccountStore {
   listSessions: (userId: number, currentId: string, now: number) => SessionListing[];
   /** One DELETE of every other session row of the user, in every stage; returns how many. */
   deleteOtherSessions: (userId: number, currentId: string) => number;
+  /**
+   * In one BEGIN IMMEDIATE transaction: while the guard's session row exists (and, when set, the
+   * stored hash equals `passwordHash`), delete every other session of the user. Else delete none.
+   */
+  deleteOtherSessionsFor: (
+    guard: CredentialGuard,
+  ) => { ok: true; sessions: number } | { ok: false };
+  /**
+   * In one BEGIN IMMEDIATE transaction: while the session row exists and the stored hash equals
+   * `guard.passwordHash`, set `newHash`, delete every other session and append the
+   * `user.password-change` People event. Else change nothing.
+   */
+  changePassword: (
+    guard: CredentialGuard & { passwordHash: string },
+    newHash: string,
+    now: number,
+  ) => { ok: true; sessions: number } | { ok: false };
+  /** Runs `work` in one BEGIN IMMEDIATE transaction; a throw rolls it back and propagates. */
+  inImmediateTransaction: <T>(work: () => T) => T;
 }
 
 /** The row key of a session: the SHA-256 hex digest of its id. */
@@ -132,32 +156,33 @@ interface UserRow {
   email: string;
   name: string;
   password_hash: string;
+  role: string;
 }
 
 function toUser(row: UserRow | null): User | undefined {
   if (row === null) return undefined;
-  // Migration 1 allows only the owner role, which completeSetup writes.
   return {
     id: row.id,
     email: row.email,
     name: row.name,
     passwordHash: row.password_hash,
-    role: "owner",
+    role: parseRole(row.role),
   };
 }
 
 /** The account store over an open console database. */
 export function createAccountStore(db: Database): AccountStore {
-  const selectInstance = db.query<{ api_url: string; setup_completed_at: number }, []>(
-    "SELECT api_url, setup_completed_at FROM instance WHERE id = 1",
-  );
+  const selectInstance = db.query<
+    { api_url: string; setup_completed_at: number; require_2fa_all: number },
+    []
+  >("SELECT api_url, setup_completed_at, require_2fa_all FROM instance WHERE id = 1");
   const insertOwner = db.query<{ id: number }, [string, string, string, number]>(
     "INSERT INTO users (email, name, password_hash, role, created_at) VALUES (?, ?, ?, 'owner', ?) RETURNING id",
   );
   const insertInstance = db.query<unknown, [string, number]>(
     "INSERT INTO instance (id, api_url, setup_completed_at) VALUES (1, ?, ?)",
   );
-  const userColumns = "SELECT id, email, name, password_hash FROM users";
+  const userColumns = "SELECT id, email, name, password_hash, role FROM users";
   const selectUserByEmail = db.query<UserRow, [string]>(`${userColumns} WHERE email = ?`);
   const selectUserById = db.query<UserRow, [number]>(`${userColumns} WHERE id = ?`);
   const insertSession = db.query<
@@ -200,12 +225,50 @@ export function createAccountStore(db: Database): AccountStore {
     return { ok: true, userId: row.id };
   });
 
+  const updateHash = db.query<unknown, [string, number]>(
+    "UPDATE users SET password_hash = ? WHERE id = ?",
+  );
+  const othersFor = db.transaction(
+    (guard: CredentialGuard): { ok: true; sessions: number } | { ok: false } => {
+      if (!isCredentialGuardHeld(db, guard)) return { ok: false };
+      return {
+        ok: true,
+        sessions: removeOthers.all(guard.userId, sessionDigest(guard.sessionId)).length,
+      };
+    },
+  );
+  const change = db.transaction(
+    (
+      guard: CredentialGuard & { passwordHash: string },
+      newHash: string,
+      now: number,
+    ): { ok: true; sessions: number } | { ok: false } => {
+      if (!isCredentialGuardHeld(db, guard)) return { ok: false };
+      const user = toUser(selectUserById.get(guard.userId));
+      if (user === undefined) return { ok: false };
+      updateHash.run(newHash, guard.userId);
+      const sessions = removeOthers.all(guard.userId, sessionDigest(guard.sessionId)).length;
+      const person = { id: user.id, email: user.email, name: user.name };
+      appendPeopleEvent(db, {
+        at: now,
+        actor: { kind: "user", person },
+        action: "user.password-change",
+        target: { kind: "user", person },
+      });
+      return { ok: true, sessions };
+    },
+  );
+
   return {
     instance: () => {
       const row = selectInstance.get();
       return row === null
         ? undefined
-        : { apiUrl: row.api_url, setupCompletedAt: row.setup_completed_at };
+        : {
+            apiUrl: row.api_url,
+            setupCompletedAt: row.setup_completed_at,
+            isTwoFactorRequiredForAll: row.require_2fa_all === 1,
+          };
     },
     completeSetup: (owner, apiUrl, now) => setup.immediate(owner, apiUrl, now),
     userByEmail: (email) => toUser(selectUserByEmail.get(email)),
@@ -238,5 +301,8 @@ export function createAccountStore(db: Database): AccountStore {
     },
     deleteOtherSessions: (userId, currentId) =>
       removeOthers.all(userId, sessionDigest(currentId)).length,
+    deleteOtherSessionsFor: (guard) => othersFor.immediate(guard),
+    changePassword: (guard, newHash, now) => change.immediate(guard, newHash, now),
+    inImmediateTransaction: <T>(work: () => T): T => db.transaction(work).immediate(),
   };
 }

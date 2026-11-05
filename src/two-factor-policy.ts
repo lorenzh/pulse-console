@@ -1,10 +1,13 @@
-import type { User } from "./account-store.ts";
+import type { ConsoleRole } from "./roles.ts";
 
 export type SignInStage = "factor" | "enrol" | "full";
 
-/** The only rule for who must have a second factor. #564 extends it to every admin. */
-export function isSecondFactorRequired(user: { role: User["role"] }): boolean {
-  return user.role === "owner";
+/** The only rule for who must have a second factor: the Owner, every Admin, or all with the switch. */
+export function isSecondFactorRequired(
+  user: { role: ConsoleRole },
+  organisation: { isRequiredForAll: boolean },
+): boolean {
+  return organisation.isRequiredForAll || user.role === "owner" || user.role === "admin";
 }
 
 /** The session stage that a correct password starts. */

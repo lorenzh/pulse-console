@@ -14,6 +14,7 @@ import { createMetrics } from "./metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { createConsoleServer, listen } from "./server.ts";
 import { createSetupGate } from "./setup-code.ts";
+import { createTeamStore } from "./team-store.ts";
 
 const TEST_SECRET_KEY = Uint8Array.from(Buffer.from("0123456789abcdef".repeat(4), "hex"));
 
@@ -112,6 +113,7 @@ async function startConsole(
     adminToken: "adminToken" in opts ? opts.adminToken : TOKEN,
     store,
     factorStore: createFactorStore(db),
+    teamStore: createTeamStore(db),
     secretKey: TEST_SECRET_KEY,
     gate: realStore.instance() === undefined ? setup.gate : undefined,
     now,

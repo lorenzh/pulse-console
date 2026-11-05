@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { StartupError } from "@lorenzh/pulse-kit";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const DB_FILE_MODE = 0o600;
 
 /** File operations that `openDatabase` needs; `main.ts` wires the real `node:fs` ones. */
@@ -70,6 +70,61 @@ CREATE TABLE recovery_codes (
 CREATE INDEX recovery_codes_user_id ON recovery_codes(user_id);
 `;
 
+// Schema 3 adds team roles, invites, reset links and the append-only People log.
+const MIGRATION_3 = `
+CREATE TRIGGER users_role_insert BEFORE INSERT ON users
+WHEN NEW.role NOT IN ('owner', 'admin', 'member', 'viewer')
+BEGIN SELECT RAISE(ABORT, 'invalid role'); END;
+CREATE TRIGGER users_role_update BEFORE UPDATE OF role ON users
+WHEN NEW.role NOT IN ('owner', 'admin', 'member', 'viewer')
+BEGIN SELECT RAISE(ABORT, 'invalid role'); END;
+ALTER TABLE instance ADD COLUMN require_2fa_all INTEGER NOT NULL DEFAULT 0
+  CHECK (require_2fa_all IN (0, 1));
+CREATE TABLE invites (
+  id INTEGER PRIMARY KEY,
+  token_digest TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'member', 'viewer')),
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER,
+  revoked_at INTEGER,
+  accepted_user_id INTEGER
+);
+CREATE TABLE reset_links (
+  id INTEGER PRIMARY KEY,
+  token_digest TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL CHECK (kind IN ('team', 'owner-recovery')),
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  target_role TEXT NOT NULL,
+  issued_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+CREATE TABLE people_events (
+  id INTEGER PRIMARY KEY,
+  at INTEGER NOT NULL,
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('user', 'container')),
+  actor_user_id INTEGER,
+  actor_email TEXT,
+  actor_name TEXT,
+  action TEXT NOT NULL,
+  target_kind TEXT NOT NULL,
+  target_id INTEGER,
+  target_email TEXT,
+  target_name TEXT,
+  from_role TEXT,
+  to_role TEXT,
+  value TEXT
+);
+CREATE TRIGGER people_events_no_update BEFORE UPDATE ON people_events
+BEGIN SELECT RAISE(ABORT, 'people_events is append-only'); END;
+CREATE TRIGGER people_events_no_delete BEFORE DELETE ON people_events
+BEGIN SELECT RAISE(ABORT, 'people_events is append-only'); END;
+`;
+
 function codeOf(err: unknown): string {
   if (typeof err === "object" && err !== null && "code" in err && typeof err.code === "string") {
     return err.code;
@@ -120,6 +175,12 @@ function migrate(db: Database, path: string): void {
     db.transaction(() => {
       db.run(MIGRATION_2);
       db.run("PRAGMA user_version = 2");
+    }).immediate();
+  }
+  if (version <= 2) {
+    db.transaction(() => {
+      db.run(MIGRATION_3);
+      db.run("PRAGMA user_version = 3");
     }).immediate();
   }
 }

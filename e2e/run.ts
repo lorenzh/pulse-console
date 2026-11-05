@@ -181,9 +181,11 @@ async function checkLayout(env: Env, browser: Browser, width: number, height: nu
     }
   }
   env.target.current = { name: "Checkout API", revision: "rev-1" };
+  await page.goto(`${base}/team`);
+  await assertFits(page, width, `${width}px team`);
   assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
   await context.close();
-  ok(`${width} x ${height}: sign-in, 4 Overview states, 403 and every fixture page fit`);
+  ok(`${width} x ${height}: sign-in, 4 Overview states, 403, Team and every fixture page fit`);
 }
 
 async function axeOn(page: Page, url: string, label: string): Promise<void> {
@@ -203,6 +205,7 @@ async function checkAxe(env: Env, browser: Browser): Promise<void> {
   await signIn(page, env);
   await axeOn(page, `${base}/`, "Overview");
   await axeOn(page, `${base}/does-not-exist`, "shell 404");
+  await axeOn(page, `${base}/team`, "Team");
   env.role.current = "viewer";
   await axeOn(page, `${base}/__test/states/forbidden`, "shell 403");
   env.role.current = "owner";
@@ -436,6 +439,8 @@ async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
     await owner.getByRole("button", { name: "Create new recovery codes" }).click();
     const codes = await owner.locator("#recovery-codes li").allTextContents();
     assert(codes.length === 10, "new recovery codes confirmation shows ten codes");
+    // The old fixture codes stop working; later checks sign in with the new ones.
+    env.console.recoveryCodes.splice(0, env.console.recoveryCodes.length, ...codes);
     await assertFits(owner, 390, "recovery codes");
     await owner.goto(`${base}/account/authenticator`);
     await owner.fill('input[name="password"]', OWNER_PASSWORD);
@@ -465,6 +470,175 @@ async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
   }
 }
 
+/** At 390 px: the invite form, link page, revoke confirmation, accept form and invalid link. */
+async function checkInvites(env: Env, browser: Browser): Promise<void> {
+  const violations: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  const owner = await browser.newContext({ viewport });
+  const invitee = await browser.newContext({ viewport });
+  try {
+    watchCsp(owner, violations);
+    watchCsp(invitee, violations);
+    const page = await newPage(owner, violations);
+    const base = env.console.base;
+    await signIn(page, env);
+    await page.goto(`${base}/team`);
+    await page.fill('input[name="email"]', `${"invited-person".repeat(4)}@example.com`);
+    await page.selectOption('select[name="role"]', "viewer");
+    await Promise.all([
+      page.waitForURL(`${base}/team/invites`),
+      page.getByRole("button", { name: "Create invite link" }).click(),
+    ]);
+    await assertFits(page, 390, "390px invite link page");
+    const link = await page.inputValue("#invite-link");
+    assert(/\/invite\/[A-Za-z0-9_-]{43}$/.test(link), "the link page shows the invite link");
+    const linkResult = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+    assert(linkResult.violations.length === 0, "axe on the invite link page");
+    await page.goto(`${base}/team`);
+    await assertFits(page, 390, "390px team with a pending invite");
+    await axeOn(page, `${base}/team/invites/revoke?invite=1`, "revoke invite");
+    await assertFits(page, 390, "390px revoke invite");
+    const anon = await newPage(invitee, violations);
+    await axeOn(anon, link, "invite accept form");
+    await assertFits(anon, 390, "390px invite accept form");
+    await axeOn(anon, `${base}/invite/${"A".repeat(43)}`, "invalid link");
+    await assertFits(anon, 390, "390px invalid link");
+    assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
+    ok("390px: invite link page, Team with an invite, revoke, accept form and invalid link fit");
+  } finally {
+    await owner.close();
+    await invitee.close();
+  }
+}
+
+/**
+ * At 390 px without JavaScript: an invitee joins, then the Owner opens the role form, the 2FA
+ * reset and the removal confirmation from the Team page links and removes the person.
+ */
+async function checkTeamActions(env: Env, browser: Browser): Promise<void> {
+  const violations: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  const owner = await browser.newContext({ viewport, javaScriptEnabled: false });
+  const invitee = await browser.newContext({ viewport, javaScriptEnabled: false });
+  const scriptedContext = await browser.newContext({ viewport });
+  try {
+    watchCsp(scriptedContext, violations);
+    const scripted = await newPage(scriptedContext, violations);
+    watchCsp(owner, violations);
+    watchCsp(invitee, violations);
+    const page = await newPage(owner, violations);
+    const base = env.console.base;
+    await signIn(page, env);
+    // The same session in the scripted context: one sign-in, one fixture recovery code.
+    await scriptedContext.addCookies(await owner.cookies());
+    await page.goto(`${base}/team`);
+    await page.fill('input[name="email"]', "removable@example.com");
+    await page.selectOption('select[name="role"]', "member");
+    await Promise.all([
+      page.waitForURL(`${base}/team/invites`),
+      page.getByRole("button", { name: "Create invite link" }).click(),
+    ]);
+    const link = await page.inputValue("#invite-link");
+    const anon = await newPage(invitee, violations);
+    await anon.goto(link);
+    await anon.fill('input[name="name"]', "Rem Ovable");
+    await anon.fill('input[name="password"]', "removable-person-password");
+    await anon.fill('input[name="password_confirm"]', "removable-person-password");
+    await Promise.all([
+      anon.waitForURL((url) => !url.pathname.startsWith("/invite/")),
+      anon.getByRole("button", { name: "Create account" }).click(),
+    ]);
+    await page.goto(`${base}/team`);
+    await assertFits(page, 390, "390px team with action links");
+    for (const [name, label] of [
+      ["Change role for Rem Ovable", "role form"],
+      ["Reset 2FA for Rem Ovable", "2FA reset confirmation"],
+      ["Remove for Rem Ovable", "removal confirmation"],
+    ] as const) {
+      await page.goto(`${base}/team`);
+      const href = await page.getByRole("link", { name }).getAttribute("href");
+      await page.goto(`${base}${href ?? ""}`);
+      await assertFits(page, 390, `390px ${label}`);
+      // axe needs JavaScript, so it runs in a second, scripted context.
+      await axeOn(scripted, `${base}${href ?? ""}`, label);
+    }
+    await page.fill('input[name="confirm_name"]', "Rem Ovable");
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === "/team"),
+      page.getByRole("button", { name: "Remove" }).click(),
+    ]);
+    assert(!(await page.content()).includes("removable@example.com"), "the person is removed");
+    assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
+    ok(
+      "390px, no JavaScript: role form, 2FA reset and removal fit, pass axe and remove the person",
+    );
+  } finally {
+    await owner.close();
+    await invitee.close();
+    await scriptedContext.close();
+  }
+}
+
+/** At 390 px: the reset link page, the reset form, the invalid reset link and the own password form. */
+async function checkResetAndPassword(env: Env, browser: Browser): Promise<void> {
+  const violations: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  const owner = await browser.newContext({ viewport });
+  const person = await browser.newContext({ viewport });
+  try {
+    watchCsp(owner, violations);
+    watchCsp(person, violations);
+    const page = await newPage(owner, violations);
+    const base = env.console.base;
+    await signIn(page, env);
+    await page.goto(`${base}/team`);
+    await page.fill('input[name="email"]', "resettable@example.com");
+    await page.selectOption('select[name="role"]', "member");
+    await Promise.all([
+      page.waitForURL(`${base}/team/invites`),
+      page.getByRole("button", { name: "Create invite link" }).click(),
+    ]);
+    const invite = await page.inputValue("#invite-link");
+    const anon = await newPage(person, violations);
+    await anon.goto(invite);
+    await anon.fill('input[name="name"]', "Re Settable");
+    await anon.fill('input[name="password"]', "resettable-person-password");
+    await anon.fill('input[name="password_confirm"]', "resettable-person-password");
+    await Promise.all([
+      anon.waitForURL((url) => !url.pathname.startsWith("/invite/")),
+      anon.getByRole("button", { name: "Create account" }).click(),
+    ]);
+    await axeOn(anon, `${base}/account/password`, "own password form");
+    await assertFits(anon, 390, "390px own password form");
+    await page.goto(`${base}/team`);
+    const href = await page
+      .getByRole("link", { name: "Reset link for Re Settable" })
+      .getAttribute("href");
+    await axeOn(page, `${base}${href ?? ""}`, "reset link confirmation");
+    await assertFits(page, 390, "390px reset link confirmation");
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === "/team/reset-link"),
+      page.getByRole("button", { name: "Make reset link" }).click(),
+    ]);
+    await assertFits(page, 390, "390px reset link page");
+    const link = await page.inputValue("#reset-link");
+    assert(/\/reset\/[A-Za-z0-9_-]{43}$/.test(link), "the link page shows the reset link");
+    const linkResult = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+    assert(linkResult.violations.length === 0, "axe on the reset link page");
+    await axeOn(anon, link, "reset form");
+    await assertFits(anon, 390, "390px reset form");
+    await axeOn(anon, `${base}/reset/${"A".repeat(43)}`, "invalid reset link");
+    await assertFits(anon, 390, "390px invalid reset link");
+    assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
+    ok(
+      "390px: own password form, reset link confirmation and page, reset form and invalid link fit",
+    );
+  } finally {
+    await owner.close();
+    await person.close();
+  }
+}
+
 async function runChecks(): Promise<void> {
   const env = await startEnv(0);
   const browser = await chromium.launch();
@@ -472,10 +646,13 @@ async function runChecks(): Promise<void> {
     await checkLayout(env, browser, 390, 844);
     await checkLayout(env, browser, 1280, 800);
     await checkAxe(env, browser);
+    await checkInvites(env, browser);
+    await checkTeamActions(env, browser);
     await checkFocus(env, browser);
     await checkNoScript(env, browser);
     await checkBusyScript(env, browser);
     await checkAccountNoScript(env, browser);
+    await checkResetAndPassword(env, browser);
   } finally {
     await browser.close();
     await env.console.close();

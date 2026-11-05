@@ -2,6 +2,32 @@ import type { Database } from "bun:sqlite";
 import { INSERT_SESSION_SQL, PARTIAL_SESSION_MS, sessionDigest } from "./account-store.ts";
 import { matchRecoveryCode, type RecoveryCodeRow } from "./recovery-codes.ts";
 
+/**
+ * The actor of a guarded write: the write runs only while a session row with the digest of
+ * `sessionId` and `user_id = userId` exists, and, when set, the stored password hash still
+ * equals `passwordHash`.
+ */
+export type CredentialGuard = {
+  sessionId: string;
+  userId: number;
+  passwordHash?: string | undefined;
+};
+
+/** Whether the guard still holds. Call it first inside the write's BEGIN IMMEDIATE transaction. */
+export function isCredentialGuardHeld(db: Database, guard: CredentialGuard): boolean {
+  const session = db
+    .query<{ found: number }, [string, number]>(
+      "SELECT 1 AS found FROM sessions WHERE id_digest = ? AND user_id = ?",
+    )
+    .get(sessionDigest(guard.sessionId), guard.userId);
+  if (session === null) return false;
+  if (guard.passwordHash === undefined) return true;
+  const user = db
+    .query<{ password_hash: string }, [number]>("SELECT password_hash FROM users WHERE id = ?")
+    .get(guard.userId);
+  return user?.password_hash === guard.passwordHash;
+}
+
 export interface Authenticator {
   /** The sealed seed envelope; never the plain seed. */
   secret: string;
@@ -59,6 +85,14 @@ export interface FactorStore {
   unusedRecoveryCodeCount: (userId: number) => number;
   /** In one transaction: delete every code of the user, insert the new set. */
   replaceRecoveryCodes: (userId: number, digests: readonly string[]) => void;
+  /** `replaceRecoveryCodes` for the guard's user, only while the guard holds. */
+  replaceRecoveryCodesFor: (guard: CredentialGuard, digests: readonly string[]) => GuardedResult;
+  /** `savePendingAuthenticator` for the guard's session, only while the guard holds. */
+  savePendingAuthenticatorFor: (
+    guard: CredentialGuard,
+    secret: string,
+    now: number,
+  ) => GuardedResult;
   /**
    * In one BEGIN IMMEDIATE transaction: delete the live pending row, replace the authenticator
    * and the recovery codes, delete every session of the user and insert the new `full` session.
@@ -71,6 +105,9 @@ export interface FactorStore {
     input: FactorSignInBase & { candidate: Uint8Array; canCommit?: () => boolean },
   ) => FactorSignInResult;
 }
+
+/** The answer of a guarded write: `ok: false` when the guard failed and nothing was written. */
+export type GuardedResult = { ok: true } | { ok: false };
 
 class CommitAborted extends Error {
   override name = "CommitAborted";
@@ -165,6 +202,20 @@ export function createFactorStore(db: Database): FactorStore {
   const replaceCodes = db.transaction((userId: number, digests: readonly string[]): void => {
     writeCodes(userId, digests);
   });
+  const replaceCodesFor = db.transaction(
+    (guard: CredentialGuard, digests: readonly string[]): GuardedResult => {
+      if (!isCredentialGuardHeld(db, guard)) return { ok: false };
+      writeCodes(guard.userId, digests);
+      return { ok: true };
+    },
+  );
+  const savePendingFor = db.transaction(
+    (guard: CredentialGuard, secret: string, now: number): GuardedResult => {
+      if (!isCredentialGuardHeld(db, guard)) return { ok: false };
+      upsertPending.run(sessionDigest(guard.sessionId), guard.userId, secret, now);
+      return { ok: true };
+    },
+  );
   const totpSignIn = db.transaction(
     (input: FactorSignInBase & { step: number }): FactorSignInResult => {
       const nextPath = endFactorSession(input);
@@ -207,6 +258,9 @@ export function createFactorStore(db: Database): FactorStore {
     },
     unusedRecoveryCodeCount: (userId) => countUnused.get(userId)?.n ?? 0,
     replaceRecoveryCodes: (userId, digests) => replaceCodes.immediate(userId, digests),
+    replaceRecoveryCodesFor: (guard, digests) => replaceCodesFor.immediate(guard, digests),
+    savePendingAuthenticatorFor: (guard, secret, now) =>
+      savePendingFor.immediate(guard, secret, now),
     confirmAuthenticator: (input) => {
       try {
         confirm.immediate(input);

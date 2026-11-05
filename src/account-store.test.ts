@@ -47,7 +47,11 @@ describe("setup transaction", () => {
     expect(store.instance()).toBeUndefined();
     const result = store.completeSetup(OWNER, API, 1000);
     expect(result.ok).toBe(true);
-    expect(store.instance()).toEqual({ apiUrl: API, setupCompletedAt: 1000 });
+    expect(store.instance()).toEqual({
+      apiUrl: API,
+      setupCompletedAt: 1000,
+      isTwoFactorRequiredForAll: false,
+    });
     expect(count(db, "users")).toBe(1);
     expect(count(db, "instance")).toBe(1);
     const user = store.userByEmail("owner@example.com");
@@ -82,7 +86,11 @@ describe("setup transaction", () => {
       reason: "already-complete",
     });
     expect(count(db, "users")).toBe(1);
-    expect(first.instance()).toEqual({ apiUrl: API, setupCompletedAt: 1000 });
+    expect(first.instance()).toEqual({
+      apiUrl: API,
+      setupCompletedAt: 1000,
+      isTwoFactorRequiredForAll: false,
+    });
   });
 
   test("a failed transaction writes neither the owner nor the instance", () => {
@@ -245,4 +253,110 @@ test("sessionDigest is the SHA-256 hex digest", () => {
   expect(sessionDigest("abc")).toBe(
     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
   );
+});
+
+describe("stored roles and the instance switch", () => {
+  test("users carry their stored role; the switch reads live", () => {
+    const { db } = fresh();
+    const store = createAccountStore(db);
+    store.completeSetup(OWNER, API, 1000);
+    db.run(
+      "INSERT INTO users (email, name, password_hash, role, created_at) VALUES ('v@example.com', 'V', 'h', 'viewer', 1)",
+    );
+    expect(store.userByEmail("v@example.com")?.role).toBe("viewer");
+    expect(store.userByEmail(OWNER.email)?.role).toBe("owner");
+    db.run("UPDATE instance SET require_2fa_all = 1");
+    expect(store.instance()?.isTwoFactorRequiredForAll).toBe(true);
+  });
+
+  test("an unknown stored role throws instead of being cast", () => {
+    const { db } = fresh();
+    const store = createAccountStore(db);
+    store.completeSetup(OWNER, API, 1000);
+    db.run("DROP TRIGGER users_role_update");
+    db.run("UPDATE users SET role = 'superuser'");
+    expect(() => store.userByEmail(OWNER.email)).toThrow("invalid role");
+  });
+});
+
+describe("guarded credential writes", () => {
+  function signedUp(): {
+    db: Database;
+    store: ReturnType<typeof createAccountStore>;
+    userId: number;
+  } {
+    const { db } = fresh();
+    const store = createAccountStore(db);
+    const result = store.completeSetup(OWNER, API, 0);
+    if (!result.ok) throw new Error("setup failed");
+    return { db, store, userId: result.userId };
+  }
+
+  function hashOf(db: Database, id: number): string {
+    return (
+      db.query<{ h: string }, [number]>("SELECT password_hash AS h FROM users WHERE id = ?").get(id)
+        ?.h ?? ""
+    );
+  }
+
+  test("deleteOtherSessionsFor deletes the others while the session row exists", () => {
+    const { db, store, userId } = signedUp();
+    store.createSession("kept", userId, "c1", 10);
+    store.createSession("other", userId, "c2", 10);
+    expect(store.deleteOtherSessionsFor({ sessionId: "kept", userId })).toEqual({
+      ok: true,
+      sessions: 1,
+    });
+    store.createSession("new", userId, "c3", 10);
+    store.deleteSession("kept");
+    expect(store.deleteOtherSessionsFor({ sessionId: "kept", userId })).toEqual({ ok: false });
+    expect(store.session("new")?.userId).toBe(userId);
+    expect(count(db, "sessions")).toBe(1);
+  });
+
+  test("changePassword sets the hash, ends other sessions and writes one event", () => {
+    const { db, store, userId } = signedUp();
+    store.createSession("kept", userId, "c1", 10);
+    store.createSession("other", userId, "c2", 10);
+    const guard = { sessionId: "kept", userId, passwordHash: OWNER.passwordHash };
+    expect(store.changePassword(guard, "new-hash", 20)).toEqual({ ok: true, sessions: 1 });
+    expect(hashOf(db, userId)).toBe("new-hash");
+    expect(store.session("kept")?.userId).toBe(userId);
+    expect(count(db, "sessions")).toBe(1);
+    expect(count(db, "people_events")).toBe(1);
+  });
+
+  test.each([
+    ["the hash changed", (db: Database) => db.run("UPDATE users SET password_hash = 'H1'")],
+    [
+      "the session is gone",
+      (db: Database) => db.run("DELETE FROM sessions WHERE csrf_token = 'c1'"),
+    ],
+  ])("changePassword changes nothing when %s", (_name, change) => {
+    const { db, store, userId } = signedUp();
+    store.createSession("kept", userId, "c1", 10);
+    store.createSession("other", userId, "c2", 10);
+    change(db);
+    const before = hashOf(db, userId);
+    const sessions = count(db, "sessions");
+    const guard = { sessionId: "kept", userId, passwordHash: OWNER.passwordHash };
+    expect(store.changePassword(guard, "new-hash", 20)).toEqual({ ok: false });
+    expect(hashOf(db, userId)).toBe(before);
+    expect(count(db, "sessions")).toBe(sessions);
+    expect(count(db, "people_events")).toBe(0);
+  });
+
+  test("inImmediateTransaction commits the work and rolls back on a throw", () => {
+    const { db, store, userId } = signedUp();
+    expect(
+      store.inImmediateTransaction(() => store.createSession("a", userId, "c", 0)),
+    ).toBeUndefined();
+    expect(() =>
+      store.inImmediateTransaction(() => {
+        store.createSession("b", userId, "c", 0);
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+    expect(count(db, "sessions")).toBe(1);
+  });
 });

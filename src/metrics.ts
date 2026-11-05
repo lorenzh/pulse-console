@@ -17,7 +17,19 @@ export type PathLabel =
   | "/account/recovery-codes"
   | "/account/sessions"
   | "/account/sessions/sign-out-all"
+  | "/account/password"
   | "/console.js"
+  | "/team"
+  | "/team/invites"
+  | "/team/invites/revoke"
+  | "/team/role"
+  | "/team/remove"
+  | "/team/reset-2fa"
+  | "/team/reset-link"
+  | "/team/transfer"
+  | "/team/require-2fa"
+  | "/invite/:token"
+  | "/reset/:token"
   | "other";
 
 export type AuthKind =

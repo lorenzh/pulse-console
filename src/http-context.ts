@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BodyError, type Logger, readBody } from "@lorenzh/pulse-kit";
 import {
@@ -21,6 +22,7 @@ import { expectedOrigin, isCsrfTokenValid, isOriginAllowed } from "./request-gua
 import type { ConsoleRole } from "./roles.ts";
 import type { ConsoleMode } from "./settings.ts";
 import type { SetupGate } from "./setup-code.ts";
+import type { TeamStore } from "./team-store.ts";
 
 const REFUSED = "Request refused. Reload the page and try again.";
 const TOKEN_BYTES = 32;
@@ -37,6 +39,7 @@ export interface ConsoleServerDeps {
   adminToken: string | undefined;
   store: AccountStore;
   factorStore: FactorStore;
+  teamStore: TeamStore;
   /** The 32-byte key of PULSE_CONSOLE_SECRET_KEY_FILE; undefined when unset. */
   secretKey: Uint8Array | undefined;
   /** The setup gate; undefined when the console was set up at start. */
@@ -127,6 +130,11 @@ export function ensureCsrf(ctx: Ctx): string {
   const token = newToken(ctx);
   ctx.cookies.push(serializeCookie("csrf", token, ctx.deps.mode));
   return token;
+}
+
+/** The form-token binding of an anonymous form: the digest of its CSRF value. */
+export function anonBinding(csrf: string): string {
+  return `a:${createHash("sha256").update(csrf).digest("hex")}`;
 }
 
 /** Sets the cookie of a new session of `stage`. */
