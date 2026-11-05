@@ -585,6 +585,12 @@ async function showEdit(
   });
 }
 
+/** The stored rows of `id` wherever it now sits, so a refused edit drops the right values. */
+function anyStoredRowsOf(config: AdminConfigResponse, id: string): StoredRows | undefined {
+  const view = [...config.shadowed, ...config.checks].find((check) => check.id === id);
+  return view === undefined ? undefined : storedRowsOf(view);
+}
+
 /** R5 commit order after the dispatcher: read, target, revision, fields, size, guard, PUT. */
 async function editCheck(
   deps: CheckRouteDeps,
@@ -599,7 +605,12 @@ async function editCheck(
     return readFailedPage(checkProblemView(read, reopen), NOT_SAVED_READ_TEXT, reopen, input);
   }
   const target = editTargetOf(read.config, id, request.role);
-  if (target.kind === "page") return target.page;
+  if (target.kind === "page") {
+    return withKeptInput(
+      target.page,
+      retainedInputOf(request.fields, anyStoredRowsOf(read.config, id)),
+    );
+  }
   const stored = storedRowsOf(target.value);
   const input = retainedInputOf(request.fields, stored);
   const revision = postedRevisionOf(request.fields);
@@ -615,7 +626,7 @@ async function editCheck(
   const guard = writeGuardProblem(writeDeps(deps), request, routeRole("check.write"), reopen);
   if (guard !== undefined) return withKeptInput(guard, input);
   const segment = apiIdSegment(id);
-  if (segment === undefined) return conflictPage(unaddressableText(id));
+  if (segment === undefined) return withKeptInput(conflictPage(unaddressableText(id)), input);
   const answer = await sendCheckWrite(
     writeDeps(deps),
     {
