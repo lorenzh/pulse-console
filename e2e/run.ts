@@ -468,6 +468,47 @@ async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
   }
 }
 
+/** At 390 px: the invite form, link page, revoke confirmation, accept form and invalid link. */
+async function checkInvites(env: Env, browser: Browser): Promise<void> {
+  const violations: string[] = [];
+  const viewport = { width: 390, height: 844 };
+  const owner = await browser.newContext({ viewport });
+  const invitee = await browser.newContext({ viewport });
+  try {
+    watchCsp(owner, violations);
+    watchCsp(invitee, violations);
+    const page = await newPage(owner, violations);
+    const base = env.console.base;
+    await signIn(page, env);
+    await page.goto(`${base}/team`);
+    await page.fill('input[name="email"]', `${"invited-person".repeat(4)}@example.com`);
+    await page.selectOption('select[name="role"]', "viewer");
+    await Promise.all([
+      page.waitForURL(`${base}/team/invites`),
+      page.getByRole("button", { name: "Create invite link" }).click(),
+    ]);
+    await assertFits(page, 390, "390px invite link page");
+    const link = await page.inputValue("#invite-link");
+    assert(/\/invite\/[A-Za-z0-9_-]{43}$/.test(link), "the link page shows the invite link");
+    const linkResult = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+    assert(linkResult.violations.length === 0, "axe on the invite link page");
+    await page.goto(`${base}/team`);
+    await assertFits(page, 390, "390px team with a pending invite");
+    await axeOn(page, `${base}/team/invites/revoke?invite=1`, "revoke invite");
+    await assertFits(page, 390, "390px revoke invite");
+    const anon = await newPage(invitee, violations);
+    await axeOn(anon, link, "invite accept form");
+    await assertFits(anon, 390, "390px invite accept form");
+    await axeOn(anon, `${base}/invite/${"A".repeat(43)}`, "invalid link");
+    await assertFits(anon, 390, "390px invalid link");
+    assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
+    ok("390px: invite link page, Team with an invite, revoke, accept form and invalid link fit");
+  } finally {
+    await owner.close();
+    await invitee.close();
+  }
+}
+
 async function runChecks(): Promise<void> {
   const env = await startEnv(0);
   const browser = await chromium.launch();
@@ -475,6 +516,7 @@ async function runChecks(): Promise<void> {
     await checkLayout(env, browser, 390, 844);
     await checkLayout(env, browser, 1280, 800);
     await checkAxe(env, browser);
+    await checkInvites(env, browser);
     await checkFocus(env, browser);
     await checkNoScript(env, browser);
     await checkBusyScript(env, browser);

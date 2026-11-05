@@ -19,6 +19,9 @@ export type PathLabel =
   | "/account/sessions/sign-out-all"
   | "/console.js"
   | "/team"
+  | "/team/invites"
+  | "/team/invites/revoke"
+  | "/invite/:token"
   | "other";
 
 export type AuthKind =

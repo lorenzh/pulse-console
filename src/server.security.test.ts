@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@lorenzh/pulse-kit";
 import {
+  formTokenOf,
   getPage,
   postForm,
   type SignedInConsole,
   startSignedInConsole,
 } from "../test/signed-in-console.ts";
+import { startTeamConsole } from "../test/team-console.ts";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
 import { createFactorStore } from "./factor-store.ts";
@@ -630,5 +632,61 @@ describe("signed-in unknown paths and the Overview", () => {
     const res = await getPage(c, "/", "");
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/sign-in?next=%2F");
+  });
+});
+
+describe("invite link tokens", () => {
+  test("a link token appears only on its link page and its own form, never in logs, metrics or events", async () => {
+    const c = await startTeamConsole({ apiUrl: "http://127.0.0.1:9" });
+    try {
+      const page = await getPage(c, "/team", c.cookies.owner);
+      const created = await postForm(
+        c,
+        "/team/invites",
+        {
+          csrf: c.csrfs.owner,
+          form_token: formTokenOf(page.body, "/team/invites"),
+          email: "new@example.com",
+          role: "member",
+        },
+        { cookie: c.cookies.owner },
+      );
+      const token = /\/invite\/([A-Za-z0-9_-]{43})/.exec(created.body)?.[1] ?? "";
+      expect(token).toHaveLength(43);
+      const form = await getPage(c, `/invite/${token}`, "");
+      expect(form.body).toContain(`action="/invite/${token}"`);
+      const csrf =
+        /pulse_console_csrf=([A-Za-z0-9_-]+)/.exec(form.headers.get("set-cookie") ?? "")?.[1] ?? "";
+      const accepted = await postForm(
+        c,
+        `/invite/${token}`,
+        {
+          csrf,
+          form_token: formTokenOf(form.body, `/invite/${token}`),
+          name: "Newt",
+          password: "invite-sentinel-password-1",
+          password_confirm: "invite-sentinel-password-1",
+        },
+        { cookie: `pulse_console_csrf=${csrf}` },
+      );
+      expect(accepted.status).toBe(303);
+      const others = [
+        await getPage(c, "/team", c.cookies.owner),
+        await getPage(c, "/team", c.cookies.admin),
+        await getPage(c, `/invite/${token}`, ""),
+      ];
+      for (const r of others) expect(r.body).not.toContain(token);
+      expect(accepted.headers.get("location") ?? "").not.toContain(token);
+      const logs = c.logs.join("\n");
+      expect(logs).not.toContain(token);
+      expect(logs).not.toContain("invite-sentinel-password-1");
+      expect(logs).not.toContain("new@example.com");
+      expect(c.metrics.render()).not.toContain(token);
+      const events = JSON.stringify(c.db.query("SELECT * FROM people_events").all());
+      expect(events).not.toContain(token);
+      expect(events).not.toContain("invite-sentinel-password-1");
+    } finally {
+      await c.close();
+    }
   });
 });

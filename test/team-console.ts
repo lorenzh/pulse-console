@@ -13,6 +13,8 @@ import {
 } from "./signed-in-console.ts";
 
 export type TeamConsole = SignedInConsole & {
+  /** The open console database, for row checks; it closes with the console. */
+  db: Database;
   /** The session cookie header of each role. */
   cookies: Readonly<Record<ConsoleRole, string>>;
   /** The session CSRF token of each role. */
@@ -27,7 +29,8 @@ const PEOPLE = [
   { role: "viewer", email: "viewer@example.com", name: "Vi Viewer", hasAuthenticator: false },
 ] as const;
 
-function sessionIdOf(role: ConsoleRole): string {
+/** The session id of the seeded session of `role` (not the Owner's). */
+export function sessionIdOf(role: ConsoleRole): string {
   return `${role}-session-id-for-tests-0123456789abcdefghij`.slice(0, 43);
 }
 
@@ -62,15 +65,19 @@ export async function startTeamConsole(
   },
 ): Promise<TeamConsole> {
   const ids: Record<ConsoleRole, number> = { owner: 0, admin: 0, member: 0, viewer: 0 };
+  let opened: Database | undefined;
   const c = await startSignedInConsole({
     ...options,
     prepare: (db) => {
+      opened = db;
       seed(db, ids, options.isRequiredForAll === true);
       options.extra?.(db, ids);
     },
   });
+  if (opened === undefined) throw new Error("prepare did not run");
   return {
     ...c,
+    db: opened,
     ids,
     cookies: {
       owner: `pulse_console_session=${SESSION_ID}`,

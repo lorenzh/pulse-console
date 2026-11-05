@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { clientKeyOf, handleOps, type OpsHandlers, StartupError } from "@lorenzh/pulse-kit";
+import { linkOfPath, linkOrigin, linkPathLabel } from "./account-links.ts";
 import {
   postAuthenticator,
   postNewCodes,
@@ -30,6 +30,7 @@ import { createFormTokens, type FormTokenResult } from "./form-tokens.ts";
 import { checkApiUrl, checkEmail, checkName, type FormFields, passwordText } from "./forms.ts";
 import { paragraph } from "./html.ts";
 import {
+  anonBinding,
   type ConsoleServerDeps,
   type Ctx,
   type Current,
@@ -46,6 +47,7 @@ import {
   sendHtml,
   sendText,
 } from "./http-context.ts";
+import { postInvite, sendInviteForm } from "./link-routes.ts";
 import type { PathLabel } from "./metrics.ts";
 import type { NavId } from "./navigation.ts";
 import { overviewView } from "./overview.ts";
@@ -183,9 +185,11 @@ function pathLabel(path: string): PathLabel {
     case "/account/sessions/sign-out-all":
     case "/console.js":
     case "/team":
+    case "/team/invites":
+    case "/team/invites/revoke":
       return path;
     default:
-      return "other";
+      return linkOfPath(path)?.kind === "invite" ? "/invite/:token" : "other";
   }
 }
 
@@ -265,10 +269,6 @@ function signedInOf(ctx: Ctx): SignedIn | undefined {
   return ctx.current?.stage === "full" ? ctx.current : undefined;
 }
 
-function anonBinding(csrf: string): string {
-  return `a:${createHash("sha256").update(csrf).digest("hex")}`;
-}
-
 function sessionBinding(sessionId: string): string {
   return `s:${sessionDigest(sessionId)}`;
 }
@@ -279,7 +279,13 @@ function issueFormToken(ctx: Ctx, binding: string, path: string): string {
 }
 
 function logRefusedToken(ctx: Ctx, reason: Exclude<FormTokenResult, "accepted">): void {
-  ctx.deps.log.info("form token refused", { reason, path: ctx.path });
+  ctx.deps.log.info("form token refused", { reason, path: logPath(ctx.path) });
+}
+
+/** The path of a log line: a link path is logged by its label, never with its token. */
+function logPath(path: string): string {
+  const link = linkOfPath(path);
+  return link === undefined ? path : linkPathLabel(link.kind);
 }
 
 /**
@@ -841,6 +847,8 @@ function pageRequest(
     method,
     path: ctx.path,
     user: signedIn.user,
+    sessionId: signedIn.id,
+    linkOrigin: linkOrigin(ctx.deps.publicOrigin, ctx.req.headers.host),
     role: roleOfUser(ctx, signedIn.user),
     csrf: signedIn.session.csrfToken,
     fields,
@@ -939,9 +947,42 @@ function isPageMethod(method: string): method is PageMethod {
   return method === "GET" || method === "HEAD" || method === "POST";
 }
 
+const LINK_METHODS: readonly string[] = ["GET", "HEAD", "POST"];
+
+/**
+ * A public link route: method, phase (404 before setup), loopback Host, then the route's own
+ * order. No step reads the session cookie before the commit.
+ */
+async function handleInviteLink(
+  ctx: Ctx,
+  method: string,
+  isSetUp: boolean,
+  token: string,
+): Promise<void> {
+  if (!LINK_METHODS.includes(method)) {
+    ctx.res.writeHead(405, { allow: LINK_METHODS.join(", "), "content-length": 0 }).end();
+    return;
+  }
+  if (!isSetUp) {
+    sendText(ctx, 404, NOT_FOUND);
+    return;
+  }
+  if (isHostRefused(ctx)) {
+    sendText(ctx, 421, MISDIRECTED);
+    return;
+  }
+  if (method === "POST") await postInvite(ctx, token, startSession);
+  else sendInviteForm(ctx, token);
+}
+
 async function handleApp(ctx: Ctx): Promise<void> {
   const method = ctx.req.method ?? "GET";
   const isSetUp = ctx.deps.store.instance() !== undefined;
+  const link = linkOfPath(ctx.path);
+  if (link?.kind === "invite") {
+    await handleInviteLink(ctx, method, isSetUp, link.token);
+    return;
+  }
   const protectedRoute = ctx.state.protectedRoutes.get(ctx.path);
   const route = ROUTES[ctx.path];
   const allowed = protectedRoute === undefined ? route?.methods : allowedMethods(protectedRoute);

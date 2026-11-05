@@ -2,6 +2,32 @@ import type { Database } from "bun:sqlite";
 import { INSERT_SESSION_SQL, PARTIAL_SESSION_MS, sessionDigest } from "./account-store.ts";
 import { matchRecoveryCode, type RecoveryCodeRow } from "./recovery-codes.ts";
 
+/**
+ * The actor of a guarded write: the write runs only while a session row with the digest of
+ * `sessionId` and `user_id = userId` exists, and, when set, the stored password hash still
+ * equals `passwordHash`.
+ */
+export type CredentialGuard = {
+  sessionId: string;
+  userId: number;
+  passwordHash?: string | undefined;
+};
+
+/** Whether the guard still holds. Call it first inside the write's BEGIN IMMEDIATE transaction. */
+export function isCredentialGuardHeld(db: Database, guard: CredentialGuard): boolean {
+  const session = db
+    .query<{ found: number }, [string, number]>(
+      "SELECT 1 AS found FROM sessions WHERE id_digest = ? AND user_id = ?",
+    )
+    .get(sessionDigest(guard.sessionId), guard.userId);
+  if (session === null) return false;
+  if (guard.passwordHash === undefined) return true;
+  const user = db
+    .query<{ password_hash: string }, [number]>("SELECT password_hash FROM users WHERE id = ?")
+    .get(guard.userId);
+  return user?.password_hash === guard.passwordHash;
+}
+
 export interface Authenticator {
   /** The sealed seed envelope; never the plain seed. */
   secret: string;

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BodyError, type Logger, readBody } from "@lorenzh/pulse-kit";
 import {
@@ -129,6 +130,11 @@ export function ensureCsrf(ctx: Ctx): string {
   const token = newToken(ctx);
   ctx.cookies.push(serializeCookie("csrf", token, ctx.deps.mode));
   return token;
+}
+
+/** The form-token binding of an anonymous form: the digest of its CSRF value. */
+export function anonBinding(csrf: string): string {
+  return `a:${createHash("sha256").update(csrf).digest("hex")}`;
 }
 
 /** Sets the cookie of a new session of `stage`. */

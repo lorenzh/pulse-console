@@ -56,7 +56,19 @@ The Owner and every Admin must have a TOTP authenticator. The Owner can require 
 
 ## Team page
 
-`GET /team` (Admin and Owner) lists every person with name, email, role and `2FA: on` or `2FA: off`, and every invite that is neither used nor revoked, with email, role, creator name (or `removed`), expiry (`YYYY-MM-DD HH:MM UTC`) and `pending` or `expired`. The Owner also sees the state of the organisation 2FA switch. The actions (invites, reset links, role changes, removal, 2FA reset, transfer) arrive in later steps of #564.
+`GET /team` (Admin and Owner) lists every person with name, email, role and `2FA: on` or `2FA: off`, and every invite that is neither used nor revoked, with email, role, creator name (or `removed`), expiry (`YYYY-MM-DD HH:MM UTC`) and `pending` or `expired`. The Owner also sees the state of the organisation 2FA switch. Each pending invite has a `Revoke` link when the actor may revoke it. The page ends with the invite form. Reset links, role changes, removal, 2FA reset and transfer arrive in later steps of #564.
+
+## Invites
+
+- `POST /team/invites` takes `email` (trimmed and lowercased) and `role`: `admin`, `member` or `viewer`. Any other role, also `owner`, answers `422` `Choose admin, member or viewer.` An Admin may invite Members and Viewers; an Admin invite needs the Owner (`403`).
+- The commit runs in one `BEGIN IMMEDIATE` transaction. It first checks that the request's session row still exists (else `409` `Not saved`: `Your password or session changed while this was saved. Nothing was changed.`), then re-reads the actor's role (`403`). An account with the email answers `409` `An account with this email exists.`; a live invite for it answers `409` `An invite for this email is pending. Revoke it to make a new one.`
+- The answer shows the link once, in a read-only input and as text, with `It works once and expires on <YYYY-MM-DD HH:MM UTC>. It is shown only now.` No email is sent. A reload re-sends the used form token and answers `409` `Already submitted`.
+- The link is `<origin>/invite/<token>`: 32 random bytes as base64url (43 characters). The origin is `PULSE_CONSOLE_PUBLIC_URL`, else `http://<Host>` of the request. The database keeps only the SHA-256 hex digest of the token.
+- An invite is live while it is neither used nor revoked and `now < created_at + 604800000` (7 days).
+- Whoever may make an invite of that role may revoke it (`/team/invites/revoke?invite=<id>`, a plain confirmation). A used or revoked invite answers `404`; an expired one can be revoked.
+- `GET /invite/<token>` shows the email and role as text and a form with `name`, `password` and `password_confirm`. It works only while the invite is live and its creator still exists and still may make it. Every other case answers the same `404` page `Link not valid`, which names no case and no email.
+- `POST /invite/<token>` creates the account with the bound email and role (no field can change them), marks the invite used and starts a session: `enrol` (`303` to `/account/authenticator`) for an Admin or while the switch is on, else `full` (`303` to `/`). A session cookie the browser already sent is ended, as at sign-in.
+- Creation, revocation and acceptance each append one People-log row: `invite.create`, `invite.revoke`, `invite.accept`.
 
 ## People log
 
