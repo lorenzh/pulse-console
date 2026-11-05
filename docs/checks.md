@@ -116,6 +116,63 @@ address the id "<id>" in a URL path, so its results, per-location uptime and lat
 read. Rename the check to use them.` A heartbeat check shows `... so pulse-api cannot receive
 pings for it. Rename the check.` instead of the curl line.
 
+## Editor fields
+
+The create and edit forms post fields for all six types. The Console reads only the fields of
+the chosen type and never sends the others. An empty optional field means absent.
+
+- All types: `id` (create only: `^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`, fixed afterwards), `name`
+  (trimmed, 1 to 200 characters, no control character), `availability_target` (at most two
+  digits and three decimals, at least 90 and below 100; `100`, `89.999` and `1e2` are refused).
+- HTTP: `url`, `method` (default GET), `interval_ms`, `timeout_ms`, `retries` (0 to 10),
+  `retry_delay_ms` (0 to 60000), `latency_objective_ms`, `expected_status` (codes or `lo-hi`
+  ranges separated by commas, at most 20; `200 , 204` is `[200, 204]`), `keyword` (empty is
+  absent), `body`, 20 header rows and 10 JSON assertion rows. A body needs POST, PUT, PATCH,
+  DELETE or OPTIONS; HEAD allows no keyword and no assertion.
+- TLS: `host`, `port` (default 443), `warn_days` (0 to 3650, default 14), `interval_ms`,
+  `timeout_ms`.
+- TCP: `host`, `port`, `interval_ms`, `timeout_ms`, `retries`, `retry_delay_ms`.
+- DNS: `dns_name`, `record_type` (A, AAAA, CNAME, MX, TXT, NS), `expected` (one value per line,
+  blank lines ignored, at most 20), `resolver`, `interval_ms`, `timeout_ms`, `retries`,
+  `retry_delay_ms`.
+- Domain: `domain`, `warn_days` (default 30), `interval_ms` (at least 3600000, default
+  86400000), `timeout_ms`, `retries`, `retry_delay_ms`.
+- Heartbeat: `period_ms` (1000 to 86400000), `grace_ms` (0 to 86400000, empty is 0), `secret`
+  (16 to 128 characters of `A-Z a-z 0-9 . _ ~ -`, not starting with `replace-with-`).
+
+Durations are whole milliseconds (at most 10 digits), so a stored 1500 comes back as 1500.
+After the local rules the built input is checked with the contract's
+`validateAdminCheckInput`; an error it finds is shown on the matching field.
+
+Header row `i` (0 to 19) has `header_<i>_name`, `header_<i>_kind` (`plain` or `env`) and
+`header_<i>_value`. A row with an empty name and value is ignored. A row named exactly
+`__proto__` is refused with `__proto__ is not an allowed header name.`; `__Proto__` or `X-Proto`
+are ordinary names. Each name becomes an own key of the headers object.
+
+One header name is used once, compared without case. The Console checks this on the names
+before it builds the headers object, in row order: stored rows with Keep or Replace first, then
+the free rows. The later row gets `This header is already set in another row (names are compared
+without case).` A stored row with Remove frees its name, so a free row can switch the header to
+an env value.
+
+JSON assertion row `i` (0 to 9) has `assert_<i>_pointer`, `assert_<i>_mode` (`none`, `exists`
+or `equals`) and `assert_<i>_equals`, which must be JSON (`"ok"`, `200`, `true`).
+
+## Write-only values on edit
+
+An edit takes the id, the type, the names and order of the stored literal headers, whether a
+body is kept and the heartbeat secret from the stored view that the POST read itself. Posted
+`id` and `type` are ignored.
+
+- Stored literal headers are rows `0` to `k - 1`. Their names come from the view; only
+  `header_<i>_intent` and `header_<i>_value` are read, never a posted name or kind.
+- A stored header and a stored body (`body_intent`) take an intent: `keep` (default) sends
+  `{"keep": true}`, `replace` needs a non-empty new value (`Enter the new value, or choose
+  Remove.`), `remove` leaves the entry out. A value typed with `keep` is refused with `Choose
+  Replace to use the new value.` A kept body with GET or HEAD is refused like any body.
+- A heartbeat secret takes `secret_intent` `keep` (default, no `secret` is sent) or `replace`
+  (a new secret by the create rules).
+
 ## Display formats
 
 - Percentages are never rounded up: `99.995` shows `99.99 %`, `100` shows `100 %`, no results
