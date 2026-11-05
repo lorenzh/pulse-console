@@ -77,6 +77,7 @@ describe("PULSE_CONSOLE_PORT and PULSE_CONSOLE_HOST", () => {
       publicOrigin: undefined,
       mode: "loopback",
       dbPath: "./console.db",
+      secretKey: undefined,
     });
     const blank = readSettings(
       { PULSE_API_URL: API, PULSE_CONSOLE_PORT: "", PULSE_CONSOLE_HOST: " " },

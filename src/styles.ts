@@ -12,4 +12,6 @@ input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid 
 .error { color: #a4161a; font-weight: 400; margin: 0; }
 .notice { padding: 0.5rem; border-left: 4px solid #1b4f9c; background: #fff; }
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+code, .secret { font-family: ui-monospace, monospace; overflow-wrap: anywhere; word-break: break-all; }
+#recovery-codes { padding-left: 1.5rem; }
 `;

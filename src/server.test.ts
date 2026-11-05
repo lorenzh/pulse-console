@@ -8,9 +8,12 @@ import { join } from "node:path";
 import { createLogger, StartupError } from "@lorenzh/pulse-kit";
 import { createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
+import { createFactorStore } from "./factor-store.ts";
 import { createMetrics, type Metrics } from "./metrics.ts";
 import { createConsoleServer, listen } from "./server.ts";
 import { createSetupGate } from "./setup-code.ts";
+
+const TEST_SECRET_KEY = Uint8Array.from(Buffer.from("0123456789abcdef".repeat(4), "hex"));
 
 const HEADERS = {
   "content-security-policy":
@@ -54,6 +57,8 @@ function depsFor(metrics: Metrics): Parameters<typeof createConsoleServer>[0] {
     defaultApiUrl: "http://api.invalid:3000",
     adminToken: undefined,
     store: createAccountStore(db),
+    factorStore: createFactorStore(db),
+    secretKey: TEST_SECRET_KEY,
     gate: createSetupGate({ now: () => 0, randomBytes: bytes }).gate,
     now: () => 0,
     randomBytes: bytes,

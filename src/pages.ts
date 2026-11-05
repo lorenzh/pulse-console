@@ -1,7 +1,7 @@
 import { escapeHtml } from "@lorenzh/pulse-kit";
 
 // Every value goes through escapeHtml. The CSP allows only the /console.css stylesheet.
-function layout(title: string, body: string): string {
+export function layout(title: string, body: string): string {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -20,11 +20,11 @@ ${body}
 `;
 }
 
-function csrfField(token: string): string {
+export function csrfField(token: string): string {
   return `<input type="hidden" name="csrf" value="${escapeHtml(token)}">`;
 }
 
-type Field = {
+export type Field = {
   label: string;
   name: string;
   type: "text" | "email" | "password" | "url";
@@ -33,7 +33,7 @@ type Field = {
   error?: string | undefined;
 };
 
-function field(f: Field): string {
+export function field(f: Field): string {
   const id = `field-${f.name}`;
   const errorId = `${id}-error`;
   const described =
@@ -48,7 +48,7 @@ function field(f: Field): string {
 </label>`;
 }
 
-function paragraph(text: string | undefined, extra = ""): string {
+export function paragraph(text: string | undefined, extra = ""): string {
   return text === undefined ? "" : `<p${extra}>${escapeHtml(text)}</p>\n`;
 }
 

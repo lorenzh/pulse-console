@@ -6,11 +6,14 @@ import { join } from "node:path";
 import { createLogger } from "@lorenzh/pulse-kit";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
+import { createFactorStore } from "./factor-store.ts";
 import { createMetrics } from "./metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { createConsoleServer, listen } from "./server.ts";
 import type { ConsoleMode } from "./settings.ts";
 import { createSetupGate } from "./setup-code.ts";
+
+const TEST_SECRET_KEY = Uint8Array.from(Buffer.from("0123456789abcdef".repeat(4), "hex"));
 
 const CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
@@ -67,6 +70,8 @@ async function startConsole(
     defaultApiUrl: `http://127.0.0.1:${api.port}`,
     adminToken: TOKEN,
     store,
+    factorStore: createFactorStore(db),
+    secretKey: TEST_SECRET_KEY,
     gate: setup.gate,
     now: () => 0,
     randomBytes,

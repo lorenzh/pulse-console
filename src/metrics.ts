@@ -11,9 +11,21 @@ export type PathLabel =
   | "/sign-in"
   | "/sign-out"
   | "/console.css"
+  | "/sign-in/factor"
+  | "/account/authenticator"
+  | "/account/security"
+  | "/account/recovery-codes"
+  | "/account/sessions"
+  | "/account/sessions/sign-out-all"
   | "other";
 
-export type AuthKind = "sign-in" | "setup-code";
+export type AuthKind =
+  | "sign-in"
+  | "setup-code"
+  | "totp"
+  | "recovery-code"
+  | "enrolment"
+  | "password-confirm";
 export type AuthResult = "success" | "failure" | "throttled";
 
 export interface Metrics {
@@ -34,7 +46,7 @@ export function createMetrics(): Metrics {
   );
   const authCounter = registry.counter(
     "pulse_console_auth_attempts_total",
-    "Sign-in and setup-code attempts by kind and result.",
+    "Sign-in, setup-code and second-factor attempts by kind and result.",
   );
   let isShuttingDown = false;
 
