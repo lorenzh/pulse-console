@@ -1,7 +1,14 @@
 import { type FetchJsonError, WIRE_VERSION, WIRE_VERSION_HEADER } from "@lorenzh/pulse-contract";
 
 /** Which pulse-api read failed. */
-export type ApiCall = "config" | "checks" | "export";
+export type ApiCall =
+  | "config"
+  | "checks"
+  | "export"
+  | "uptime"
+  | "results"
+  | "latency"
+  | "location-uptime";
 
 /** A failed pulse-api read, without any upstream body, exception text or token. */
 export type ApiFailure =

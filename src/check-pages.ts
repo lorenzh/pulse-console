@@ -25,7 +25,7 @@ export type CheckView = { banner: string; body: string };
 /** The shadowed-row text of the list and the shadowed page. */
 export const SHADOWED_TEXT = "Shadowed by checks.json";
 
-const STATE_LABELS: Record<CheckState, string> = {
+export const STATE_LABELS: Record<CheckState, string> = {
   up: "Up",
   degraded: "Degraded",
   down: "Down",
@@ -33,7 +33,7 @@ const STATE_LABELS: Record<CheckState, string> = {
   maintenance: "Maintenance",
 };
 
-const TYPE_LABELS: Record<(typeof CHECK_TYPES)[number], string> = {
+export const TYPE_LABELS: Record<(typeof CHECK_TYPES)[number], string> = {
   http: "HTTP",
   tls: "TLS",
   tcp: "TCP",
@@ -103,15 +103,15 @@ function rowsOf(config: AdminConfigResponse, states: ReadonlyMap<string, CheckSt
 }
 
 /** `?id=` with the encoded id, the only way an id enters a Console link. */
-function idQuery(id: string): string {
+export function idQuery(id: string): string {
   return `?id=${encodeURIComponent(id)}`;
 }
 
-function link(href: string, label: string): string {
+export function link(href: string, label: string): string {
   return `<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
 }
 
-const UNADDRESSABLE: ReadonlySet<string> = new Set([".", ".."]);
+export const UNADDRESSABLE: ReadonlySet<string> = new Set([".", ".."]);
 
 function rowActions(row: CheckRow, role: ConsoleRole): string {
   const id = idQuery(row.check.id);

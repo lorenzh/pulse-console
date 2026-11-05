@@ -25,6 +25,9 @@ code, .secret { font-family: ui-monospace, monospace; overflow-wrap: anywhere; w
 .table-scroll table.checks td { overflow-wrap: normal; word-break: normal; }
 .filters { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: flex-end; margin: 1rem 0; }
 .filters label { display: flex; flex-direction: column; }
+.settings { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+.settings dd { margin: 0; overflow-wrap: anywhere; }
+pre { overflow-x: auto; max-width: 100%; padding: 0.5rem; border: 1px solid currentColor; }
 body, p, h1, h2, li, label, a { overflow-wrap: anywhere; }
 .skip-link { position: absolute; left: 0.5rem; top: -3rem; padding: 0.5rem; background: #fff; }
 .skip-link:focus { top: 0.5rem; }

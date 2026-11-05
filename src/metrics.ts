@@ -29,6 +29,8 @@ export type PathLabel =
   | "/team/transfer"
   | "/team/require-2fa"
   | "/checks"
+  | "/checks/check"
+  | "/checks/shadowed"
   | "/checks/export"
   | "/invite/:token"
   | "/reset/:token"

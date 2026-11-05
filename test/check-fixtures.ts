@@ -168,3 +168,79 @@ export const checkExport = {
     { checkId: "nightly-backup", field: "secret" },
   ],
 };
+
+/** 90 UTC days ending 2026-11-05, oldest first. */
+export const DAYS = Array.from({ length: 90 }, (_, i) =>
+  new Date(Date.UTC(2026, 10, 5) - (89 - i) * 86400000).toISOString().slice(0, 10),
+);
+
+function result(location: string, timestamp: number, status = "up", checkId = "web") {
+  return {
+    checkId,
+    timestamp,
+    status,
+    statusCode: status === "down" ? null : 200,
+    latencyMs: 120,
+    reason: status === "down" ? "connect timeout" : null,
+    location,
+    attempts: status === "down" ? 3 : 1,
+  };
+}
+
+/** `/checks` entry of `web` with two current locations; `us` is stale; `ap` is in no uptime. */
+export const webState = {
+  ...stateOf("web", "up", LAST_RESULT_AT),
+  consecutiveDown: 0,
+  locations: [
+    { location: "ap", result: result("ap", LAST_RESULT_AT), stale: false },
+    { location: "eu", result: result("eu", LAST_RESULT_AT, "degraded"), stale: false },
+    { location: "us", result: result("us", LAST_RESULT_AT - 7200000, "down"), stale: true },
+  ],
+  slo: { target: 99.9, windowDays: 30, availability: 99.95, budgetRemaining: -0.04 },
+};
+
+/** `/checks/web/location-uptime`: `eu` and `us` joined; `old` exists only here. */
+export const webLocationUptime = {
+  checkId: "web",
+  windowDays: 90,
+  locations: [
+    { location: "eu", good: 4, results: 5, uptime: 80 },
+    { location: "old", good: 0, results: 0, uptime: null },
+    { location: "us", good: 999, results: 1000, uptime: 99.9 },
+  ],
+};
+
+/** `/uptime` with a 90-day row for every effective fixture check. */
+export const checkUptime = [
+  "web",
+  "cert",
+  "db-port",
+  "dns-a",
+  "domain-exp",
+  "nightly-backup",
+  ".",
+  "..",
+].map((checkId) => ({
+  checkId,
+  uptime: 99.995,
+  days: DAYS.map((date, i) => ({
+    date,
+    uptime: i === 0 ? null : 99.995,
+    results: i === 0 ? 0 : 200,
+  })),
+}));
+
+/** `/checks/web/latency`: 90 days, the oldest without results. */
+export const webLatency = {
+  checkId: "web",
+  days: DAYS.map((date, i) =>
+    i === 0
+      ? { date, p50Ms: null, p95Ms: null, count: 0 }
+      : { date, p50Ms: 100 + i, p95Ms: 300 + i, count: 10 },
+  ),
+};
+
+/** 21 results: the 20th and 21st share a timestamp, as the api returns a complete group. */
+export const webResults = Array.from({ length: 21 }, (_, i) =>
+  result(i === 20 ? "us" : "eu", LAST_RESULT_AT - Math.min(i, 19) * 60000),
+);

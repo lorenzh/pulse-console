@@ -206,6 +206,8 @@ function pathLabel(path: string): PathLabel {
     case "/team/transfer":
     case "/team/require-2fa":
     case "/checks":
+    case "/checks/check":
+    case "/checks/shadowed":
     case "/checks/export":
       return path;
     default: {

@@ -1,14 +1,25 @@
 import {
+  type AdminCheckView,
   type AdminConfigExport,
   type AdminConfigResponse,
+  type CheckLatency,
+  type CheckLocationUptime,
   type ChecksResponse,
+  type CheckWithState,
+  type ResultsResponse,
+  type UptimeResponse,
   type Validation,
   validateAdminConfigExport,
   validateAdminConfigResponse,
   validateAdminConfigSummary,
+  validateCheckLatency,
+  validateCheckLocationUptime,
   validateChecksResponse,
+  validateResultsResponse,
+  validateUptimeResponse,
 } from "@lorenzh/pulse-contract";
-import type { ApiFailure } from "./api-failure.ts";
+import type { ApiCall, ApiFailure } from "./api-failure.ts";
+import { apiIdSegment } from "./api-path.ts";
 import {
   type ApiReadDeps,
   isReadWireAbsent,
@@ -56,7 +67,7 @@ function readConfig(apiUrl: string, deps: ApiReadDeps, token: string) {
  * token read wins, then the first failure, then a missing wire header.
  */
 function problemOf(
-  outcomes: ReadonlyArray<[call: "config" | "checks" | "export", ReadOutcome<unknown>]>,
+  outcomes: ReadonlyArray<[call: ApiCall, ReadOutcome<unknown>]>,
   origin: string,
   deps: ApiReadDeps,
 ): CheckReadProblem | undefined {
@@ -117,4 +128,137 @@ export async function readCheckExport(apiUrl: string, deps: ApiReadDeps): Promis
   if (problem !== undefined) return problem;
   if (!read.result.ok) return { kind: "failed", failure: { kind: "invalid" } };
   return { kind: "ok", document: read.result.value };
+}
+
+/** One round-2 panel of the detail page (R2). Each fails on its own. */
+export type PanelRead<T> =
+  | { kind: "ok"; value: T }
+  | { kind: "failed"; failure: ApiFailure }
+  /** Decision 14: the id `.` or `..` cannot be put in an api path. */
+  | { kind: "unaddressable" }
+  /** Decision 11: the api has no location-uptime route. */
+  | { kind: "needs-newer" }
+  /** Not read for this check type (latency of a non-HTTP check). */
+  | { kind: "absent" };
+
+export type CheckDetail = {
+  config: AdminConfigResponse;
+  view: AdminCheckView;
+  /** The `/checks` entry; `undefined` when `/checks` does not list the check. */
+  state: CheckWithState | undefined;
+  uptime: PanelRead<UptimeResponse>;
+  results: PanelRead<ResultsResponse>;
+  locationUptime: PanelRead<CheckLocationUptime>;
+  latency: PanelRead<CheckLatency>;
+};
+
+export type CheckDetailRead =
+  | CheckReadProblem
+  | { kind: "not-found" }
+  | { kind: "ok"; detail: CheckDetail };
+
+function panelOf<T>(
+  call: ApiCall,
+  outcome: ReadOutcome<T>,
+  origin: string,
+  deps: ApiReadDeps,
+): PanelRead<T> {
+  const failure = readFailureOf(call, outcome, origin, deps);
+  if (failure !== undefined) {
+    const isOldRoute =
+      call === "location-uptime" && failure.kind === "http" && failure.status === 404;
+    return isOldRoute ? { kind: "needs-newer" } : { kind: "failed", failure };
+  }
+  if (isReadWireAbsent(call, outcome, deps)) {
+    return { kind: "failed", failure: { kind: "missing-header" } };
+  }
+  const { result } = outcome;
+  return result.ok
+    ? { kind: "ok", value: result.value }
+    : { kind: "failed", failure: { kind: "invalid" } };
+}
+
+type PanelReader<T> = (() => Promise<PanelRead<T>>) | PanelRead<T>;
+
+function runPanel<T>(reader: PanelReader<T>): Promise<PanelRead<T>> {
+  return typeof reader === "function" ? reader() : Promise.resolve(reader);
+}
+
+/** A `before` of the results page: digits only, else the first page (R2). */
+export function resultsBeforeOf(query: URLSearchParams): string | undefined {
+  const values = query.getAll("before");
+  const [before] = values;
+  return values.length === 1 && before !== undefined && /^\d{1,16}$/.test(before)
+    ? before
+    : undefined;
+}
+
+function publicPanel<T>(
+  call: ApiCall,
+  url: string,
+  validate: (raw: unknown) => Validation<T>,
+  origin: string,
+  deps: ApiReadDeps,
+): () => Promise<PanelRead<T>> {
+  return async () => panelOf(call, await readApi(url, validate, deps, undefined), origin, deps);
+}
+
+/**
+ * R2: round 1 reads `/admin/config` and `/checks`; round 2 reads `/uptime`, the results, the
+ * location uptime and, for HTTP only, the latency at the same time. No per-id read is made for
+ * the ids `.` and `..` (Decision 14).
+ */
+export async function readCheckDetail(
+  apiUrl: string,
+  deps: ApiReadDeps,
+  id: string,
+  before: string | undefined,
+): Promise<CheckDetailRead> {
+  const list = await readCheckList(apiUrl, deps);
+  if (list.kind !== "ok") return list;
+  const view = list.config.checks.find((check) => check.id === id);
+  if (view === undefined) return { kind: "not-found" };
+  const origin = new URL(apiUrl).origin;
+  const segment = apiIdSegment(id);
+  const base = `${apiUrl}/checks/${segment ?? ""}`;
+  const unaddressable = { kind: "unaddressable" } as const;
+  const isHttp = view.type === undefined || view.type === "http";
+  const beforeQuery = before === undefined ? "" : `&before=${before}`;
+  const resultsQuery = `?limit=20${beforeQuery}`;
+  let latencyReader: PanelReader<CheckLatency> = unaddressable;
+  if (!isHttp) latencyReader = { kind: "absent" };
+  else if (segment !== undefined) {
+    latencyReader = publicPanel("latency", `${base}/latency`, validateCheckLatency, origin, deps);
+  }
+  const [uptime, results, locationUptime, latency] = await Promise.all([
+    runPanel(publicPanel("uptime", `${apiUrl}/uptime`, validateUptimeResponse, origin, deps)),
+    runPanel(
+      segment === undefined
+        ? unaddressable
+        : publicPanel(
+            "results",
+            `${base}/results${resultsQuery}`,
+            validateResultsResponse,
+            origin,
+            deps,
+          ),
+    ),
+    runPanel(
+      segment === undefined
+        ? unaddressable
+        : publicPanel(
+            "location-uptime",
+            `${base}/location-uptime`,
+            validateCheckLocationUptime,
+            origin,
+            deps,
+          ),
+    ),
+    runPanel(latencyReader),
+  ]);
+  const state = list.checks.find((check) => check.id === id);
+  return {
+    kind: "ok",
+    detail: { config: list.config, view, state, uptime, results, locationUptime, latency },
+  };
 }

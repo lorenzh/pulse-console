@@ -2,8 +2,9 @@
  * The only script of the console, served at /console.js. It marks a POST form busy on submit,
  * cancels a later submit of that form, and disables its buttons in a 0 ms timeout, after the
  * browser has built the form data set, so the submitter's name and value are still sent. A page
- * restored from the back/forward cache is made usable again. Plain ES2020, no page data, no
- * request and no storage.
+ * restored from the back/forward cache is made usable again. A `button[data-copy]` is shown and
+ * copies the `textContent` of the element it names (Decision 12); without the script the text
+ * stays selectable in its `<pre>`. Plain ES2020, no page data, no request and no storage.
  */
 export const CONSOLE_JS = `"use strict";
 (function () {
@@ -33,6 +34,21 @@ export const CONSOLE_JS = `"use strict";
         submitter.textContent = label;
       }
     }, 0);
+  });
+  document.querySelectorAll("button[data-copy]").forEach(function (button) {
+    var source = document.getElementById(button.getAttribute("data-copy") || "");
+    if (!source || !navigator.clipboard) return;
+    button.hidden = false;
+    button.addEventListener("click", function () {
+      navigator.clipboard.writeText(source.textContent || "").then(
+        function () {
+          button.textContent = "Copied";
+        },
+        function () {
+          button.textContent = "Copy failed: select the text";
+        },
+      );
+    });
   });
   window.addEventListener("pageshow", function (event) {
     if (!event.persisted) return;

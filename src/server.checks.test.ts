@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { escapeHtml } from "@lorenzh/pulse-kit";
-import { checkConfig, checkExport, checkStates, QUOTE_URL } from "../test/check-fixtures.ts";
+import {
+  checkConfig,
+  checkExport,
+  checkStates,
+  checkUptime,
+  LAST_RESULT_AT,
+  QUOTE_URL,
+  webLatency,
+  webLocationUptime,
+  webResults,
+  webState,
+} from "../test/check-fixtures.ts";
 import {
   type FakeApi,
   type FakeReply,
@@ -61,6 +72,35 @@ function rowCount(body: string): number {
 function warnings(c: SignedInConsole): string[] {
   return c.logs.filter((line) => line.includes("api read failed"));
 }
+
+const failures: Array<[string, string, FakeReply, string]> = [
+  [
+    "rejected token",
+    "/admin/config",
+    { status: 401, headers: WIRE_HEADERS },
+    "rejected the console token",
+  ],
+  ["status", "/checks", { status: 503, headers: WIRE_HEADERS }, "pulse-api answered 503."],
+  [
+    "redirect",
+    "/admin/config",
+    { status: 302, headers: { ...WIRE_HEADERS, location: "http://127.0.0.1:1/x" } },
+    "pulse-api answered with a redirect (302); redirects are not followed.",
+  ],
+  [
+    "wire",
+    "/checks",
+    { status: 200, body: "[]", headers: { ...WIRE_HEADERS, "x-pulse-contract": "2" } },
+    "pulse-api speaks wire version 2; this console needs 1.",
+  ],
+  [
+    "missing header",
+    "/checks",
+    { status: 200, body: "[]", headers: { "content-type": "application/json" } },
+    "pulse-api sent no x-pulse-contract header.",
+  ],
+  ["invalid", "/admin/config", jsonReply({ nope: true }), "pulse-api sent an invalid answer."],
+];
 
 describe("GET /checks", () => {
   test("lists every type, state and source with the counts", async () => {
@@ -221,35 +261,6 @@ describe("GET /checks", () => {
     expect(res.body).toContain("pulse-api is not available");
     expect(api.seen).toEqual([]);
   });
-
-  const failures: Array<[string, string, FakeReply, string]> = [
-    [
-      "rejected token",
-      "/admin/config",
-      { status: 401, headers: WIRE_HEADERS },
-      "rejected the console token",
-    ],
-    ["status", "/checks", { status: 503, headers: WIRE_HEADERS }, "pulse-api answered 503."],
-    [
-      "redirect",
-      "/admin/config",
-      { status: 302, headers: { ...WIRE_HEADERS, location: "http://127.0.0.1:1/x" } },
-      "pulse-api answered with a redirect (302); redirects are not followed.",
-    ],
-    [
-      "wire",
-      "/checks",
-      { status: 200, body: "[]", headers: { ...WIRE_HEADERS, "x-pulse-contract": "2" } },
-      "pulse-api speaks wire version 2; this console needs 1.",
-    ],
-    [
-      "missing header",
-      "/checks",
-      { status: 200, body: "[]", headers: { "content-type": "application/json" } },
-      "pulse-api sent no x-pulse-contract header.",
-    ],
-    ["invalid", "/admin/config", jsonReply({ nope: true }), "pulse-api sent an invalid answer."],
-  ];
 
   test.each(failures)(
     "%s answers 200 with its state and one warning",
@@ -487,5 +498,534 @@ describe("GET /checks/export", () => {
     for (const bad of ["dns-a", "secret-query", "shadowed=", TOKEN]) {
       expect(text).not.toContain(bad);
     }
+  });
+});
+
+const ROUND_2 = [
+  "/uptime",
+  "/checks/web/results",
+  "/checks/web/location-uptime",
+  "/checks/web/latency",
+];
+const HOST_LINE = `PULSE_PROBE_HEADER_HOSTS='{"PULSE_HEADER_TOKEN":["a'\\'';id;'\\''b"]}'`;
+const UNSAFE_TEMPLATE = `["a';id;'b"]}'`;
+const DOTS_TEXT = (id: string) =>
+  `pulse-api cannot address the id "${id}" in a URL path, so its results, per-location uptime and latency cannot be read. Rename the check to use them.`;
+
+/** A fake api with every detail read of the fixture answered. */
+function detailApi(config: unknown = checkConfig): FakeApi {
+  const api = fakeApi(config);
+  api.reply("/checks", jsonReply([webState, ...checkStates.slice(1)]));
+  api.reply("/uptime", jsonReply(checkUptime));
+  api.reply("/checks/web/results", jsonReply(webResults));
+  api.reply("/checks/web/location-uptime", jsonReply(webLocationUptime));
+  api.reply("/checks/web/latency", jsonReply(webLatency));
+  return api;
+}
+
+function byText(a: string, b: string): number {
+  return a.localeCompare(b);
+}
+
+function seenRequests(api: FakeApi): string[] {
+  return api.seen.map((s) => `${s.method} ${s.rawPath}`);
+}
+
+function tbodyRows(body: string, heading: string): number {
+  const panel = body.split(`<h2>${heading}</h2>`)[1]?.split("</section>")[0] ?? "";
+  const tbody = /<tbody>[\s\S]*?<\/tbody>/.exec(panel)?.[0] ?? "";
+  return tbody.split("<tr>").length - 1;
+}
+
+describe("GET /checks/check", () => {
+  test("shows settings, state, locations, uptime, latency and results of an HTTP check", async () => {
+    const api = detailApi();
+    const c = await consoleFor(api, { role: "viewer" });
+    const res = await getPage(c, "/checks/check?id=web");
+    expect(res.status).toBe(200);
+    const seen = seenRequests(api);
+    expect(seen.slice(0, 2).toSorted(byText)).toEqual(["GET /admin/config", "GET /checks"]);
+    expect(seen.slice(2).toSorted(byText)).toEqual([
+      "GET /checks/web/latency",
+      "GET /checks/web/location-uptime",
+      "GET /checks/web/results",
+      "GET /uptime",
+    ]);
+    expect(api.seen.find((s) => s.path === "/checks/web/results")?.query).toBe("?limit=20");
+    for (const s of api.seen.filter((s) => ROUND_2.includes(s.path))) {
+      expect(s.authorization).toBeNull();
+    }
+    // Settings: env names as stored, write-only values only as `set`.
+    expect(res.body).toContain(
+      "<dt>Header Authorization</dt><dd>Secret from the probe environment: PULSE_HEADER_TOKEN</dd>",
+    );
+    expect(res.body).toContain("<dt>Header X-Api-Key</dt><dd>set</dd>");
+    expect(res.body).toContain("<dt>Body</dt><dd>set</dd>");
+    expect(res.body).toContain("<dt>Source</dt><dd>Console</dd>");
+    // The host-binding line, escaped once, never the old template.
+    expect(res.body).toContain(`<pre id="host-binding-line">${escapeHtml(HOST_LINE)}</pre>`);
+    expect(res.body).toContain(
+      '<button type="button" data-copy="host-binding-line" hidden>Copy</button>',
+    );
+    expect(res.body).not.toContain(escapeHtml(UNSAFE_TEMPLATE));
+    expect(res.body).not.toContain(UNSAFE_TEMPLATE);
+    // State and SLO with a negative budget whose rounded text is -0.0.
+    expect(res.body).toContain("<dt>State</dt><dd>Up</dd>");
+    expect(res.body).toContain(
+      "Availability 99.95 % over 30 days, objective 99.9 %. Error budget exceeded (-0.0 %)",
+    );
+    // Locations joined by name, in code-unit order, with a row for a name only on one side.
+    expect(res.body).toContain(
+      "Every probe runs this check. It is down when at least two locations report down; with one reporting location, that location decides.",
+    );
+    expect(tbodyRows(res.body, "Locations")).toBe(4);
+    expect(res.body).toContain(
+      "<tr><td>ap</td><td>Up</td><td>2026-11-05 11:59:30 UTC</td><td>120 ms</td><td>1</td><td></td><td></td><td>No results in 90 days</td></tr>",
+    );
+    expect(res.body).toContain(
+      "<tr><td>eu</td><td>Degraded</td><td>2026-11-05 11:59:30 UTC</td><td>120 ms</td><td>1</td><td></td><td></td><td>80.00 % with 4 of 5 results</td></tr>",
+    );
+    expect(res.body).toContain(
+      "<tr><td>old</td><td>No current result</td><td></td><td></td><td></td><td></td><td></td><td>No results in 90 days</td></tr>",
+    );
+    expect(res.body).toContain(
+      "<tr><td>us</td><td>Down</td><td>2026-11-05 09:59:30 UTC</td><td>120 ms</td><td>3</td><td>connect timeout</td><td>Stale</td><td>99.90 % with 999 of 1000 results</td></tr>",
+    );
+    // Aggregate uptime over 90 days, never rounded up.
+    expect(res.body).toContain("<p>99.99 % over 90 days</p>");
+    expect(res.body).toContain("<tr><td>2026-08-08</td><td>No results</td><td>0</td></tr>");
+    expect(tbodyRows(res.body, "Uptime")).toBe(90);
+    // Latency newest first: 14 rows visible, the remaining 76 in details.
+    const latency = res.body.split("<h2>Latency</h2>")[1]?.split("</section>")[0] ?? "";
+    const [visible, older] = latency.split("<details>");
+    expect((visible ?? "").split("<tr>").length - 2).toBe(14);
+    expect((older ?? "").split("<tr>").length - 2).toBe(76);
+    expect(visible).toContain(
+      "<tr><td>2026-11-05</td><td>189 ms</td><td>389 ms</td><td>10</td></tr>",
+    );
+    expect(older).toContain(
+      "<tr><td>2026-08-08</td><td>No results</td><td>No results</td><td>0</td></tr>",
+    );
+    // A complete timestamp group: 21 rows for limit=20, then one Older link.
+    expect(tbodyRows(res.body, "Recent results")).toBe(21);
+    const last = LAST_RESULT_AT - 19 * 60000;
+    expect(res.body).toContain(`href="/checks/check?id=web&amp;before=${last}">Older results</a>`);
+    expect(res.body).not.toContain("Newest results");
+    // A Viewer gets no member action; no mutation form at all.
+    expect(res.body).not.toContain("/checks/export");
+    expect(res.body).not.toContain("/checks/edit");
+    expect(res.body).not.toContain('method="post" action="/checks');
+    expect(res.body).not.toContain(TOKEN);
+  });
+
+  test("round-1 reads run together, then round-2 reads run together", async () => {
+    const api = detailApi();
+    let openChecks = (): void => undefined;
+    let openUptime = (): void => undefined;
+    api.reply("/checks", {
+      ...jsonReply([webState]),
+      gate: new Promise<void>((resolve) => {
+        openChecks = resolve;
+      }),
+    });
+    api.reply("/uptime", {
+      ...jsonReply(checkUptime),
+      gate: new Promise<void>((resolve) => {
+        openUptime = resolve;
+      }),
+    });
+    const c = await consoleFor(api);
+    const page = getPage(c, "/checks/check?id=web");
+    await api.received("/admin/config");
+    await api.received("/checks");
+    expect(api.seen.map((s) => s.path)).toEqual(["/admin/config", "/checks"]);
+    openChecks();
+    for (const path of ROUND_2) await api.received(path);
+    expect(api.seen).toHaveLength(6);
+    openUptime();
+    expect((await page).status).toBe(200);
+  });
+
+  test("a TLS check reads no latency and shows its certificate days", async () => {
+    const api = detailApi();
+    const cert = { ...checkStates[1], certDaysLeft: 12 };
+    api.reply("/checks", jsonReply([cert]));
+    api.reply("/checks/cert/results", jsonReply([]));
+    api.reply(
+      "/checks/cert/location-uptime",
+      jsonReply({ checkId: "cert", windowDays: 90, locations: [] }),
+    );
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=cert");
+    expect(res.status).toBe(200);
+    expect(api.seen.map((s) => s.path).toSorted(byText)).toEqual([
+      "/admin/config",
+      "/checks",
+      "/checks/cert/location-uptime",
+      "/checks/cert/results",
+      "/uptime",
+    ]);
+    expect(res.body).not.toContain("<h2>Latency</h2>");
+    expect(res.body).toContain("<dt>Certificate days left</dt><dd>12</dd>");
+    expect(res.body).toContain("<dt>State</dt><dd>Degraded</dd>");
+    expect(res.body).toContain("<p>No availability objective</p>");
+    expect(res.body).toContain("<p>No location has reported yet.</p>");
+    expect(res.body).toContain("<p>No results yet</p>");
+    expect(res.body).not.toContain("host-binding-line");
+  });
+
+  test("an SLO without results says so", async () => {
+    const api = detailApi();
+    const slo = { target: 99.5, windowDays: 30, availability: null, budgetRemaining: null };
+    api.reply("/checks", jsonReply([{ ...webState, slo }]));
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=web");
+    expect(res.body).toContain("<p>Objective 99.5 %: no results in the last 30 days</p>");
+  });
+
+  test("a heartbeat check shows the quoted curl line, its pings and the copy button", async () => {
+    const api = detailApi();
+    const heartbeatState = {
+      ...webState,
+      id: "nightly-backup",
+      locations: [
+        {
+          location: "heartbeat",
+          result: {
+            ...webState.locations[0]?.result,
+            checkId: "nightly-backup",
+            location: "heartbeat",
+          },
+          stale: false,
+        },
+      ],
+    };
+    const withoutSlo: Record<string, unknown> = { ...heartbeatState };
+    delete withoutSlo.slo;
+    api.reply("/checks", jsonReply([withoutSlo]));
+    api.reply("/checks/nightly-backup/results", jsonReply([]));
+    api.reply(
+      "/checks/nightly-backup/location-uptime",
+      jsonReply({
+        checkId: "nightly-backup",
+        windowDays: 90,
+        locations: [{ location: "heartbeat", good: 30, results: 30, uptime: 100 }],
+      }),
+    );
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=nightly-backup");
+    expect(res.status).toBe(200);
+    const line = `curl -fsS -X POST -H 'Authorization: Bearer <secret>' '${api.url}/heartbeat/nightly-backup'`;
+    expect(res.body).toContain(`<pre id="heartbeat-line">${escapeHtml(line)}</pre>`);
+    expect(res.body).toContain(
+      '<button type="button" data-copy="heartbeat-line" hidden>Copy</button>',
+    );
+    expect(res.body).toContain(
+      "Use the address under which your job reaches pulse-api. The secret is not shown again.",
+    );
+    expect(res.body).toContain("<dt>Secret</dt><dd>set</dd>");
+    expect(res.body).toContain("Heartbeat checks are not run by probes; your job pings pulse-api.");
+    expect(res.body).not.toContain("Every probe runs this check.");
+    expect(res.body).toContain(
+      "<tr><td>Heartbeat pings</td><td>Up</td><td>2026-11-05 11:59:30 UTC</td><td>Not applicable</td>",
+    );
+    expect(res.body).toContain("<td>100 % with 30 of 30 results</td>");
+    expect(api.seen.some((s) => s.path.endsWith("/latency"))).toBe(false);
+  });
+
+  test("a valid before asks for that page and links the newest results", async () => {
+    const api = detailApi();
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=web&before=1700000000000");
+    expect(api.seen.find((s) => s.path === "/checks/web/results")?.query).toBe(
+      "?limit=20&before=1700000000000",
+    );
+    expect(res.body).toContain('<a href="/checks/check?id=web">Newest results</a>');
+    expect(api.seen.filter((s) => s.path === "/checks/web/results")).toHaveLength(1);
+  });
+
+  test.each(["abc", "-1", "12345678901234567", "1&before=2"])(
+    "an invalid before %s gives the first page",
+    async (before) => {
+      const api = detailApi();
+      const c = await consoleFor(api);
+      const res = await getPage(c, `/checks/check?id=web&before=${before}`);
+      expect(res.status).toBe(200);
+      expect(api.seen.find((s) => s.path === "/checks/web/results")?.query).toBe("?limit=20");
+      expect(res.body).not.toContain("Newest results");
+    },
+  );
+
+  const panelFailures: Array<[string, string, FakeReply, string, string]> = [
+    [
+      "results",
+      "/checks/web/results",
+      { status: 503, headers: WIRE_HEADERS },
+      "pulse-api answered 503.",
+      "Recent results",
+    ],
+    ["uptime", "/uptime", jsonReply({ nope: true }), "pulse-api sent an invalid answer.", "Uptime"],
+    [
+      "latency",
+      "/checks/web/latency",
+      { status: 200, body: "{}", headers: { ...WIRE_HEADERS, "x-pulse-contract": "2" } },
+      "pulse-api speaks wire version 2; this console needs 1.",
+      "Latency",
+    ],
+    [
+      "location uptime",
+      "/checks/web/location-uptime",
+      {
+        status: 200,
+        body: JSON.stringify(webLocationUptime),
+        headers: { "content-type": "application/json" },
+      },
+      "pulse-api sent no x-pulse-contract header.",
+      "Locations",
+    ],
+  ];
+
+  test.each(panelFailures)(
+    "a failed %s read fails only its panel",
+    async (_, path, reply, text, heading) => {
+      const api = detailApi();
+      api.reply(path, reply);
+      const c = await consoleFor(api);
+      const res = await getPage(c, "/checks/check?id=web");
+      expect(res.status).toBe(200);
+      const panel =
+        res.body.split(`<h2>${heading}</h2>`)[1]?.split("</section>\n</section>")[0] ?? "";
+      expect(panel).toContain(escapeHtml(text));
+      expect(res.body.split(escapeHtml(text))).toHaveLength(2);
+      expect(warnings(c)).toHaveLength(1);
+      expect(res.body).toContain("<dt>State</dt><dd>Up</dd>");
+      expect(res.body).not.toContain(UPSTREAM_SENTINEL);
+      for (const other of ["Recent results", "Uptime", "Latency", "Locations"]) {
+        expect(res.body).toContain(`<h2>${other}</h2>`);
+      }
+    },
+  );
+
+  test("a 404 from location uptime shows only the newer-api text", async () => {
+    const api = detailApi();
+    api.reply("/checks/web/location-uptime", { status: 404, headers: WIRE_HEADERS, body: "{}" });
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=web");
+    expect(res.status).toBe(200);
+    expect(res.body).toContain("<p>Location uptime needs a newer pulse-api.</p>");
+    expect(res.body).not.toContain("pulse-api answered 404.");
+    expect(res.body).toContain("<td>Not available</td>");
+    expect(res.body).toContain("<p>99.99 % over 90 days</p>");
+    expect(tbodyRows(res.body, "Recent results")).toBe(21);
+  });
+
+  test.each(failures)(
+    "a round-1 %s failure answers 200 with its shared state",
+    async (_, path, reply, text) => {
+      const api = detailApi();
+      api.reply(path, reply);
+      const c = await consoleFor(api);
+      const res = await getPage(c, "/checks/check?id=web");
+      expect(res.status).toBe(200);
+      expect(res.body).toContain(escapeHtml(text));
+      expect(warnings(c)).toHaveLength(1);
+      expect(api.seen.map((s) => s.path).toSorted(byText)).toEqual(["/admin/config", "/checks"]);
+      expect(res.body).not.toContain(UPSTREAM_SENTINEL);
+      expect(res.body).not.toContain(TOKEN);
+    },
+  );
+
+  test("a held round-1 read times out with the shared state", async () => {
+    const api = detailApi();
+    api.reply("/checks", { status: 200, isHeld: true });
+    const pending = new Set<() => void>();
+    const c = await consoleFor(api, {
+      schedule: (fn) => {
+        pending.add(fn);
+        return () => pending.delete(fn);
+      },
+    });
+    const page = getPage(c, "/checks/check?id=web");
+    await api.received("/checks");
+    while (pending.size !== 1) await new Promise((resolve) => setImmediate(resolve));
+    for (const fn of pending) fn();
+    const res = await page;
+    expect(res.status).toBe(200);
+    expect(res.body).toContain("pulse-api did not answer within 5 seconds.");
+  });
+
+  test("no token, an unreachable api and an old api use the shared states", async () => {
+    const api = detailApi();
+    const noToken = await consoleFor(api, { adminToken: undefined });
+    expect((await getPage(noToken, "/checks/check?id=web")).body).toContain(
+      "pulse-api is not available",
+    );
+    expect(api.seen).toEqual([]);
+    const away = await consoleFor({ ...detailApi(), url: "http://127.0.0.1:1" });
+    expect((await getPage(away, "/checks/check?id=web")).body).toContain(
+      "pulse-api cannot be reached",
+    );
+    const old = detailApi({ revision: checkConfig.revision, checks: [{ id: "web" }] });
+    const oldConsole = await consoleFor(old);
+    const res = await getPage(oldConsole, "/checks/check?id=web");
+    expect(res.status).toBe(200);
+    expect(res.body).toContain(
+      "This pulse-api is too old for the Checks pages. It needs check sources (pulse-api with #565).",
+    );
+    expect(old.seen.map((s) => s.path).toSorted(byText)).toEqual(["/admin/config", "/checks"]);
+  });
+
+  test.each(["", "?id=", "?id=web&id=web", "?id=unknown", "?ID=web"])(
+    "%s answers the shell 404",
+    async (query) => {
+      const api = detailApi();
+      const c = await consoleFor(api);
+      const res = await getPage(c, `/checks/check${query}`);
+      expect(res.status).toBe(404);
+      expect(res.body).toContain("There is no page at this address.");
+      expect(api.seen.every((s) => s.path === "/admin/config" || s.path === "/checks")).toBe(true);
+    },
+  );
+
+  test("ids enter api paths encoded as one segment, also over 1024 code units", async () => {
+    const long = "x".repeat(1025);
+    const ids = ["a/b", "%2e", "...", long];
+    const checks = ids.map((id) => ({ ...checkConfig.checks[1], id }));
+    const api = detailApi({ ...checkConfig, checks, shadowed: [] });
+    const c = await consoleFor(api);
+    for (const id of ids) {
+      const res = await getPage(c, `/checks/check?id=${encodeURIComponent(id)}`);
+      expect(res.status).toBe(200);
+    }
+    const paths = api.seen.map((s) => s.rawPath).filter((p) => p.endsWith("/results"));
+    expect(paths).toEqual([
+      "/checks/a%2Fb/results",
+      "/checks/%252e/results",
+      "/checks/.../results",
+      `/checks/${long}/results`,
+    ]);
+  });
+
+  test("the id .. is shown from /admin/config and /uptime without per-id reads", async () => {
+    const dots = { ...checkConfig.checks[0], id: "..", name: "Dots" };
+    const api = detailApi({ ...checkConfig, checks: [dots], shadowed: [] });
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=..");
+    expect(res.status).toBe(200);
+    expect(seenRequests(api)).toEqual(["GET /admin/config", "GET /checks", "GET /uptime"]);
+    expect(res.body.split(escapeHtml(DOTS_TEXT(".."))).length - 1).toBe(3);
+    expect(res.body).toContain("<p>99.99 % over 90 days</p>");
+    expect(res.body).toContain('href="/checks/export?id=.."');
+    expect(res.body).not.toContain("/checks/edit");
+    expect(res.body).not.toContain("/checks/delete");
+  });
+
+  test("a heartbeat id . shows the fixed text and no curl line", async () => {
+    const dot = { ...checkConfig.checks[5], id: ".", name: "Dot" };
+    const api = detailApi({ ...checkConfig, checks: [dot], shadowed: [] });
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=.");
+    expect(res.status).toBe(200);
+    expect(res.body).toContain(
+      escapeHtml(
+        'pulse-api cannot address the id "." in a URL path, so pulse-api cannot receive pings for it. Rename the check.',
+      ),
+    );
+    expect(res.body).not.toContain("curl");
+    expect(res.body).not.toContain("heartbeat-line");
+    expect(seenRequests(api)).toEqual(["GET /admin/config", "GET /checks", "GET /uptime"]);
+  });
+
+  test.each([
+    ["viewer", 200, false, false, 403],
+    ["member", 200, true, false, 200],
+    ["admin", 200, true, true, 200],
+    ["owner", 200, true, true, 200],
+  ] as const)(
+    "a %s reads the detail; export link %s, delete link %s; direct export %s",
+    async (role, status, hasExport, hasDelete, exportStatus) => {
+      const api = detailApi();
+      const c = await consoleFor(api, { role });
+      const res = await getPage(c, "/checks/check?id=web");
+      expect(res.status).toBe(status);
+      expect(res.body.includes('href="/checks/export?id=web"')).toBe(hasExport);
+      expect(res.body.includes('href="/checks/delete?id=web"')).toBe(hasDelete);
+      expect(res.body.includes('href="/checks/edit?id=web"')).toBe(hasExport);
+      expect((await getPage(c, "/checks/export?id=web")).status).toBe(exportStatus);
+    },
+  );
+});
+
+describe("GET /checks/shadowed", () => {
+  test("shows the stored definition without runtime data", async () => {
+    const api = detailApi();
+    const c = await consoleFor(api, { role: "admin" });
+    const res = await getPage(c, "/checks/shadowed?id=dns-a");
+    expect(res.status).toBe(200);
+    expect(seenRequests(api)).toEqual(["GET /admin/config"]);
+    expect(res.body).toContain(
+      "Shadowed by checks.json: the check from checks.json runs instead. This definition is kept in the database.",
+    );
+    expect(res.body).toContain("<dt>Name</dt><dd>DNS record (old)</dd>");
+    expect(res.body).toContain("<dt>recordType</dt><dd>AAAA</dd>");
+    expect(res.body).toContain('href="/checks/check?id=dns-a"');
+    expect(res.body).toContain('href="/checks/export?id=dns-a&amp;shadowed=1"');
+    expect(res.body).toContain('href="/checks/delete?id=dns-a&amp;shadowed=1"');
+    expect(res.body).not.toContain("/checks/edit");
+    for (const runtime of [
+      "<h2>State</h2>",
+      "<h2>Uptime</h2>",
+      "<h2>Latency</h2>",
+      "<h2>Recent results</h2>",
+      "<h2>Locations</h2>",
+      "objective",
+    ]) {
+      expect(res.body).not.toContain(runtime);
+    }
+  });
+
+  test("a Viewer gets neither Export nor Delete", async () => {
+    const c = await consoleFor(detailApi(), { role: "viewer" });
+    const res = await getPage(c, "/checks/shadowed?id=dns-a");
+    expect(res.status).toBe(200);
+    expect(res.body).not.toContain("/checks/export");
+    expect(res.body).not.toContain("/checks/delete");
+  });
+
+  test.each(["", "?id=", "?id=dns-a&id=dns-a", "?id=web"])("%s answers 404", async (query) => {
+    const c = await consoleFor(detailApi());
+    expect((await getPage(c, `/checks/shadowed${query}`)).status).toBe(404);
+  });
+
+  test("a shadowed id .. stays viewable and exportable", async () => {
+    const dots = { ...checkConfig.shadowed[0], id: ".." };
+    const api = detailApi({ ...checkConfig, shadowed: [dots] });
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/shadowed?id=..");
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('href="/checks/export?id=..&amp;shadowed=1"');
+    expect(res.body).not.toContain("/checks/delete");
+    const download = await getPage(c, "/checks/export?id=..&shadowed=1");
+    expectDownload(download, "check.json");
+    expect(api.seen.map((s) => s.path)).toEqual(["/admin/config", "/admin/config"]);
+  });
+
+  test("a failed read shows the shared state", async () => {
+    const api = detailApi();
+    api.reply("/admin/config", { status: 503, headers: WIRE_HEADERS });
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/shadowed?id=dns-a");
+    expect(res.status).toBe(200);
+    expect(res.body).toContain("pulse-api answered 503.");
+  });
+
+  test("detail and shadowed metric labels hold no id", async () => {
+    const c = await consoleFor(detailApi());
+    await getPage(c, "/checks/check?id=web");
+    await getPage(c, "/checks/shadowed?id=dns-a");
+    const text = c.metrics.render();
+    expect(text).toContain('path="/checks/check",code="200"');
+    expect(text).toContain('path="/checks/shadowed",code="200"');
+    expect(text).not.toContain("dns-a");
   });
 });
