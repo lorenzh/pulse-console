@@ -89,7 +89,7 @@ export function forbiddenState(
 
 /** The 404 body. */
 export function notFoundState(): string {
-  return `<p>There is no page at this address. Check the address, or go to the overview.</p>
+  return `<p>There is no page at this address; go to the overview.</p>
 ${link("/", "Go to the overview")}`;
 }
 

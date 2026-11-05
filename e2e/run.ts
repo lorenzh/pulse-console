@@ -371,8 +371,15 @@ async function checkNotFound(env: Env, browser: Browser): Promise<void> {
   await page.goto(`${base}/does-not-exist`);
   const titles = page.getByText("Page not found", { exact: true });
   assert((await titles.count()) === 1 && (await titles.isVisible()), "404: one visible title");
-  const sentence = "There is no page at this address. Check the address, or go to the overview.";
+  const sentence = "There is no page at this address; go to the overview.";
   assert(await page.getByText(sentence, { exact: true }).isVisible(), "404: sentence");
+  const texts = await page
+    .locator("main#main p")
+    .evaluateAll((ps) => ps.filter((p) => !p.querySelector("a")).map((p) => p.textContent ?? ""));
+  assert(texts.length === 1, `404: ${texts.length} explanatory paragraphs`);
+  const segmenter = new Intl.Segmenter("en", { granularity: "sentence" });
+  const sentences = [...segmenter.segment(texts[0] ?? "")].filter((s) => s.segment.trim() !== "");
+  assert(sentences.length === 1, `404: ${sentences.length} sentences`);
   await Promise.all([
     page.waitForURL(`${base}/`),
     page.getByRole("link", { name: "Go to the overview", exact: true }).click(),

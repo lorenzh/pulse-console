@@ -602,9 +602,7 @@ describe("signed-in unknown paths and the Overview", () => {
     expect(res.body).toContain("<title>Page not found");
     expect(res.body).toContain("<h1>Page not found</h1>");
     expect(res.body).not.toContain("<h2>Page not found</h2>");
-    expect(res.body).toContain(
-      "<p>There is no page at this address. Check the address, or go to the overview.</p>",
-    );
+    expect(res.body).toContain("<p>There is no page at this address; go to the overview.</p>");
     expect(res.body).toContain('<a href="/">Go to the overview</a>');
     expectShell(res);
     const head = await fetch(`${c.base}/no-such-page`, {
@@ -613,6 +611,15 @@ describe("signed-in unknown paths and the Overview", () => {
     });
     expect(head.status).toBe(404);
     expect(await head.text()).toBe("");
+  });
+
+  test("shell 404 explanatory paragraph has one sentence", async () => {
+    const c = await signedIn();
+    const res = await getPage(c, "/no-such-page");
+    expect(res.status).toBe(404);
+    const paragraphs = textParagraphs(res.body);
+    expect(paragraphs).toHaveLength(1);
+    expect(sentenceCount(paragraphs[0] ?? "")).toBe(1);
   });
 
   test("other unknown-path requests keep the plain 404", async () => {
@@ -761,3 +768,27 @@ describe("reset link tokens", () => {
     }
   });
 });
+
+/** The text of the paragraphs inside `<main>` that hold no link, tags stripped, entities decoded. */
+function textParagraphs(body: string): string[] {
+  const main = /<main\b[^>]*>([\s\S]*?)<\/main>/.exec(body)?.[1] ?? "";
+  return [...main.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/g)]
+    .map((m) => m[1] ?? "")
+    .filter((inner) => !inner.includes("<a"))
+    .map((inner) =>
+      inner
+        .split("<")
+        .map((part, i) => (i === 0 ? part : part.slice(part.indexOf(">") + 1)))
+        .join("")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, "&"),
+    );
+}
+
+function sentenceCount(text: string): number {
+  const segmenter = new Intl.Segmenter("en", { granularity: "sentence" });
+  return [...segmenter.segment(text)].filter((s) => s.segment.trim() !== "").length;
+}
