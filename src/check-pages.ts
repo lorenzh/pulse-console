@@ -242,8 +242,8 @@ function listBody(
   role: ConsoleRole,
   results: ReadonlyMap<string, number | null>,
 ): string {
-  if (rows.length === 0) return emptyInstallation(role);
   const notice = parsed.hasIgnoredValues ? paragraph(FILTERS_IGNORED_NOTICE, ' role="status"') : "";
+  if (rows.length === 0) return `${memberLinks(role)}${notice}${emptyInstallation(role)}`;
   const matched = rows.filter((row) => isCheckRowMatched(row, parsed.filters));
   const content =
     matched.length === 0

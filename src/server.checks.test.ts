@@ -170,6 +170,23 @@ describe("GET /checks", () => {
   });
 
   test.each([
+    ["member", true],
+    ["viewer", false],
+  ] as const)(
+    "an empty installation keeps the %s export link and the ignored-values notice",
+    async (role, hasExport) => {
+      const empty = { ...checkConfig, checks: [], shadowed: [] };
+      const c = await consoleFor(fakeApi(empty), { role });
+      const res = await getPage(c, "/checks?type=invalid");
+      expect(res.body).toContain("No checks yet");
+      expect(res.body).toContain("Some filter values were not understood and were ignored.");
+      expect(res.body.includes('<a href="/checks/export">Export as checks.json</a>')).toBe(
+        hasExport,
+      );
+    },
+  );
+
+  test.each([
     ["invalid", "checks.json is invalid"],
     ["unreadable", "checks.json cannot be read"],
     ["written-not-applied", "checks.json was written but not applied"],
