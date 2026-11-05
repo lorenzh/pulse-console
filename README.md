@@ -7,8 +7,9 @@ pulse: Web console to manage checks, incidents, tokens, notify and status settin
 The console is the fifth service of the pulse Compose stack. Today it serves:
 
 - first-run setup: a one-time setup code from the container log unlocks `/setup/owner`. That page tests the connection to pulse-api (wire version and check count) and creates the one owner account in a local SQLite database;
-- password sign-in for the owner, a session that ends after 30 days without use, a landing page and sign-out;
-- the stylesheet `/console.css` and the ops routes `/healthz`, `/readyz` and `/metrics`.
+- password sign-in for the owner, a session that ends after 30 days without use, a signed-in shell with navigation and sign-out, and the Overview at `/`: the pulse-api origin, the overall check state and the count of checks per state, read from pulse-api on each visit;
+- a single-use form token on every POST form (setup, sign-in, sign-out): a form sent twice changes nothing the second time;
+- the stylesheet `/console.css`, the busy-button script `/console.js` and the ops routes `/healthz`, `/readyz` and `/metrics`.
 
 Two-factor sign-in (and any second factor or password recovery) follows in [#563](https://github.com/lorenzh/pulse-meta/issues/563). Checks, incidents, tokens and the notify and status settings come in later items of [#460](https://github.com/lorenzh/pulse-meta/issues/460).
 
@@ -72,21 +73,22 @@ An invalid setting stops the start with exit code 2 and one line on stderr. Ever
 
 ## HTTP endpoints
 
-| Path                | Before setup                                              | After setup                                                          |
-| ------------------- | --------------------------------------------------------- | -------------------------------------------------------------------- |
-| `GET /`             | `303` to `/setup`                                         | `200` landing page when signed in, else `303` to `/sign-in?next=%2F` |
-| `GET /setup`        | `200`, the setup code form                                | `404`                                                                |
-| `POST /setup`       | `303` to `/setup/owner` with a grant; `401`, `422`, `429` | `404`                                                                |
-| `GET /setup/owner`  | `200` with a grant, else `303` to `/setup`                | `404`                                                                |
-| `POST /setup/owner` | test: `200` or `502`; finish: `303`, `409` or `500`       | `404`                                                                |
-| `GET /sign-in`      | `303` to `/setup`                                         | `200`, the sign-in form; `303` to `/` when signed in                 |
-| `POST /sign-in`     | `404`                                                     | `303` to `next`; `401`, `422`, `429`                                 |
-| `POST /sign-out`    | `303` to `/sign-in`                                       | `303` to `/sign-in`; ends the session                                |
-| `GET /console.css`  | `200`, `text/css`                                         | same                                                                 |
-| `GET /healthz`      | `200 ok`                                                  | same                                                                 |
-| `GET /readyz`       | `200 ok`; `503 shutting down` after `SIGTERM`             | same                                                                 |
-| `GET /metrics`      | Prometheus text                                           | same                                                                 |
-| any other path      | `404 not found`                                           | same                                                                 |
+| Path                | Before setup                                                     | After setup                                                        |
+| ------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `GET /`             | `303` to `/setup`                                                | `200` Overview when signed in, else `303` to `/sign-in?next=%2F`   |
+| `GET /setup`        | `200`, the setup code form                                       | `404`                                                              |
+| `POST /setup`       | `303` to `/setup/owner` with a grant; `401`, `409`, `422`, `429` | `404`                                                              |
+| `GET /setup/owner`  | `200` with a grant, else `303` to `/setup`                       | `404`                                                              |
+| `POST /setup/owner` | test: `200` or `502`; finish: `303`, `409` or `500`              | `404`                                                              |
+| `GET /sign-in`      | `303` to `/setup`                                                | `200`, the sign-in form; `303` to `/` when signed in               |
+| `POST /sign-in`     | `404`                                                            | `303` to `next`; `401`, `409`, `422`, `429`                        |
+| `POST /sign-out`    | `303` to `/sign-in`                                              | `303` to `/sign-in`; ends the session; `409` for a form sent twice |
+| `GET /console.css`  | `200`, `text/css`                                                | same                                                               |
+| `GET /console.js`   | `200`, `text/javascript`                                         | same                                                               |
+| `GET /healthz`      | `200 ok`                                                         | same                                                               |
+| `GET /readyz`       | `200 ok`; `503 shutting down` after `SIGTERM`                    | same                                                               |
+| `GET /metrics`      | Prometheus text                                                  | same                                                               |
+| any other path      | `404 not found`                                                  | signed-in `GET`/`HEAD`: `404` shell page; else `404 not found`     |
 
 `HEAD` works wherever `GET` does; another method on a known path answers `405` with `allow`. A finished setup redirects to `/sign-in?setup=done`. In loopback mode the app routes answer only a loopback `Host`. Every form POST checks `Origin` and a CSRF token. Cookies, modes, the POST order and the metrics are in [docs/configuration.md](docs/configuration.md). More in [docs/](docs/index.md).
 

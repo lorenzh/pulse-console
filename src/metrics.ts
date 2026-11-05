@@ -11,6 +11,7 @@ export type PathLabel =
   | "/sign-in"
   | "/sign-out"
   | "/console.css"
+  | "/console.js"
   | "other";
 
 export type AuthKind = "sign-in" | "setup-code";
