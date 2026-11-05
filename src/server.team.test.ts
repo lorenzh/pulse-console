@@ -1039,3 +1039,67 @@ describe("team mutations from a revoked session (section 3)", () => {
     },
   );
 });
+
+describe("a deleted session answers 409 before any target-rule 403", () => {
+  type Held = { name: string; open: (c: TeamConsole) => Promise<HeldRequest[]> };
+  type HeldRequest = Awaited<ReturnType<typeof heldPost>>;
+
+  async function heldTransfer(c: TeamConsole): Promise<HeldRequest> {
+    const action = `/team/transfer?user=${c.ids.admin}`;
+    const page = await getPage(c, action, c.cookies.owner);
+    return heldPost(c, action, c.cookies.owner, {
+      csrf: c.csrfs.owner,
+      form_token: formTokenOf(page.body, action),
+      revision: revision(c, c.ids.admin),
+      confirm_name: "Ada Admin",
+    });
+  }
+
+  const CASES: Held[] = [
+    {
+      name: "a second transfer to the same Admin after the first ended both sessions",
+      open: async (c) => [await heldTransfer(c), await heldTransfer(c)],
+    },
+    {
+      name: "an Admin inviting an Admin after the Owner demoted it",
+      open: async (c) => {
+        const page = await getPage(c, "/team", c.cookies.admin);
+        const held = await heldPost(c, "/team/invites", c.cookies.admin, {
+          csrf: c.csrfs.admin,
+          form_token: formTokenOf(page.body, "/team/invites"),
+          email: "new@example.com",
+          role: "admin",
+        });
+        const demoted = await submit(c, "owner", "/team/role", c.ids.admin, { role: "member" });
+        expect(demoted.status).toBe(303);
+        return [held];
+      },
+    },
+  ];
+
+  test.each(CASES)("$name is 409 Not saved", async (k) => {
+    const c = await actions();
+    const held = await k.open(c);
+    const last = held.pop();
+    for (const first of held) expect((await first.finish()).status).toBe(303);
+    const before = everyRow(c);
+    const r = await last?.finish();
+    expect(r?.status).toBe(409);
+    expect(r?.body).toContain(
+      "Your password or session changed while this was saved. Nothing was changed.",
+    );
+    expect(everyRow(c)).toEqual(before);
+    expect(count(c, "users WHERE role = 'owner'")).toBe(1);
+  });
+});
+
+describe("the field format comes before the target lookup", () => {
+  test.each(["owner", "boss", ""])("role=%p for an unknown user is 422", async (role) => {
+    const c = await actions();
+    const before = everyRow(c);
+    const r = await submit(c, "owner", "/team/role", 999, { role }, c.cookies.owner, c.ids.member);
+    expect(r.status).toBe(422);
+    expect(r.body).toContain("Choose admin, member or viewer.");
+    expect(everyRow(c)).toEqual(before);
+  });
+});

@@ -149,6 +149,7 @@ function createInvite(deps: TeamRouteDeps, request: PageRequest): PageResult {
     };
     return teamPage(deps, request, 422, { ...keptInvite(request), errors });
   }
+  if (!deps.teamStore.isGuardHeld(guardOf(request))) return notSaved("/team");
   const decision = targetDecision(request.role, "invite", role);
   if (!decision.isAllowed) return forbidden(request, decision);
   const token = newLinkToken(deps.randomBytes);
@@ -333,6 +334,15 @@ function precheck(
   return op.lateRefusal?.(request, member);
 }
 
+function fieldRefused(op: MemberOperation, error: string): PageResult {
+  return {
+    kind: "page",
+    status: 422,
+    title: op.title,
+    body: `<p role="alert">${escapeHtml(error)}</p>\n<p><a href="/team">Back to the team</a></p>\n`,
+  };
+}
+
 function refusal(
   op: MemberOperation,
   request: PageRequest,
@@ -363,8 +373,16 @@ function runMemberOperation(
   request: PageRequest,
 ): PageResult {
   const id = idOf(request, "user");
-  const member = id === undefined ? undefined : deps.teamStore.member(id);
+  if (id === undefined) return notFound();
+  const isPost = request.method === "POST";
+  const fieldError = isPost ? op.fieldError?.(request) : undefined;
+  const member = deps.teamStore.member(id);
+  if (fieldError !== undefined && member === undefined) return fieldRefused(op, fieldError);
   if (member === undefined) return notFound();
+  // A session ended while the request waited answers Not saved before any target-rule 403.
+  if (isPost && !deps.teamStore.isGuardHeld(guardOf(request))) {
+    return notSaved(`${op.path}?user=${member.id}`);
+  }
   const refused = precheck(op, request, member);
   if (refused !== undefined) return refused;
   const input = { userId: member.id, revision: member.revision, now: deps.now() };

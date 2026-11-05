@@ -79,6 +79,8 @@ export type TargetChangeResult = { ok: true; target: PeoplePerson } | TargetRefu
 export type SwitchResult = { ok: true } | TargetRefusal;
 
 export interface TeamStore {
+  /** Whether the actor's session (and password, when given) still holds; the commit rechecks it. */
+  isGuardHeld: (guard: CredentialGuard) => boolean;
   /** One person of the People list, or undefined. */
   member: (id: number) => TeamMember | undefined;
   /**
@@ -480,6 +482,7 @@ export function createTeamStore(db: Database): TeamStore {
   const selectMember = db.query<TargetRow, [number]>(TARGET_SQL);
   return {
     ...memberMutations(db),
+    isGuardHeld: (guard) => isCredentialGuardHeld(db, guard),
     members: () => selectMembers.all().map(toMember),
     member: (id) => {
       const row = selectMember.get(id);
