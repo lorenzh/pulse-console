@@ -6,6 +6,7 @@ import {
   checkEditorHtml,
   checkTypeChoiceHtml,
   createInputOf,
+  NOT_KEPT_TEXT,
   type RetainedInput,
   retainedInputOf,
 } from "./check-editor-page.ts";
@@ -262,9 +263,13 @@ function postedTypeOf(fields: PageRequest["fields"]): CheckType | undefined {
 
 /** The kept non-secret input as text, without a form (R8 "text"). */
 function keptInputHtml(input: RetainedInput): string {
-  const entries = Object.entries(input.values).filter(([name]) => name !== "revision");
-  if (entries.length === 0) return "";
-  const items = entries
+  const entries = Object.entries(input.values).filter(
+    ([name]) => name !== "revision" && !input.dropped.has(name),
+  );
+  const dropped = [...input.dropped].map((name) => [name, NOT_KEPT_TEXT] as const);
+  const all = [...entries, ...dropped];
+  if (all.length === 0) return "";
+  const items = all
     .map(([name, value]) => `<dt>${escapeHtml(name)}</dt><dd>${escapeHtml(value)}</dd>`)
     .join("\n");
   return `<h2>Your input</h2>

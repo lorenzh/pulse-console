@@ -549,6 +549,44 @@ describe("kept input on create failures before the write", () => {
   }
 });
 
+describe("text failure pages name the dropped write-only values", () => {
+  const HB = {
+    type: "heartbeat",
+    id: "hb-new",
+    name: "HB new",
+    period_ms: "60000",
+    secret: HEARTBEAT_SECRET,
+  };
+  const cases: {
+    name: string;
+    status: number;
+    arrange: (api: ReturnType<typeof fakeApi>) => void;
+  }[] = [
+    {
+      name: "config read fails",
+      status: 502,
+      arrange: (api) => api.replyTo("GET", "/admin/config", { status: 503, headers: WIRE_HEADERS }),
+    },
+    {
+      name: "write answers 412",
+      status: 412,
+      arrange: (api) =>
+        api.replyTo("POST", "/admin/checks", { status: 412, headers: WIRE_HEADERS }),
+    },
+  ];
+  for (const item of cases) {
+    test(`${item.name}: secret shows the not-kept notice`, async () => {
+      const api = fakeApi();
+      item.arrange(api);
+      const res = await create(await teamConsole(api), HB);
+      expect(res.body).toContain("<dt>name</dt><dd>HB new</dd>");
+      expect(res.body).toContain("<dt>secret</dt><dd>Not kept for safety: enter it again.</dd>");
+      expect(res.body).not.toContain(HEARTBEAT_SECRET);
+      expect(res.status).toBe(item.status);
+    });
+  }
+});
+
 const BIG = 5 * 1024 * 1024 + 1;
 
 type OutcomeCase = {
