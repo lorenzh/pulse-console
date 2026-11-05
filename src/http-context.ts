@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { BodyError, type Logger, readBody } from "@lorenzh/pulse-kit";
+import type { PagePart } from "./account-pages.ts";
 import {
   type AccountStore,
   type Session,
@@ -22,6 +23,7 @@ import { expectedOrigin, isCsrfTokenValid, isOriginAllowed } from "./request-gua
 import type { ConsoleRole } from "./roles.ts";
 import type { ConsoleMode } from "./settings.ts";
 import type { SetupGate } from "./setup-code.ts";
+import { shellPage } from "./shell.ts";
 import type { TeamStore } from "./team-store.ts";
 
 const REFUSED = "Request refused. Reload the page and try again.";
@@ -218,6 +220,36 @@ export function sessionForm(ctx: Ctx): SessionForm {
     formToken: issue(ctx.path),
     signOutToken: issue("/sign-out"),
   };
+}
+
+/** Tokens for a session page without its own form: only the header's sign-out token. */
+export function signOutForm(ctx: Ctx): SessionForm {
+  const current = currentOf(ctx);
+  const signOutToken =
+    ctx.req.method === "HEAD"
+      ? ""
+      : ctx.state.formTokens.issue(`s:${sessionDigest(current.id)}`, "/sign-out");
+  return { csrf: current.session.csrfToken, formToken: "", signOutToken };
+}
+
+/** The effective role of a user; the test override `roleOf` wins. */
+export function roleOfUser(ctx: Ctx, user: User): ConsoleRole {
+  return ctx.deps.roleOf?.(user) ?? user.role;
+}
+
+/** An account page in the signed-in shell; it reuses the tokens of the response's one form. */
+export function accountShell(ctx: Ctx, form: SessionForm, part: PagePart): string {
+  const { user } = currentOf(ctx);
+  return shellPage({
+    instanceName: ctx.deps.instanceName,
+    user,
+    role: roleOfUser(ctx, user),
+    csrf: form.csrf,
+    signOutToken: form.signOutToken,
+    current: undefined,
+    title: part.title,
+    body: part.body,
+  });
 }
 
 /** Use a session form token immediately before its mutation; never count it as a guess. */

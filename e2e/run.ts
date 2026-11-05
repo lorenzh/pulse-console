@@ -154,6 +154,55 @@ async function assertFits(page: Page, width: number, label: string): Promise<voi
   assert(!result.hidden, `${label}: overflow hidden on the root`);
 }
 
+const ACCOUNT_ROUTES = [
+  "/account/security",
+  "/account/sessions",
+  "/account/sessions/sign-out-all",
+  "/account/recovery-codes",
+];
+
+/** The account page is in the shell, fits, and its Overview link goes to `/`. */
+async function assertAccountShell(page: Page, width: number, label: string): Promise<void> {
+  await assertFits(page, width, `${width}px ${label}`);
+  assert(await page.locator("header.shell-header").isVisible(), `${label}: header`);
+  assert(await page.locator('nav[aria-label="Main"]').isVisible(), `${label}: Main nav`);
+  assert((await page.locator("h1").count()) === 1, `${label}: one h1`);
+}
+
+async function checkAccountShell(env: Env, page: Page, width: number): Promise<void> {
+  const base = env.console.base;
+  const nav = page.locator('nav[aria-label="Main"]');
+  const visits: [string, () => Promise<unknown>][] = ACCOUNT_ROUTES.map((path) => [
+    path,
+    () => page.goto(base + path),
+  ]);
+  visits.push([
+    "wrong-password recovery confirmation",
+    async () => {
+      await page.goto(`${base}/account/recovery-codes`);
+      await page.fill('input[name="password"]', "wrong-password-for-the-check");
+      await page.getByRole("button", { name: "Create new recovery codes" }).click();
+      await page.getByText("Wrong password", { exact: false }).first().waitFor();
+    },
+  ]);
+  for (const [label, visit] of visits) {
+    await visit();
+    await assertAccountShell(page, width, label);
+    await Promise.all([
+      page.waitForURL(`${base}/`),
+      nav.getByRole("link", { name: "Overview", exact: true }).click(),
+    ]);
+  }
+  env.role.current = "viewer";
+  await page.goto(`${base}/account/security`);
+  assert((await nav.getByRole("link", { name: "Overview" }).count()) === 1, "viewer: Overview");
+  assert((await nav.getByRole("link", { name: "Team" }).count()) === 0, "viewer: no Team");
+  env.role.current = "owner";
+  ok(
+    `${width}px: ${ACCOUNT_ROUTES.join(", ")} and the wrong-password recovery confirmation fit, show header and Main nav, have 1 h1 and reach / through Overview; viewer has Overview and no Team`,
+  );
+}
+
 async function checkLayout(env: Env, browser: Browser, width: number, height: number) {
   const violations: string[] = [];
   const context = await browser.newContext({ viewport: { width, height } });
@@ -183,6 +232,7 @@ async function checkLayout(env: Env, browser: Browser, width: number, height: nu
   env.target.current = { name: "Checkout API", revision: "rev-1" };
   await page.goto(`${base}/team`);
   await assertFits(page, width, `${width}px team`);
+  await checkAccountShell(env, page, width);
   assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
   await context.close();
   ok(`${width} x ${height}: sign-in, 4 Overview states, 403, Team and every fixture page fit`);
@@ -206,6 +256,7 @@ async function checkAxe(env: Env, browser: Browser): Promise<void> {
   await axeOn(page, `${base}/`, "Overview");
   await axeOn(page, `${base}/does-not-exist`, "shell 404");
   await axeOn(page, `${base}/team`, "Team");
+  for (const path of ACCOUNT_ROUTES) await axeOn(page, base + path, path);
   env.role.current = "viewer";
   await axeOn(page, `${base}/__test/states/forbidden`, "shell 403");
   env.role.current = "owner";
@@ -405,6 +456,21 @@ async function checkPageShow(env: Env, page: Page): Promise<void> {
   ok("pageshow from the back/forward cache leaves the restored form usable");
 }
 
+/** Cancel on new recovery codes returns to security with the count unchanged. */
+async function checkCodesCancel(owner: Page, base: string): Promise<void> {
+  const left = /<p>(\d{1,2}) of 10 recovery codes left/;
+  await owner.goto(`${base}/account/security`);
+  const before = left.exec(await owner.content())?.[1];
+  await owner.goto(`${base}/account/recovery-codes`);
+  await Promise.all([
+    owner.waitForURL(`${base}/account/security`),
+    owner.getByRole("link", { name: "Cancel", exact: true }).click(),
+  ]);
+  const after = left.exec(await owner.content())?.[1];
+  assert(before !== undefined && before === after, `Cancel kept the count (${before}, ${after})`);
+  ok(`no JavaScript: recovery codes Cancel returns to /account/security with ${after} of 10 left`);
+}
+
 /** The account confirmations and two-browser revocation work with page JavaScript off. */
 async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
   const a = await browser.newContext({
@@ -423,6 +489,15 @@ async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
     await signIn(other, env);
     await owner.goto(`${base}/account/sessions/sign-out-all`);
     await Promise.all([
+      owner.waitForURL(`${base}/account/sessions`),
+      owner.getByRole("link", { name: "Cancel", exact: true }).click(),
+    ]);
+    const stillIn = await other.goto(`${base}/`);
+    assert(stillIn?.status() === 200, "Cancel leaves the other browser at 200");
+    assert((await other.content()).includes("Signed in as"), "Cancel keeps the other session");
+    ok("no JavaScript: sign out all Cancel returns to /account/sessions and signs nobody out");
+    await owner.goto(`${base}/account/sessions/sign-out-all`);
+    await Promise.all([
       owner.waitForURL(`${base}/account/sessions?signed-out=others`),
       owner.getByRole("button", { name: "Sign out all other sessions", exact: true }).click(),
     ]);
@@ -434,11 +509,20 @@ async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
     assert(other.url().includes("/sign-in?next="), "other browser is signed out");
     await owner.goto(`${base}/`);
     assert((await owner.content()).includes("Signed in as"), "current browser stays signed in");
+    await checkCodesCancel(owner, base);
     await owner.goto(`${base}/account/recovery-codes`);
     await owner.fill('input[name="password"]', OWNER_PASSWORD);
     await owner.getByRole("button", { name: "Create new recovery codes" }).click();
     const codes = await owner.locator("#recovery-codes li").allTextContents();
     assert(codes.length === 10, "new recovery codes confirmation shows ten codes");
+    assert((await owner.getByRole("link", { name: "Cancel" }).count()) === 0, "no Cancel");
+    await Promise.all([
+      owner.waitForURL(`${base}/account/security`),
+      owner.getByRole("link", { name: "Continue", exact: true }).click(),
+    ]);
+    ok(
+      "no JavaScript: new recovery codes shows 10 codes once and Continue reaches /account/security",
+    );
     // The old fixture codes stop working; later checks sign in with the new ones.
     env.console.recoveryCodes.splice(0, env.console.recoveryCodes.length, ...codes);
     await assertFits(owner, 390, "recovery codes");

@@ -3,6 +3,9 @@ import { csrfField, field, formTokenField, plainDocument as layout, paragraph } 
 
 import type { SessionForm } from "./http-context.ts";
 
+/** The title and body of a page that the signed-in shell wraps. */
+export type PagePart = { title: string; body: string };
+
 export const DECRYPT_FAILED_TEXT =
   "The authenticator secret cannot be read. Sign in with a recovery code.";
 export const NO_KEY_TEXT =
@@ -141,14 +144,17 @@ export function pendingExpiredPage(view: SessionForm, isReplace: boolean): strin
 }
 
 /** The account security overview. */
-export function securityPage(view: { confirmedAt: number | undefined; codesLeft: number }): string {
+export function securityPage(view: {
+  confirmedAt: number | undefined;
+  codesLeft: number;
+}): PagePart {
   const added =
     view.confirmedAt === undefined
       ? "<p>No authenticator app is set up.</p>"
       : `<p>Authenticator added ${escapeHtml(utcMinute(view.confirmedAt))}.</p>`;
-  return layout(
-    "Account security",
-    `${added}
+  return {
+    title: "Account security",
+    body: `${added}
 <p>${escapeHtml(String(view.codesLeft))} of 10 recovery codes left.</p>
 <ul class="links">
 <li><a href="/account/authenticator">Replace authenticator</a></li>
@@ -156,7 +162,7 @@ export function securityPage(view: { confirmedAt: number | undefined; codesLeft:
 <li><a href="/account/sessions">Sessions</a></li>
 <li><a href="/account/password">Change password</a></li>
 </ul>`,
-  );
+  };
 }
 
 /** The password confirmation before a new set of recovery codes. */
@@ -166,18 +172,19 @@ export function newCodesPage(
     codesLeft: number;
     error?: string | undefined;
   },
-): string {
-  return layout(
-    "New recovery codes",
-    `${alert(view.error)}<p>${escapeHtml(String(view.codesLeft))} of 10 recovery codes left.</p>
+): PagePart {
+  return {
+    title: "New recovery codes",
+    body: `${alert(view.error)}<p>${escapeHtml(String(view.codesLeft))} of 10 recovery codes left.</p>
 <p>Your current recovery codes stop working.</p>
 <form method="post" action="/account/recovery-codes">
 ${csrfField(view.csrf)}
 ${formTokenField(view.formToken)}
 ${field({ label: "Current password", name: "password", type: "password", autocomplete: "current-password" })}
-<div class="actions"><button type="submit">Create new recovery codes</button></div>
+<div class="actions"><button type="submit">Create new recovery codes</button>
+<a class="cancel" href="/account/security">Cancel</a></div>
 </form>`,
-  );
+  };
 }
 
 export interface SessionRow {
@@ -193,41 +200,38 @@ export function sessionsPage(
     rows: readonly SessionRow[];
     notice?: string | undefined;
   },
-): string {
+): PagePart {
   const rows = view.rows
     .map(
       (row) =>
         `<tr><td>${escapeHtml(utcMinute(row.createdAt))}</td><td>${escapeHtml(utcMinute(row.lastSeenAt))}</td><td>${row.isCurrent ? "This browser" : ""}</td></tr>`,
     )
     .join("\n");
-  return layout(
-    "Sessions",
-    `${paragraph(view.notice, ' role="status" class="notice"')}<table id="sessions">
+  return {
+    title: "Sessions",
+    body: `${paragraph(view.notice, ' role="status" class="notice"')}<table id="sessions">
 <thead><tr><th>Signed in</th><th>Last used</th><th></th></tr></thead>
 <tbody>
 ${rows}
 </tbody>
 </table>
 <p><a href="/account/sessions/sign-out-all">Sign out all other sessions</a></p>
-<form method="post" action="/sign-out">
-${csrfField(view.csrf)}
-${formTokenField(view.signOutToken)}
-<div class="actions"><button type="submit" class="secondary">Sign out</button></div>
-</form>`,
-  );
+<p><a href="/account/security">Back to account security</a></p>`,
+  };
 }
 
 /** The confirmation of sign out all: only the CSRF field and the button. */
-export function signOutAllPage(view: SessionForm, error?: string): string {
-  return layout(
-    "Sign out all other sessions",
-    `${alert(error)}<p>Sign out all other sessions? This browser stays signed in.</p>
+export function signOutAllPage(view: SessionForm, error?: string): PagePart {
+  return {
+    title: "Sign out all other sessions",
+    body: `${alert(error)}<p>Sign out all other sessions? This browser stays signed in.</p>
 <form method="post" action="/account/sessions/sign-out-all">
 ${csrfField(view.csrf)}
 ${formTokenField(view.formToken)}
-<div class="actions"><button type="submit">Sign out all other sessions</button></div>
+<div class="actions"><button type="submit">Sign out all other sessions</button>
+<a class="cancel" href="/account/sessions">Cancel</a></div>
 </form>`,
-  );
+  };
 }
 
 /** The only response that shows a set of recovery codes. */
