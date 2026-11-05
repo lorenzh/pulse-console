@@ -321,3 +321,33 @@ The export leaves out literal header values, bodies and heartbeat secrets and li
 entries. The export of a shadowed definition follows the same rules from the stored view: no
 `source`, no `hasSecret`, no keep marker, and no maintenance windows, because those belong to the
 check that runs.
+
+## Guidance and limits
+
+- Body line breaks: a browser submits the line breaks of a textarea as CRLF (HTML form rules).
+  The console sends the body unchanged, so the probe sends CRLF line breaks. Use a body without
+  line breaks, such as one-line JSON, when the target needs LF.
+- Headers: use one row per header name. Names are compared case-insensitively, so `Accept` and
+  `ACCEPT` are a duplicate (`422` on the second row), checked before the headers object is built.
+- Source and shadowing: a check in `checks.json` wins over a database check with the same id.
+  The database definition is then shown as `Shadowed by checks.json`; only Delete and Export are
+  possible. File checks are changed in `checks.json`, never in the console.
+- Write-only values: header values, the body and the heartbeat secret are never shown or
+  exported. An edit keeps them unless you choose Replace or Remove. A refused form drops them
+  with `Not kept for safety: enter it again.`; an expired edit or delete form keeps no input.
+- Quorum: every editor shows the fixed rule "Every probe runs this check. It is down when at
+  least two locations report down; with one reporting location, that location decides.
+  Choosing locations or a quorum per check is not available yet." Heartbeat editors show
+  "Heartbeat checks are not run by probes and have no quorum; your job pings pulse-api. With no
+  ping for longer than the period plus the grace time, the check is down at once." instead.
+- TLS and domain checks warn `warn_days` days before the certificate or registration expires.
+- Older pulse-api: an answer without database checks shows the old-api state; upgrade pulse-api.
+- Typed delete: the typed name and the check's name are both trimmed and NFC-normalized, so outer
+  spaces do not count; inner spaces and case do.
+- Tokens: the CSRF value and the form token appear only in the hidden `csrf` and `form_token`
+  controls of a form, including the shell's sign-out form on error pages. They never appear in
+  other HTML, headers (apart from the session's own `Set-Cookie`), redirects, downloads, logs or
+  `/metrics`.
+- Proxy limit: the outcome relies on pulse-api's wire header. A proxy that strips it turns every
+  answer into `unknown`; one that adds it to its own answers can make a refusal look like
+  pulse-api's.

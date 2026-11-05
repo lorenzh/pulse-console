@@ -10,6 +10,8 @@ export type FakeReply = {
   isHeld?: boolean;
   /** When set, the reply waits until this promise resolves. */
   gate?: Promise<void>;
+  /** Runs once the reply is chosen, so a stateful test can change later replies. */
+  after?: () => void;
 };
 
 /** One request the fake api received. */
@@ -101,6 +103,7 @@ export function startFakeApi(): FakeApi {
         return new Promise<Response>(() => undefined);
       }
       if (reply.gate !== undefined) await reply.gate;
+      reply.after?.();
       return new Response(reply.body ?? UPSTREAM_SENTINEL, {
         status: reply.status,
         headers: reply.headers ?? {},
