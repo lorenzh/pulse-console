@@ -1,258 +1,32 @@
-/* eslint-disable sonarjs/no-clear-text-protocols -- loopback test servers */
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { createHmac } from "node:crypto";
-import {
-  chmodSync,
-  closeSync,
-  mkdtempSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
-import type { Server } from "node:http";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createLogger } from "@lorenzh/pulse-kit";
-import { createAccountStore } from "./account-store.ts";
-import { openDatabase } from "./database.ts";
-import { createFactorStore } from "./factor-store.ts";
-import { createMetrics, type Metrics } from "./metrics.ts";
-import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
-import { createConsoleServer, listen } from "./server.ts";
+import {
+  base32Decode,
+  Client,
+  closeAll,
+  count,
+  csrfIn,
+  DECRYPT_TEXT,
+  EMAIL,
+  enrol,
+  enrolledConsole,
+  KEY,
+  KEY_HEX,
+  OTHER_KEY,
+  PASSWORD,
+  type Reply,
+  SESSION,
+  STEP_MS,
+  startConsole,
+  stepAt,
+  storedSecret,
+  totpCode,
+} from "./two-factor-harness.ts";
 import { isSecondFactorRequired, signInStage } from "./two-factor-policy.ts";
 
-const PASSWORD = "factor-password-sentinel-42";
-const EMAIL = "owner-factor@example.com";
-const KEY_HEX = "0123456789abcdef".repeat(4);
-const KEY = Uint8Array.from(Buffer.from(KEY_HEX, "hex"));
-const OTHER_KEY = Uint8Array.from(Buffer.from("fedcba9876543210".repeat(4), "hex"));
-// A step boundary: 30000 * 56666667.
-const START = 1_700_000_010_000;
-const STEP_MS = 30_000;
-const SESSION = "pulse_console_session";
-const DECRYPT_TEXT = "The authenticator secret cannot be read. Sign in with a recovery code.";
-
-const cleanups: (() => void | Promise<void>)[] = [];
-afterEach(async () => {
-  for (const fn of cleanups.splice(0).reverse()) await fn();
-});
-
-/** RFC 4648 base32 decoding, written here so it does not depend on the code under test. */
-function base32Decode(text: string): Buffer {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  let bits = "";
-  for (const ch of text.replaceAll(" ", ""))
-    bits += alphabet.indexOf(ch).toString(2).padStart(5, "0");
-  const bytes: number[] = [];
-  for (let i = 0; i + 8 <= bits.length; i += 8)
-    bytes.push(Number.parseInt(bits.slice(i, i + 8), 2));
-  return Buffer.from(bytes);
-}
-
-/** RFC 6238 SHA-1, 6 digits, over node:crypto. */
-function totpCode(seed: Uint8Array, step: number): string {
-  const counter = Buffer.alloc(8);
-  counter.writeBigUInt64BE(BigInt(step));
-  const mac = createHmac("sha1", seed).update(counter).digest();
-  const offset = (mac[19] ?? 0) & 0xf;
-  return String((mac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, "0");
-}
-
-function stepAt(ms: number): number {
-  return Math.floor(ms / STEP_MS);
-}
-
-let ownerHash: string | undefined;
-async function hashOnce(): Promise<string> {
-  ownerHash ??= await Bun.password.hash(PASSWORD, PASSWORD_HASH_OPTIONS);
-  return ownerHash;
-}
-
-function tempDb(): string {
-  const dir = mkdtempSync(join(tmpdir(), "console-factor-"));
-  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
-  return join(dir, "console.db");
-}
-
-type Console = {
-  base: string;
-  dbPath: string;
-  clock: { now: number };
-  logs: string[];
-  metrics: Metrics;
-};
-
-async function startConsole(
-  opts: { dbPath?: string; clock?: { now: number }; key?: Uint8Array | null } = {},
-): Promise<Console> {
-  const dbPath = opts.dbPath ?? tempDb();
-  const db = openDatabase(dbPath, {
-    createFile: (path, mode) => closeSync(openSync(path, "wx", mode)),
-    chmod: chmodSync,
-  });
-  const store = createAccountStore(db);
-  if (store.instance() === undefined) {
-    store.completeSetup(
-      { email: EMAIL, name: "Owner", passwordHash: await hashOnce() },
-      "http://api.example:3000",
-      START,
-    );
-  }
-  const clock = opts.clock ?? { now: START };
-  const logs: string[] = [];
-  const metrics = createMetrics();
-  const server: Server = createConsoleServer({
-    metrics,
-    log: createLogger({ level: "debug", write: (_level, line) => logs.push(line) }),
-    mode: "loopback",
-    publicOrigin: undefined,
-    defaultApiUrl: "http://api.invalid:3000",
-    adminToken: undefined,
-    store,
-    factorStore: createFactorStore(db),
-    secretKey: opts.key === null ? undefined : (opts.key ?? KEY),
-    gate: undefined,
-    now: () => clock.now,
-    randomBytes: (size) => crypto.getRandomValues(new Uint8Array(size)),
-    hashPassword: (pw) => Bun.password.hash(pw, PASSWORD_HASH_OPTIONS),
-    verifier: await createCredentialVerifier({
-      hash: (pw) => Bun.password.hash(pw, PASSWORD_HASH_OPTIONS),
-      verify: (pw, hash) => Bun.password.verify(pw, hash),
-      dummySecret: "dummy secret for tests",
-    }),
-    fetch,
-  });
-  const port = await listen(server, "127.0.0.1", 0);
-  cleanups.push(
-    () =>
-      new Promise<void>((resolve) => {
-        server.close(() => {
-          db.close();
-          resolve();
-        });
-        server.closeAllConnections();
-      }),
-  );
-  return { base: `http://127.0.0.1:${port}`, dbPath, clock, logs, metrics };
-}
-
-type Reply = { status: number; headers: Headers; body: string };
-
-function csrfIn(body: string): string {
-  return /name="csrf" value="([^"]+)"/.exec(body)?.[1] ?? "";
-}
-
-class Client {
-  readonly jar = new Map<string, string>();
-  c: Console;
-  constructor(c: Console) {
-    this.c = c;
-  }
-
-  private remember(res: Response): void {
-    for (const line of res.headers.getSetCookie()) {
-      const [pair = ""] = line.split(";");
-      const index = pair.indexOf("=");
-      if (line.includes("Max-Age=0")) this.jar.delete(pair.slice(0, index));
-      else this.jar.set(pair.slice(0, index), pair.slice(index + 1));
-    }
-  }
-
-  async request(method: string, path: string, fields?: Record<string, string>): Promise<Reply> {
-    const cookie = [...this.jar].map(([k, v]) => `${k}=${v}`).join("; ");
-    const headers: Record<string, string> = { cookie };
-    if (fields !== undefined) {
-      headers.origin = this.c.base;
-      headers["content-type"] = "application/x-www-form-urlencoded";
-    }
-    const res = await fetch(this.c.base + path, {
-      method,
-      redirect: "manual",
-      headers,
-      ...(fields === undefined ? {} : { body: new URLSearchParams(fields).toString() }),
-    });
-    this.remember(res);
-    return { status: res.status, headers: res.headers, body: await res.text() };
-  }
-
-  get(path: string): Promise<Reply> {
-    return this.request("GET", path);
-  }
-
-  post(path: string, fields: Record<string, string>): Promise<Reply> {
-    return this.request("POST", path, fields);
-  }
-
-  async password(next = "/"): Promise<Reply> {
-    const page = await this.get("/sign-in");
-    return this.post("/sign-in", {
-      csrf: csrfIn(page.body),
-      email: EMAIL,
-      password: PASSWORD,
-      next,
-    });
-  }
-
-  /** Posts one second factor with the CSRF token of the factor page. */
-  async factor(fields: { code?: string; recovery_code?: string }): Promise<Reply> {
-    const page = await this.get("/sign-in/factor");
-    return this.post("/sign-in/factor", { csrf: csrfIn(page.body), ...fields });
-  }
-}
-
-type Enrolled = { seed: Buffer; key: string; codes: string[]; confirmed: Reply };
-
-/** Enrols from an `enrol` session: a new setup key, then the code of the injected time. */
-async function enrol(client: Client): Promise<Enrolled> {
-  const start = await client.get("/account/authenticator");
-  expect(start.status).toBe(200);
-  const created = await client.post("/account/authenticator", {
-    csrf: csrfIn(start.body),
-    action: "new",
-  });
-  expect(created.status).toBe(303);
-  const page = await client.get("/account/authenticator");
-  const key = /id="totp-secret">([A-Z2-7 ]+)</.exec(page.body)?.[1] ?? "";
-  const seed = base32Decode(key);
-  const confirmed = await client.post("/account/authenticator", {
-    csrf: csrfIn(page.body),
-    action: "confirm",
-    code: totpCode(seed, stepAt(client.c.clock.now)),
-  });
-  expect(confirmed.status).toBe(200);
-  const codes = [...confirmed.body.matchAll(/<li><code>([^<]+)<\/code><\/li>/g)].map(
-    (m) => m[1] ?? "",
-  );
-  return { seed, key, codes, confirmed };
-}
-
-/** A console with an enrolled owner; the clock moves one step past the enrolment. */
-async function enrolledConsole(
-  opts: { key?: Uint8Array } = {},
-): Promise<{ c: Console } & Enrolled> {
-  const c = await startConsole(opts);
-  const owner = new Client(c);
-  expect((await owner.password()).headers.get("location")).toBe("/account/authenticator");
-  const enrolled = await enrol(owner);
-  c.clock.now += STEP_MS;
-  return { c, ...enrolled };
-}
-
-function count(dbPath: string, sql: string): number {
-  const db = new Database(dbPath, { readonly: true });
-  const row = db.query<{ n: number }, []>(sql).get();
-  db.close();
-  return row?.n ?? -1;
-}
-
-function storedSecret(dbPath: string): string {
-  const db = new Database(dbPath, { readonly: true });
-  const row = db.query<{ secret: string }, []>("SELECT secret FROM authenticators").get();
-  db.close();
-  return row?.secret ?? "";
-}
+afterEach(closeAll);
 
 describe("policy", () => {
   test("the owner must have a second factor; signInStage covers every branch", () => {
@@ -504,6 +278,8 @@ describe("TOTP sign-in", () => {
     expect(c.logs.some((l) => l.includes('"signed in"') && l.includes('"factor":"totp"'))).toBe(
       true,
     );
+    expect((await client.get("/sign-in/factor")).headers.get("location")).toBe("/");
+    expect((await client.get("/sign-in")).headers.get("location")).toBe("/");
   });
 
   test("the same code from a second factor session in the same step is 401", async () => {
@@ -531,7 +307,7 @@ describe("TOTP sign-in", () => {
       a.post("/sign-in/factor", { csrf: csrfIn(pa.body), code }),
       b.post("/sign-in/factor", { csrf: csrfIn(pb.body), code }),
     ]);
-    expect(replies.map((r) => r.status).sort()).toEqual([303, 401]);
+    expect(replies.map((r) => r.status).sort((x, y) => x - y)).toEqual([303, 401]);
   });
 
   test("after a reopen the used step is 401 and the next step is 303", async () => {

@@ -152,6 +152,75 @@ describe("app routes", () => {
   });
 });
 
+const NEW_ROUTES: Readonly<Record<string, readonly string[]>> = {
+  "/sign-in/factor": ["GET", "HEAD", "POST"],
+  "/account/authenticator": ["GET", "HEAD", "POST"],
+  "/account/security": ["GET", "HEAD"],
+  "/account/recovery-codes": ["GET", "HEAD", "POST"],
+  "/account/sessions": ["GET", "HEAD"],
+  "/account/sessions/sign-out-all": ["GET", "HEAD", "POST"],
+};
+
+async function beforeSetupAnswers(base: string, cookie: string): Promise<string[]> {
+  const answers: string[] = [];
+  const ask = async (method: string, path: string): Promise<void> => {
+    const res = await fetch(base + path, {
+      method,
+      redirect: "manual",
+      headers: {
+        cookie,
+        origin: base,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      ...(method === "POST" ? { body: "csrf=x" } : {}),
+    });
+    answers.push(`${method} ${path} ${res.status} ${res.headers.get("location") ?? ""}`);
+  };
+  for (const [method, path] of [
+    ["GET", "/"],
+    ["HEAD", "/"],
+    ["GET", "/sign-in"],
+    ["HEAD", "/sign-in"],
+    ["POST", "/sign-in"],
+    ["POST", "/sign-out"],
+  ]) {
+    await ask(method ?? "", path ?? "");
+  }
+  for (const [path, methods] of Object.entries(NEW_ROUTES)) {
+    for (const method of methods) await ask(method, path);
+    await ask("DELETE", path);
+  }
+  return answers;
+}
+
+const BEFORE_SETUP = [
+  "GET / 303 /setup",
+  "HEAD / 303 /setup",
+  "GET /sign-in 303 /setup",
+  "HEAD /sign-in 303 /setup",
+  "POST /sign-in 404 ",
+  "POST /sign-out 303 /sign-in",
+  ...Object.entries(NEW_ROUTES).flatMap(([path, methods]) => [
+    ...methods.map((m) => `${m} ${path} 404 `),
+    `DELETE ${path} 405 `,
+  ]),
+];
+
+describe("routes before setup", () => {
+  test("routes before setup keep #562 answers and the new routes are 404, with and without a cookie", async () => {
+    const { base } = await start();
+    const dbPath = join(dirs.at(-1) ?? "", "console.db");
+    expect(await beforeSetupAnswers(base, "")).toEqual(BEFORE_SETUP);
+    expect(await beforeSetupAnswers(base, `pulse_console_session=${"A".repeat(43)}`)).toEqual(
+      BEFORE_SETUP,
+    );
+    const db = openDatabase(dbPath, { createFile: () => undefined, chmod: chmodSync });
+    const rows = db.query<{ n: number }, []>("SELECT count(*) AS n FROM sessions").get();
+    db.close();
+    expect(rows?.n).toBe(0);
+  });
+});
+
 describe("ops routes", () => {
   test("/healthz and /readyz answer ok with the security headers", async () => {
     const { base } = await start();

@@ -216,3 +216,76 @@ describe("PULSE_CONSOLE_PUBLIC_URL and the mode", () => {
     );
   });
 });
+
+describe("PULSE_CONSOLE_SECRET_KEY_FILE", () => {
+  const KEY_HEX = "0123456789abcdef".repeat(4);
+  const files: Record<string, string> = {
+    "/run/key": `${KEY_HEX}\n`,
+    "/run/short": "0".repeat(63),
+    "/run/upper": KEY_HEX.toUpperCase(),
+    "/run/two-newlines": `${KEY_HEX}\n\n`,
+    "/run/same": KEY_HEX,
+  };
+  function read(path: string): string {
+    const text = files[path];
+    if (text === undefined) {
+      throw Object.assign(new Error(`ENOENT ${path}`), { code: "ENOENT" });
+    }
+    return text;
+  }
+  function keyFailure(env: Record<string, string>): string {
+    try {
+      readSettings({ PULSE_API_URL: API, ...env }, read);
+    } catch (err) {
+      expect(err).toBeInstanceOf(StartupError);
+      return err instanceof Error ? err.message : "";
+    }
+    throw new Error("readSettings did not throw");
+  }
+
+  test("a valid file with one trailing newline gives the 32 key bytes; unset gives none", () => {
+    const s = readSettings({ PULSE_API_URL: API, PULSE_CONSOLE_SECRET_KEY_FILE: "/run/key" }, read);
+    expect(Buffer.from(s.secretKey ?? new Uint8Array()).toString("hex")).toBe(KEY_HEX);
+    expect(readSettings({ PULSE_API_URL: API }, read).secretKey).toBeUndefined();
+  });
+
+  test("each start error has its literal text and never the file content", () => {
+    const cases: [string, string, Record<string, string>][] = [
+      ["/run/missing", "PULSE_CONSOLE_SECRET_KEY_FILE=/run/missing: cannot read (ENOENT)", {}],
+      [
+        "/run/short",
+        "PULSE_CONSOLE_SECRET_KEY_FILE=/run/short: must hold 64 lowercase hex characters",
+        {},
+      ],
+      [
+        "/run/upper",
+        "PULSE_CONSOLE_SECRET_KEY_FILE=/run/upper: must hold 64 lowercase hex characters",
+        {},
+      ],
+      [
+        "/run/two-newlines",
+        "PULSE_CONSOLE_SECRET_KEY_FILE=/run/two-newlines: must hold 64 lowercase hex characters",
+        {},
+      ],
+      [
+        "/run/same",
+        "PULSE_CONSOLE_SECRET_KEY_FILE=/run/same: must differ from the admin token",
+        { PULSE_CONSOLE_ADMIN_TOKEN: KEY_HEX },
+      ],
+    ];
+    for (const [path, text, extra] of cases) {
+      const message = keyFailure({ PULSE_CONSOLE_SECRET_KEY_FILE: path, ...extra });
+      expect(message).toBe(text);
+      expect(message.toLowerCase()).not.toContain(KEY_HEX);
+    }
+  });
+
+  test("the key is checked after the admin token", () => {
+    expect(
+      keyFailure({
+        PULSE_CONSOLE_ADMIN_TOKEN: "short",
+        PULSE_CONSOLE_SECRET_KEY_FILE: "/run/short",
+      }),
+    ).toBe("PULSE_CONSOLE_ADMIN_TOKEN must hold at least 32 characters");
+  });
+});
