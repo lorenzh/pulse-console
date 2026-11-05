@@ -988,6 +988,8 @@ const EDITORS: [string, boolean][] = [
   ["/checks/new?type=heartbeat", true],
   ["/checks/edit?id=web", false],
   ["/checks/edit?id=cert", false],
+  ["/checks/edit?id=db-port-db", false],
+  ["/checks/edit?id=dns-db", false],
   ["/checks/edit?id=domain-exp", false],
   ["/checks/edit?id=nightly-backup", true],
 ];
@@ -1019,7 +1021,18 @@ async function assertQuorumText(page: Page, url: string, isHeartbeat: boolean): 
 
 function startChecksApi(): ReturnType<typeof startFakeApi> {
   const api = startFakeApi();
-  api.reply("/admin/config", jsonReply(checkConfig));
+  // The fixture's TCP and DNS checks come from checks.json; these database copies have an editor.
+  const editable = checkConfig.checks
+    .filter((c) => c.source === "file")
+    .map((c) => ({
+      ...c,
+      id: "type" in c && c.type === "tcp" ? "db-port-db" : "dns-db",
+      source: "database",
+    }));
+  api.reply(
+    "/admin/config",
+    jsonReply({ ...checkConfig, checks: [...checkConfig.checks, ...editable] }),
+  );
   api.reply("/checks", jsonReply([webState, ...checkStates.slice(1)]));
   api.reply("/admin/config/export", jsonReply(checkExport));
   api.reply("/uptime", jsonReply(checkUptime));
@@ -1068,7 +1081,7 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
       nav.getByRole("link", { name: "Checks", exact: true }).click(),
     ]);
     assert(
-      (await page.getByText("6 checks, 1 shadowed definition").count()) === 1,
+      (await page.getByText("8 checks, 1 shadowed definition").count()) === 1,
       `${label}: counts`,
     );
     await assertFits(page, 390, `${label} list`);
@@ -1238,6 +1251,49 @@ async function editAndConflict(page: Page, base: string, state: StatefulApi, lab
   assert((await page.locator('input[name="name"]').count()) === 1, `${label}: reopened editor`);
 }
 
+/** Edit every created type: a 412 keeps input, Reload reopens the editor, the next PUT saves. */
+async function editEachType(page: Page, base: string, state: StatefulApi, label: string) {
+  for (const c of CREATE_CASES) {
+    const url = `${base}/checks/edit?id=${c.id}`;
+    const path = `/admin/checks/${c.id}`;
+    state.api.replyTo("PUT", path, { status: 412, body: "{}", headers: WIRE });
+    await page.goto(url);
+    await page.fill('input[name="name"]', `E2E ${c.type} conflict`);
+    await submitForm(page);
+    assert(
+      (await page.getByText("Changed since you opened it").count()) === 1,
+      `${label}: ${c.type} edit 412 shows the conflict ${await alertText(page)}`,
+    );
+    assert(
+      (await page.getByText(`E2E ${c.type} conflict`).count()) >= 1,
+      `${label}: ${c.type} conflict keeps input`,
+    );
+    await Promise.all([
+      page.waitForURL(url),
+      page.getByRole("link", { name: "Reload", exact: true }).click(),
+    ]);
+    assert(
+      (await page.locator('input[name="name"]').count()) === 1,
+      `${label}: ${c.type} reopened editor`,
+    );
+    state.api.replyTo("PUT", path, {
+      status: 200,
+      body: "{}",
+      headers: { ...WIRE, etag: `"${NEW_REVISION}"` },
+    });
+    await page.fill('input[name="name"]', `E2E ${c.type} edited`);
+    await submitForm(page);
+    assert(
+      page.url() === `${base}/checks/check?id=${c.id}&saved=1`,
+      `${label}: ${c.type} edit redirects, got ${page.url()} ${await alertText(page)}`,
+    );
+    const puts = state.api.seen.filter((s) => s.method === "PUT" && s.rawPath === path);
+    assert(puts.length === 2, `${label}: ${c.type} sent 2 PUTs, got ${puts.length}`);
+    const sent = JSON.parse(puts.at(-1)?.body ?? "{}") as { name?: unknown; type?: unknown };
+    assert(sent.name === `E2E ${c.type} edited`, `${label}: ${c.type} PUT carries the new name`);
+  }
+}
+
 async function exportAndFilter(page: Page, base: string, label: string) {
   const res = await page.request.get(`${base}/checks/export?id=dns-a&shadowed=1`);
   assert(res.status() === 200, `${label}: shadowed export 200`);
@@ -1306,11 +1362,12 @@ async function checkWriteFlowsWith(browser: Browser, hasScript: boolean): Promis
     await signIn(page, local);
     await createEach(page, server.base, state, label);
     await editAndConflict(page, server.base, state, label);
+    await editEachType(page, server.base, state, label);
     await exportAndFilter(page, server.base, label);
     await typedDelete(page, server.base, state, label);
     assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
     ok(
-      `Check writes, ${label}: created ${CREATE_CASES.map((c) => c.type).join("/")}, edit kept the stored header and body, 412 kept input and Reload reopened the editor, redacted no-store shadowed export, composed filters, typed delete of " Checkout API " (wrong spacing sent no DELETE), 0 CSP violations`,
+      `Check writes, ${label}: created ${CREATE_CASES.map((c) => c.type).join("/")}, edited each type after a 412 and Reload, edit kept the stored header and body, 412 kept input and Reload reopened the editor, redacted no-store shadowed export, composed filters, typed delete of " Checkout API " (wrong spacing sent no DELETE), 0 CSP violations`,
     );
   } finally {
     await context.close();
