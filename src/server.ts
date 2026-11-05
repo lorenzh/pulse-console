@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { clientKeyOf, handleOps, type OpsHandlers, StartupError } from "@lorenzh/pulse-kit";
-import { linkOfPath, linkOrigin, linkPathLabel } from "./account-links.ts";
+import { isLinkPrefixedPath, linkOfPath, linkOrigin, linkPathLabel } from "./account-links.ts";
 import {
   postAuthenticator,
   postNewCodes,
@@ -981,6 +981,10 @@ async function handleApp(ctx: Ctx): Promise<void> {
   const link = linkOfPath(ctx.path);
   if (link?.kind === "invite") {
     await handleInviteLink(ctx, method, isSetUp, link.token);
+    return;
+  }
+  if (isLinkPrefixedPath(ctx.path)) {
+    sendText(ctx, 404, NOT_FOUND);
     return;
   }
   const protectedRoute = ctx.state.protectedRoutes.get(ctx.path);

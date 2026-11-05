@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, openSync, readFileSync } from "node:fs";
-import type { Server } from "node:http";
+import { request, type Server } from "node:http";
 import { createLogger } from "@lorenzh/pulse-kit";
 import {
   formTokenOf,
@@ -342,6 +342,32 @@ describe("accept", () => {
     expect(r.headers.get("allow")).toBe("GET, HEAD, POST");
   });
 
+  test("malformed link paths are the plain 404 with or without a session", async () => {
+    const c = await team();
+    const paths = [
+      `/invite/${"A".repeat(43)}/`,
+      `/invite/${"A".repeat(42)}`,
+      `/invite/${"A".repeat(44)}`,
+      "/invite/%2e%2e",
+      `//invite/${"A".repeat(43)}`,
+      `/invite/${"A".repeat(43)}/x`,
+      "/invite/",
+      `/reset/${"A".repeat(43)}/`,
+      `/reset/${"A".repeat(42)}`,
+      `//reset/${"A".repeat(43)}`,
+    ];
+    for (const path of paths) {
+      for (const cookie of ["", c.cookies.admin, c.cookies.member]) {
+        const page = await rawGet(c.base, path, cookie);
+        expect({ path, ...page }).toEqual({
+          path,
+          status: 404,
+          body: "not found\n",
+        });
+      }
+    }
+  });
+
   test("an invite of a removed or demoted creator answers 404", async () => {
     const c = await team();
     const { token } = await createInvite(c);
@@ -555,3 +581,27 @@ describe("People log and restart", () => {
     expect(r.body).toContain("<p>Email: new@example.com</p>");
   });
 });
+
+/** A GET that sends the path verbatim; fetch would normalise `%2e%2e`. */
+function rawGet(
+  base: string,
+  path: string,
+  cookie: string,
+): Promise<{ status: number; body: string }> {
+  const url = new URL(base);
+  return new Promise((resolve, reject) => {
+    const req = request(
+      { host: url.hostname, port: url.port, path, headers: cookie === "" ? {} : { cookie } },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
