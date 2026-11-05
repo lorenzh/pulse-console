@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { StartupError } from "@lorenzh/pulse-kit";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 export const DB_FILE_MODE = 0o600;
 
 /** File operations that `openDatabase` needs; `main.ts` wires the real `node:fs` ones. */
@@ -33,6 +33,41 @@ CREATE TABLE sessions (
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL
 );
+`;
+
+// Schema 2 drops the schema-1 sessions: their rows have no stage, so every browser signs in again.
+const MIGRATION_2 = `
+DROP TABLE sessions;
+CREATE TABLE sessions (
+  id_digest TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  csrf_token TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  stage TEXT NOT NULL CHECK (stage IN ('factor', 'enrol', 'full')),
+  next_path TEXT
+);
+CREATE INDEX sessions_user_id ON sessions(user_id);
+CREATE TABLE authenticators (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  secret TEXT NOT NULL,
+  last_step INTEGER NOT NULL,
+  confirmed_at INTEGER NOT NULL
+);
+CREATE TABLE pending_authenticators (
+  session_digest TEXT PRIMARY KEY REFERENCES sessions(id_digest) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  secret TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE recovery_codes (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  digest TEXT NOT NULL CHECK (length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*'),
+  used_at INTEGER,
+  UNIQUE (user_id, digest)
+);
+CREATE INDEX recovery_codes_user_id ON recovery_codes(user_id);
 `;
 
 function codeOf(err: unknown): string {
@@ -78,7 +113,13 @@ function migrate(db: Database, path: string): void {
   if (version === 0) {
     db.transaction(() => {
       db.run(MIGRATION_1);
-      db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+      db.run("PRAGMA user_version = 1");
+    }).immediate();
+  }
+  if (version <= 1) {
+    db.transaction(() => {
+      db.run(MIGRATION_2);
+      db.run("PRAGMA user_version = 2");
     }).immediate();
   }
 }

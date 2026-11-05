@@ -188,12 +188,12 @@ test("database start errors exit 2 with their literal text and print no code", a
   writeFileSync(corrupt, Buffer.alloc(4096, 0xab));
   const newer = join(dir, "newer.db");
   const db = new Database(newer);
-  db.run("PRAGMA user_version = 2");
+  db.run("PRAGMA user_version = 3");
   db.close();
   for (const [path, text] of [
     [missing, `PULSE_CONSOLE_DB=${missing}: cannot open (ENOENT)`],
     [corrupt, `PULSE_CONSOLE_DB=${corrupt}: cannot open (SQLITE_NOTADB)`],
-    [newer, `PULSE_CONSOLE_DB=${newer}: schema version 2 is newer than this console (1)`],
+    [newer, `PULSE_CONSOLE_DB=${newer}: schema version 3 is newer than this console (2)`],
   ] as const) {
     const r = await collect(spawnMain({ PULSE_API_URL: API_URL, PULSE_CONSOLE_DB: path }));
     assertOneLine(r, `pulse-console: ${text}`);
