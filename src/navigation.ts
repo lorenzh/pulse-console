@@ -23,7 +23,7 @@ export type NavEntry = {
 // Minimum roles follow the role matrix of #564.
 export const NAVIGATION: readonly NavEntry[] = [
   { id: "overview", label: "Overview", path: "/", minRole: "viewer", isAvailable: true },
-  { id: "checks", label: "Checks", path: "/checks", minRole: "viewer", isAvailable: false },
+  { id: "checks", label: "Checks", path: "/checks", minRole: "viewer", isAvailable: true },
   {
     id: "incidents",
     label: "Incidents",

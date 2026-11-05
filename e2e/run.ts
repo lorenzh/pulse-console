@@ -5,6 +5,16 @@ import { randomBytes } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
 import type { ConsoleRole } from "../src/roles.ts";
+import {
+  checkConfig,
+  checkExport,
+  checkStates,
+  checkUptime,
+  webLatency,
+  webLocationUptime,
+  webResults,
+  webState,
+} from "../test/check-fixtures.ts";
 import { checkWithState, emptyConfig, jsonReply, startFakeApi } from "../test/fake-api.ts";
 import {
   type ConfirmTargetHolder,
@@ -965,6 +975,407 @@ async function checkResetAndPassword(env: Env, browser: Browser): Promise<void> 
   }
 }
 
+const HOST_LINE = String.raw`PULSE_PROBE_HEADER_HOSTS='{"PULSE_HEADER_TOKEN":["a'\'';id;'\''b"]}'`;
+const PROBE_QUORUM =
+  "Every probe runs this check. It is down when at least two locations report down; with one reporting location, that location decides. Choosing locations or a quorum per check is not available yet.";
+const HEARTBEAT_RULE =
+  "Heartbeat checks are not run by probes and have no quorum; your job pings pulse-api. With no ping for longer than the period plus the grace time, the check is down at once.";
+const EDITORS: [string, boolean][] = [
+  ...["http", "tls", "tcp", "dns", "domain"].map((t): [string, boolean] => [
+    `/checks/new?type=${t}`,
+    false,
+  ]),
+  ["/checks/new?type=heartbeat", true],
+  ["/checks/edit?id=web", false],
+  ["/checks/edit?id=cert", false],
+  ["/checks/edit?id=db-port-db", false],
+  ["/checks/edit?id=dns-db", false],
+  ["/checks/edit?id=domain-exp", false],
+  ["/checks/edit?id=nightly-backup", true],
+];
+
+/** The paragraph above Submit is the fixed rule; no editor has a quorum or location input. */
+async function assertQuorumText(page: Page, url: string, isHeartbeat: boolean): Promise<void> {
+  await page.goto(url);
+  const found = await page.evaluate(() => {
+    const texts = [...document.querySelectorAll("form p")]
+      .filter((p) => {
+        const submit = p.closest("form")?.querySelector('button[type="submit"]');
+        return submit != null && (p.compareDocumentPosition(submit) & 4) !== 0;
+      })
+      .map((p) => p.textContent?.trim() ?? "");
+    const names = [...document.querySelectorAll("input, select, textarea")].map(
+      (el) => el.getAttribute("name") ?? "",
+    );
+    return { texts, names };
+  });
+  const expected = isHeartbeat ? HEARTBEAT_RULE : PROBE_QUORUM;
+  const other = isHeartbeat ? PROBE_QUORUM : HEARTBEAT_RULE;
+  assert(found.texts.includes(expected), `${url}: rule paragraph above Submit`);
+  assert(!found.texts.includes(other), `${url}: no other rule paragraph`);
+  assert(
+    !found.names.some((n) => /quorum|location/i.test(n)),
+    `${url}: no quorum or location input`,
+  );
+}
+
+function startChecksApi(): ReturnType<typeof startFakeApi> {
+  const api = startFakeApi();
+  // The fixture's TCP and DNS checks come from checks.json; these database copies have an editor.
+  const editable = checkConfig.checks
+    .filter((c) => c.source === "file")
+    .map((c) => ({
+      ...c,
+      id: "type" in c && c.type === "tcp" ? "db-port-db" : "dns-db",
+      source: "database",
+    }));
+  api.reply(
+    "/admin/config",
+    jsonReply({ ...checkConfig, checks: [...checkConfig.checks, ...editable] }),
+  );
+  api.reply("/checks", jsonReply([webState, ...checkStates.slice(1)]));
+  api.reply("/admin/config/export", jsonReply(checkExport));
+  api.reply("/uptime", jsonReply(checkUptime));
+  api.reply("/checks/web/results", jsonReply(webResults));
+  api.reply("/checks/web/location-uptime", jsonReply(webLocationUptime));
+  api.reply("/checks/web/latency", jsonReply(webLatency));
+  return api;
+}
+
+async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const env = await startEnv(0);
+  env.api.stop();
+  const api = startChecksApi();
+  const server = await startSignedInConsole({
+    apiUrl: api.url,
+    ownerEmail: env.ownerEmail,
+    adminToken: ADMIN_TOKEN,
+  });
+  await env.console.close();
+  const local: Env = { ...env, console: server, api };
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    javaScriptEnabled: hasScript,
+  });
+  await context.addInitScript(() => {
+    const copied: string[] = [];
+    Object.assign(window, { copied });
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        writeText: (text: string) => {
+          copied.push(text);
+          return Promise.resolve();
+        },
+      },
+    });
+  });
+  const page = await newPage(context, violations);
+  const base = server.base;
+  try {
+    await signIn(page, local);
+    const nav = page.locator('nav[aria-label="Main"]');
+    await Promise.all([
+      page.waitForURL(`${base}/checks`),
+      nav.getByRole("link", { name: "Checks", exact: true }).click(),
+    ]);
+    assert(
+      (await page.getByText("8 checks, 1 shadowed definition").count()) === 1,
+      `${label}: counts`,
+    );
+    await assertFits(page, 390, `${label} list`);
+    await page.goto(`${base}/checks/check?id=web`);
+    await assertFits(page, 390, `${label} detail`);
+    const pre = await page.locator("pre").first().textContent();
+    assert(pre === HOST_LINE, `${label}: detail host line is the literal`);
+    const copy = page.locator("button[data-copy]").first();
+    assert((await copy.isVisible()) === hasScript, `${label}: copy button visible ${hasScript}`);
+    if (hasScript) {
+      await copy.click();
+      const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
+      assert(copied[0] === HOST_LINE, `${label}: copied host line is the literal`);
+      await page.goto(`${base}/checks/check?id=nightly-backup`);
+      const line = `curl -fsS -X POST -H 'Authorization: Bearer <secret>' '${api.url}/heartbeat/nightly-backup'`;
+      assert(
+        (await page.locator("pre").first().textContent()) === line,
+        `${label}: heartbeat line`,
+      );
+      await page.locator("button[data-copy]").first().click();
+      const beat = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
+      assert(beat[0] === line, `${label}: copied heartbeat line is the literal`);
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+    for (const [url, isHeartbeat] of EDITORS) await assertQuorumText(page, base + url, isHeartbeat);
+    await page.goto(`${base}/checks/edit?id=web`);
+    const editorPre = await page.locator("#editor-host-binding-line").textContent();
+    assert(editorPre === HOST_LINE, `${label}: editor host line is the literal`);
+    if (hasScript) {
+      const pages = [
+        "/checks",
+        "/checks/check?id=web",
+        "/checks/shadowed?id=dns-a",
+        "/checks/delete?id=web",
+      ];
+      for (const path of [...pages, ...EDITORS.map(([url]) => url)])
+        await axeOn(page, base + path, path);
+    }
+    assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
+    ok(
+      `Checks, ${label}: entered through the Checks nav link, list and detail fit 390 px, literal host-binding${hasScript ? " and heartbeat copy" : " line selectable, copy hidden"}, fixed quorum or heartbeat rule on ${EDITORS.length} editors${hasScript ? ", axe 0 on list/detail/shadowed/delete/editors" : ""}, 0 CSP violations`,
+    );
+  } finally {
+    await context.close();
+    await server.close();
+    api.stop();
+  }
+}
+
+const WIRE = { "x-pulse-contract": "1", "content-type": "application/json" };
+const NEW_REVISION = `sha256-${"c".repeat(64)}`;
+type CreateCase = { type: string; id: string; fields: Record<string, string> };
+const CREATE_CASES: CreateCase[] = [
+  { type: "http", id: "e2e-http", fields: { url: "https://example.com/", interval_ms: "60000" } },
+  { type: "tls", id: "e2e-tls", fields: { host: "example.com", interval_ms: "60000" } },
+  {
+    type: "tcp",
+    id: "e2e-tcp",
+    fields: { host: "db.example.com", port: "5432", interval_ms: "60000" },
+  },
+  {
+    type: "dns",
+    id: "e2e-dns",
+    fields: { dns_name: "example.com", expected: "192.0.2.1", interval_ms: "60000" },
+  },
+  { type: "domain", id: "e2e-domain", fields: { domain: "example.org" } },
+  {
+    type: "heartbeat",
+    id: "e2e-beat",
+    fields: { period_ms: "60000", secret: "e2e-secret-ABCDEFGHIJ" },
+  },
+];
+
+type ConfigEntry = Record<string, unknown>;
+type StatefulApi = { api: ReturnType<typeof startFakeApi>; setChecks: (c: ConfigEntry[]) => void };
+
+/** A fake api whose config answer follows the writes the console sends. */
+function startStatefulChecksApi(): StatefulApi {
+  const api = startChecksApi();
+  const setChecks = (checks: ConfigEntry[]): void =>
+    api.reply("/admin/config", jsonReply({ ...checkConfig, checks }));
+  return { api, setChecks };
+}
+
+async function submitForm(page: Page): Promise<void> {
+  await Promise.all([
+    page.waitForResponse((r) => r.request().method() === "POST"),
+    page.locator('main form button[type="submit"]').last().click(),
+  ]);
+  await page.waitForLoadState("load");
+}
+
+async function alertText(page: Page): Promise<string> {
+  return (await page.locator("main").innerText()).slice(0, 600);
+}
+
+async function createEach(page: Page, base: string, state: StatefulApi, label: string) {
+  const checks: ConfigEntry[] = [...checkConfig.checks];
+  for (const c of CREATE_CASES) {
+    const url = `${base}/checks/new?type=${c.type}`;
+    await page.goto(url);
+    await page.fill('input[name="id"]', c.id);
+    await page.fill('input[name="name"]', `E2E ${c.type}`);
+    for (const [name, value] of Object.entries(c.fields))
+      await page.fill(`[name="${name}"]`, value);
+    const template =
+      checkConfig.checks.find((x) => ("type" in x ? x.type : "http") === c.type) ?? {};
+    state.api.replyTo("POST", "/admin/checks", {
+      status: 201,
+      body: "{}",
+      headers: { ...WIRE, etag: `"${NEW_REVISION}"` },
+      after: () => {
+        checks.push({ ...template, id: c.id, name: `E2E ${c.type}`, source: "database" });
+        state.setChecks(checks);
+      },
+    });
+    await submitForm(page);
+    assert(
+      page.url() === `${base}/checks/check?id=${c.id}&saved=1`,
+      `${label}: create ${c.type} redirects, got ${page.url()} ${await alertText(page)}`,
+    );
+    assert((await page.getByText("Check saved.").count()) === 1, `${label}: ${c.type} saved`);
+  }
+  const posts = state.api.seen.filter((s) => s.method === "POST");
+  assert(posts.length === CREATE_CASES.length, `${label}: one POST per create`);
+  assert(
+    posts.every((s) => s.headers["if-match"] === `"${checkConfig.revision}"`),
+    `${label}: create sends If-Match of the POST-time read`,
+  );
+}
+
+async function editAndConflict(page: Page, base: string, state: StatefulApi, label: string) {
+  const url = `${base}/checks/edit?id=web`;
+  state.api.replyTo("PUT", "/admin/checks/web", {
+    status: 200,
+    body: "{}",
+    headers: { ...WIRE, etag: `"${NEW_REVISION}"` },
+  });
+  await page.goto(url);
+  await page.fill('input[name="name"]', "Web shop renamed");
+  await submitForm(page);
+  assert(page.url() === `${base}/checks/check?id=web&saved=1`, `${label}: edit redirects`);
+  const put = state.api.seen.filter((s) => s.method === "PUT").at(-1);
+  const sent = JSON.parse(put?.body ?? "{}") as { headers?: unknown; body?: unknown };
+  assert(
+    JSON.stringify(sent.headers) ===
+      '{"X-Api-Key":{"keep":true},"Authorization":{"env":"PULSE_HEADER_TOKEN"}}',
+    `${label}: edit keeps the stored header`,
+  );
+  assert(JSON.stringify(sent.body) === '{"keep":true}', `${label}: edit keeps the stored body`);
+  state.api.replyTo("PUT", "/admin/checks/web", { status: 412, body: "{}", headers: WIRE });
+  await page.goto(url);
+  await page.fill('input[name="name"]', "Web shop conflict");
+  await submitForm(page);
+  assert(
+    (await page.getByText("Changed since you opened it").count()) === 1,
+    `${label}: 412 shows the conflict`,
+  );
+  assert(
+    (await page.getByText("Web shop conflict").count()) >= 1,
+    `${label}: conflict keeps input`,
+  );
+  await Promise.all([
+    page.waitForURL(url),
+    page.getByRole("link", { name: "Reload", exact: true }).click(),
+  ]);
+  assert((await page.locator('input[name="name"]').count()) === 1, `${label}: reopened editor`);
+}
+
+/** Edit every created type: a 412 keeps input, Reload reopens the editor, the next PUT saves. */
+async function editEachType(page: Page, base: string, state: StatefulApi, label: string) {
+  for (const c of CREATE_CASES) {
+    const url = `${base}/checks/edit?id=${c.id}`;
+    const path = `/admin/checks/${c.id}`;
+    state.api.replyTo("PUT", path, { status: 412, body: "{}", headers: WIRE });
+    await page.goto(url);
+    await page.fill('input[name="name"]', `E2E ${c.type} conflict`);
+    await submitForm(page);
+    assert(
+      (await page.getByText("Changed since you opened it").count()) === 1,
+      `${label}: ${c.type} edit 412 shows the conflict ${await alertText(page)}`,
+    );
+    assert(
+      (await page.getByText(`E2E ${c.type} conflict`).count()) >= 1,
+      `${label}: ${c.type} conflict keeps input`,
+    );
+    await Promise.all([
+      page.waitForURL(url),
+      page.getByRole("link", { name: "Reload", exact: true }).click(),
+    ]);
+    assert(
+      (await page.locator('input[name="name"]').count()) === 1,
+      `${label}: ${c.type} reopened editor`,
+    );
+    state.api.replyTo("PUT", path, {
+      status: 200,
+      body: "{}",
+      headers: { ...WIRE, etag: `"${NEW_REVISION}"` },
+    });
+    await page.fill('input[name="name"]', `E2E ${c.type} edited`);
+    await submitForm(page);
+    assert(
+      page.url() === `${base}/checks/check?id=${c.id}&saved=1`,
+      `${label}: ${c.type} edit redirects, got ${page.url()} ${await alertText(page)}`,
+    );
+    const puts = state.api.seen.filter((s) => s.method === "PUT" && s.rawPath === path);
+    assert(puts.length === 2, `${label}: ${c.type} sent 2 PUTs, got ${puts.length}`);
+    const sent = JSON.parse(puts.at(-1)?.body ?? "{}") as { name?: unknown; type?: unknown };
+    assert(sent.name === `E2E ${c.type} edited`, `${label}: ${c.type} PUT carries the new name`);
+  }
+}
+
+async function exportAndFilter(page: Page, base: string, label: string) {
+  const res = await page.request.get(`${base}/checks/export?id=dns-a&shadowed=1`);
+  assert(res.status() === 200, `${label}: shadowed export 200`);
+  assert(res.headers()["cache-control"] === "no-store", `${label}: export no-store`);
+  assert(
+    (res.headers()["content-disposition"] ?? "").startsWith("attachment"),
+    `${label}: export is a download`,
+  );
+  const text = await res.text();
+  assert(!/keep|hasSecret|"source"/.test(text), `${label}: export is redacted`);
+  await page.goto(`${base}/checks/shadowed?id=dns-a`);
+  assert(
+    (await page.getByText("DNS record (old)").count()) >= 1,
+    `${label}: shadowed page shows the database definition`,
+  );
+  await page.goto(`${base}/checks?type=tcp&source=file`);
+  const rows = await page.locator("tbody tr").count();
+  assert(rows === 1, `${label}: composed filters leave 1 row, got ${rows}`);
+}
+
+async function typedDelete(page: Page, base: string, state: StatefulApi, label: string) {
+  const spaced = checkConfig.checks.map((c) =>
+    c.id === "web" ? { ...c, name: " Checkout API " } : c,
+  );
+  state.setChecks(spaced);
+  state.api.replyTo("DELETE", "/admin/checks/web", { status: 204, body: "", headers: WIRE });
+  const url = `${base}/checks/delete?id=web`;
+  await page.goto(url);
+  await page.fill('input[name="confirm_name"]', "Checkout  API");
+  await submitForm(page);
+  assert(
+    state.api.seen.every((s) => s.method !== "DELETE"),
+    `${label}: a wrong typed name sends no DELETE`,
+  );
+  await page.goto(url);
+  await page.fill('input[name="confirm_name"]', "Checkout API");
+  await submitForm(page);
+  assert(page.url() === `${base}/checks?deleted=1`, `${label}: delete redirects`);
+  assert((await page.getByText("Check deleted.").count()) === 1, `${label}: deleted notice`);
+  assert(
+    state.api.seen.filter((s) => s.method === "DELETE").length === 1,
+    `${label}: exactly one DELETE`,
+  );
+}
+
+/** Create, edit, conflict recovery, export, filters and typed delete in a real browser. */
+async function checkWriteFlowsWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const env = await startEnv(0);
+  env.api.stop();
+  const state = startStatefulChecksApi();
+  const server = await startSignedInConsole({
+    apiUrl: state.api.url,
+    ownerEmail: env.ownerEmail,
+    adminToken: ADMIN_TOKEN,
+  });
+  await env.console.close();
+  const local: Env = { ...env, console: server, api: state.api };
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+  });
+  const page = await newPage(context, violations);
+  try {
+    await signIn(page, local);
+    await createEach(page, server.base, state, label);
+    await editAndConflict(page, server.base, state, label);
+    await editEachType(page, server.base, state, label);
+    await exportAndFilter(page, server.base, label);
+    await typedDelete(page, server.base, state, label);
+    assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
+    ok(
+      `Check writes, ${label}: created ${CREATE_CASES.map((c) => c.type).join("/")}, edited each type after a 412 and Reload, edit kept the stored header and body, 412 kept input and Reload reopened the editor, redacted no-store shadowed export, composed filters, typed delete of " Checkout API " (wrong spacing sent no DELETE), 0 CSP violations`,
+    );
+  } finally {
+    await context.close();
+    await server.close();
+    state.api.stop();
+  }
+}
+
 async function runChecks(): Promise<void> {
   const env = await startEnv(0);
   const browser = await chromium.launch();
@@ -980,6 +1391,10 @@ async function runChecks(): Promise<void> {
     await checkAccountNoScript(env, browser);
     await checkResetAndPassword(env, browser);
     await checkLongEmail(browser);
+    await checkScreensWith(browser, true);
+    await checkScreensWith(browser, false);
+    await checkWriteFlowsWith(browser, true);
+    await checkWriteFlowsWith(browser, false);
     // A console of its own: each check signs in with a fixture recovery code.
     const shellEnv = await startEnv(0);
     try {

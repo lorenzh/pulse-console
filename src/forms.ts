@@ -2,6 +2,8 @@ import { readUrl } from "@lorenzh/pulse-kit";
 import { type PasswordProblem, passwordProblem } from "./passwords.ts";
 
 export const MAX_FORM_BYTES = 8192;
+/** Decision 9: the form limit of `POST /checks/new` and `POST /checks/edit` only. */
+export const MAX_CHECK_FORM_BYTES = 524288;
 const MAX_API_URL_LENGTH = 2048;
 const WHITESPACE_OR_CONTROL = /[\s\p{Cc}]/u;
 const CONTROL = /\p{Cc}/u;

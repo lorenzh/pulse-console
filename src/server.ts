@@ -31,6 +31,7 @@ import {
   type User,
 } from "./account-store.ts";
 import { createAuthThrottle } from "./auth-throttle.ts";
+import { checkRoutes } from "./check-routes.ts";
 import { NO_TOKEN_TEXT, testConnection } from "./connection-test.ts";
 import { CONSOLE_JS } from "./console-script.ts";
 import { serializeCookie, serializeCookieDeletion } from "./cookies.ts";
@@ -204,6 +205,13 @@ function pathLabel(path: string): PathLabel {
     case "/team/reset-link":
     case "/team/transfer":
     case "/team/require-2fa":
+    case "/checks":
+    case "/checks/check":
+    case "/checks/shadowed":
+    case "/checks/export":
+    case "/checks/new":
+    case "/checks/edit":
+    case "/checks/delete":
       return path;
     default: {
       const link = linkOfPath(path);
@@ -909,6 +917,12 @@ function sendPageResult(ctx: Ctx, signedIn: SignedIn, route: ProtectedRoute, res
     redirect(ctx, result.location);
     return;
   }
+  if (result.kind === "download") {
+    send(ctx, 200, "application/json; charset=utf-8", result.body, {
+      "content-disposition": `attachment; filename="${result.filename}"`,
+    });
+    return;
+  }
   sendShell(ctx, signedIn, result.status, { ...result, navId: route.navId });
 }
 
@@ -947,7 +961,8 @@ function isProtectedTokenAccepted(
   if (result === "accepted") return true;
   logRefusedToken(ctx, result);
   if (result === "replayed") {
-    const reopenHref = route.methods.includes("GET") ? ctx.path : "/";
+    const reopenHref =
+      route.reopenHrefOf?.(request) ?? (route.methods.includes("GET") ? ctx.path : "/");
     sendShell(ctx, signedIn, 409, {
       title: "Already submitted",
       body: alreadySubmittedState({ reopenHref }),
@@ -989,7 +1004,7 @@ async function handleProtected(
   let fields: PageRequest["fields"] = {};
   if (method === "POST") {
     const known = [...(route.knownFields ?? []), "form_token"];
-    const read = await readPostForm(ctx, known, signedIn.session.csrfToken);
+    const read = await readPostForm(ctx, known, signedIn.session.csrfToken, route.maxFormBytes);
     if (read === undefined) return;
     fields = read;
   }
@@ -1102,6 +1117,7 @@ async function handleApp(ctx: Ctx): Promise<void> {
 function protectedRoutesOf(deps: ConsoleServerDeps): Map<string, ProtectedRoute> {
   const routes = new Map<string, ProtectedRoute>([["/", overviewRoute(deps)]]);
   for (const route of teamRoutes(deps)) routes.set(route.path, route);
+  for (const route of checkRoutes(deps)) routes.set(route.path, route);
   for (const [key, route] of deps.testRoutes ?? []) {
     const isProduction = key in ROUTES || OPS_PATHS.includes(key);
     if (!key.startsWith(TEST_PREFIX) || isProduction || route.path !== key) {

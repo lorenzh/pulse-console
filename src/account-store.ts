@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { type CredentialGuard, isCredentialGuardHeld } from "./factor-store.ts";
-import { appendPeopleEvent } from "./people-log.ts";
+import { appendPeopleEvent, type PeopleEvent } from "./people-log.ts";
 import { type ConsoleRole, parseRole } from "./roles.ts";
 
 export interface Instance {
@@ -114,6 +114,10 @@ export interface AccountStore {
   ) => { ok: true; sessions: number } | { ok: false };
   /** Runs `work` in one BEGIN IMMEDIATE transaction; a throw rolls it back and propagates. */
   inImmediateTransaction: <T>(work: () => T) => T;
+  /** Whether the guard's session row still exists (and, when set, its stored hash matches). */
+  isGuardHeld: (guard: CredentialGuard) => boolean;
+  /** Appends one People-log row in its own statement; a failure throws PeopleLogError. */
+  appendPeople: (event: PeopleEvent) => void;
 }
 
 /** The row key of a session: the SHA-256 hex digest of its id. */
@@ -304,5 +308,9 @@ export function createAccountStore(db: Database): AccountStore {
     deleteOtherSessionsFor: (guard) => othersFor.immediate(guard),
     changePassword: (guard, newHash, now) => change.immediate(guard, newHash, now),
     inImmediateTransaction: <T>(work: () => T): T => db.transaction(work).immediate(),
+    isGuardHeld: (guard) => isCredentialGuardHeld(db, guard),
+    appendPeople: (event) => {
+      appendPeopleEvent(db, event);
+    },
   };
 }

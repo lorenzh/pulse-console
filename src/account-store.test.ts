@@ -299,6 +299,35 @@ describe("guarded credential writes", () => {
     );
   }
 
+  test("isGuardHeld follows the session row, appendPeople writes one check row", () => {
+    const { db, store, userId } = signedUp();
+    store.createSession("kept", userId, "c1", 10);
+    expect(store.isGuardHeld({ sessionId: "kept", userId })).toBe(true);
+    expect(store.isGuardHeld({ sessionId: "kept", userId: userId + 1 })).toBe(false);
+    store.appendPeople({
+      at: 5,
+      actor: { kind: "user", person: { id: userId, email: OWNER.email, name: OWNER.name } },
+      action: "check.create",
+      target: { kind: "check", id: "web" },
+      value: "unknown",
+    });
+    expect(
+      db
+        .query("SELECT action, target_kind, target_id, target_name, value FROM people_events")
+        .all(),
+    ).toEqual([
+      {
+        action: "check.create",
+        target_kind: "check",
+        target_id: null,
+        target_name: "web",
+        value: "unknown",
+      },
+    ]);
+    store.deleteSession("kept");
+    expect(store.isGuardHeld({ sessionId: "kept", userId })).toBe(false);
+  });
+
   test("deleteOtherSessionsFor deletes the others while the session row exists", () => {
     const { db, store, userId } = signedUp();
     store.createSession("kept", userId, "c1", 10);

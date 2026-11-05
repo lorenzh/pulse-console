@@ -15,7 +15,10 @@ export type PeopleAction =
   | "owner.transfer"
   | "owner.recovery-link"
   | "owner.recover"
-  | "team.require-2fa";
+  | "team.require-2fa"
+  | "check.create"
+  | "check.replace"
+  | "check.delete";
 
 /** Email and name as they were at the time of the change. */
 export type PeoplePerson = { id: number; email: string; name: string };
@@ -28,7 +31,9 @@ export type PeopleEvent = {
   target:
     | { kind: "user"; person: PeoplePerson }
     | { kind: "invite"; id: number; email: string }
-    | { kind: "instance" };
+    | { kind: "instance" }
+    /** A pulse-api check: `target_name` is the check id, `target_id` stays NULL. */
+    | { kind: "check"; id: string };
   fromRole?: ConsoleRole | undefined;
   toRole?: ConsoleRole | undefined;
   value?: string | undefined;
@@ -68,6 +73,8 @@ function targetColumns(
       return ["invite", target.id, target.email, null];
     case "instance":
       return ["instance", null, null, null];
+    case "check":
+      return ["check", null, null, target.id];
     default: {
       const unknown: never = target;
       return unknown;

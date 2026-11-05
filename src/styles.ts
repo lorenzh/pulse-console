@@ -20,6 +20,17 @@ code, .secret { font-family: ui-monospace, monospace; overflow-wrap: anywhere; w
 #sessions th, #sessions td { text-align: left; padding: 0.25rem 0.5rem 0.25rem 0; vertical-align: top; }
 .table-wrap table { width: 100%; border-collapse: collapse; }
 .table-wrap th, .table-wrap td { text-align: left; padding: 0.25rem 0.5rem 0.25rem 0; vertical-align: top; overflow-wrap: anywhere; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
+.table-scroll table.checks { min-width: 56rem; }
+.table-scroll table.checks td { overflow-wrap: normal; word-break: normal; }
+.filters { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: flex-end; margin: 1rem 0; }
+.filters label { display: flex; flex-direction: column; }
+.settings { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+.settings dd { margin: 0; overflow-wrap: anywhere; }
+.editor-row { margin: 0.75rem 0; }
+.hint { display: block; font-size: 0.875rem; }
+.quorum-rule { margin-top: 1.5rem; }
+pre { overflow-x: auto; max-width: 100%; padding: 0.5rem; border: 1px solid currentColor; }
 body, p, h1, h2, li, label, a { overflow-wrap: anywhere; }
 .skip-link { position: absolute; left: 0.5rem; top: -3rem; padding: 0.5rem; background: #fff; }
 .skip-link:focus { top: 0.5rem; }
