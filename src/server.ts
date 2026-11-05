@@ -220,7 +220,9 @@ function passesGate(ctx: Ctx, access: Access): boolean {
     return false;
   }
   ctx.current = current;
-  if (current !== undefined && access !== "public") touch(ctx, current);
+  // Sign out all must leave the current row and cookie unchanged, so its POST never touches.
+  const isSignOutAll = ctx.req.method === "POST" && ctx.path === "/account/sessions/sign-out-all";
+  if (current !== undefined && access !== "public" && !isSignOutAll) touch(ctx, current);
   return true;
 }
 

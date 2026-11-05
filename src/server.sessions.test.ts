@@ -41,12 +41,14 @@ function digestOf(id: string): string {
   return createHash("sha256").update(id).digest("hex");
 }
 
-type Row = { id_digest: string; csrf_token: string; user_id: number };
+type Row = { id_digest: string; csrf_token: string; user_id: number; last_seen_at: number };
 
 function sessionRows(dbPath: string): Row[] {
   const db = new Database(dbPath, { readonly: true });
   const rows = db
-    .query<Row, []>("SELECT id_digest, csrf_token, user_id FROM sessions ORDER BY id_digest")
+    .query<Row, []>(
+      "SELECT id_digest, csrf_token, user_id, last_seen_at FROM sessions ORDER BY id_digest",
+    )
     .all();
   db.close();
   return rows;
@@ -73,6 +75,20 @@ function tableRows(body: string): string[] {
 }
 
 describe("sign out all other sessions", () => {
+  test("a pause after the confirmation page leaves the row and cookie unchanged", async () => {
+    const { c, seed } = await freshEnrolled();
+    const a = await fullClient(c, seed);
+    const aId = a.jar.get(SESSION) ?? "";
+    const confirm = await a.get("/account/sessions/sign-out-all");
+    const before = sessionRows(c.dbPath).find((r) => r.id_digest === digestOf(aId));
+    c.clock.now += 60000;
+    const done = await a.post("/account/sessions/sign-out-all", { csrf: csrfIn(confirm.body) });
+    expect(done.status).toBe(303);
+    expect(done.headers.getSetCookie()).toEqual([]);
+    const after = sessionRows(c.dbPath).find((r) => r.id_digest === digestOf(aId));
+    expect(after?.last_seen_at).toBe(before?.last_seen_at ?? -1);
+  });
+
   test("ends B, C and D in every stage and keeps A unchanged", async () => {
     const { c, seed } = await freshEnrolled();
     const a = await fullClient(c, seed);
