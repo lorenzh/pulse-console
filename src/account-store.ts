@@ -183,8 +183,9 @@ export function createAccountStore(db: Database): AccountStore {
   >(
     "SELECT id_digest, created_at, last_seen_at FROM sessions WHERE user_id = ? AND stage = 'full' ORDER BY last_seen_at DESC, created_at DESC",
   );
-  const removeOthers = db.query<unknown, [number, string]>(
-    "DELETE FROM sessions WHERE user_id = ? AND id_digest <> ?",
+  // RETURNING counts only session rows: `changes` would also count the cascaded pending rows.
+  const removeOthers = db.query<{ id_digest: string }, [number, string]>(
+    "DELETE FROM sessions WHERE user_id = ? AND id_digest <> ? RETURNING id_digest",
   );
   const expire = (now: number, idleMs: number): number => {
     removeExpiredPending.run(PARTIAL_SESSION_MS, now);
@@ -236,6 +237,6 @@ export function createAccountStore(db: Database): AccountStore {
       }));
     },
     deleteOtherSessions: (userId, currentId) =>
-      removeOthers.run(userId, sessionDigest(currentId)).changes,
+      removeOthers.all(userId, sessionDigest(currentId)).length,
   };
 }

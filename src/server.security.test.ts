@@ -18,6 +18,7 @@ import {
   enrol,
   enrolledConsole,
   KEY_HEX,
+  PASSWORD as OWNER_PASSWORD,
   type Reply,
   SESSION,
   STEP_MS,
@@ -469,6 +470,22 @@ describe("leak scan of the two-factor flows", () => {
     await other.factor({ recovery_code: enrolled.codes[1] ?? "" });
     const ownerId = owner.jar.get(SESSION) ?? "";
     await owner.get("/");
+    const otherFullId = other.jar.get(SESSION) ?? "";
+    const otherFullCsrf = csrfIn((await other.get("/")).body);
+    await owner.get("/account/security");
+    const listed = await owner.get("/account/sessions");
+    const ownerCsrf = csrfIn(listed.body);
+    const renewed = await owner.post("/account/recovery-codes", {
+      csrf: ownerCsrf,
+      password: OWNER_PASSWORD,
+    });
+    const freshCodes = [...renewed.body.matchAll(/<li><code>([^<]+)<\/code><\/li>/g)].map(
+      (m) => m[1] ?? "",
+    );
+    expect(freshCodes).toHaveLength(10);
+    await owner.get("/account/sessions/sign-out-all");
+    await owner.post("/account/sessions/sign-out-all", { csrf: ownerCsrf });
+    await owner.get("/account/sessions?signed-out=others");
     const metrics = await owner.get("/metrics");
 
     // Positive controls: the intended disclosures exist before they are cut out.
@@ -476,7 +493,7 @@ describe("leak scan of the two-factor flows", () => {
     const intended = owner.replies.filter(
       (r) => r.body.includes('id="totp-secret"') || r.body.includes('id="recovery-codes"'),
     );
-    expect(intended.length).toBeGreaterThanOrEqual(2);
+    expect(intended.length).toBeGreaterThanOrEqual(3);
     const sentinels = [
       keyText,
       enrolled.seed.toString("hex"),
@@ -486,6 +503,8 @@ describe("leak scan of the two-factor flows", () => {
       ...enrolled.codes.map((code) => code.replaceAll("-", "")),
       ...owner.posted,
       ...other.posted,
+      ...freshCodes,
+      OWNER_PASSWORD,
     ];
     const replies = [...owner.replies, ...other.replies].filter((r) => !intended.includes(r));
     for (const r of replies) {
@@ -496,10 +515,12 @@ describe("leak scan of the two-factor flows", () => {
       }
     }
     for (const r of owner.replies) {
-      for (const s of [otherFactorId, otherCsrf]) expect(r.body).not.toContain(s);
+      for (const s of [otherFactorId, otherCsrf, otherFullId, otherFullCsrf]) {
+        expect(r.body).not.toContain(s);
+      }
     }
     for (const line of c.logs) {
-      for (const s of [...sentinels, ownerId, otherFactorId, otherCsrf]) {
+      for (const s of [...sentinels, ownerId, otherFactorId, otherCsrf, otherFullId]) {
         expect(line).not.toContain(s);
       }
     }
@@ -509,5 +530,8 @@ describe("leak scan of the two-factor flows", () => {
     expect(metrics.body).toContain('path="/sign-in/factor"');
     expect(metrics.body).toContain('kind="enrolment",result="success"');
     expect(metrics.body).toContain('kind="recovery-code",result="success"');
+    expect(metrics.body).toContain('path="/account/sessions/sign-out-all"');
+    expect(metrics.body).toContain('kind="password-confirm",result="success"');
+    expect(c.logs.some((l) => l.includes("signed out other sessions"))).toBe(true);
   });
 });

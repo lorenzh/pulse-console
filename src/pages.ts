@@ -137,6 +137,7 @@ export function landingPage(view: {
     "pulse Console",
     `<p>Signed in as ${escapeHtml(view.name)} (${escapeHtml(view.email)}).</p>
 <p>pulse-api: ${escapeHtml(view.apiOrigin)}</p>
+<p><a href="/account/security">Account security</a></p>
 <form method="post" action="/sign-out">
 ${csrfField(view.csrf)}
 <div class="actions"><button type="submit">Sign out</button></div>

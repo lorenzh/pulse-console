@@ -4,8 +4,12 @@ import {
   authenticatorPage,
   DECRYPT_FAILED_TEXT,
   NO_KEY_TEXT,
+  newCodesPage,
   pendingExpiredPage,
   recoveryCodesPage,
+  securityPage,
+  sessionsPage,
+  signOutAllPage,
 } from "./account-pages.ts";
 import type { Attempt } from "./auth-throttle.ts";
 import type { PendingAuthenticator } from "./factor-store.ts";
@@ -13,12 +17,10 @@ import {
   type Ctx,
   type Current,
   currentOf,
-  NOT_FOUND,
   pushSessionCookie,
   readPostForm,
   redirect,
   sendHtml,
-  sendText,
 } from "./http-context.ts";
 import { messagePage } from "./pages.ts";
 import { isSignInPasswordAcceptable } from "./passwords.ts";
@@ -42,8 +44,13 @@ import {
 import { base32Encode, matchTotpStep, normalizeTotpInput, TOTP_SEED_BYTES } from "./totp.ts";
 
 const AUTHENTICATOR_FIELDS = ["action", "code", "password"] as const;
+const NEW_CODES_FIELDS = ["password"] as const;
 const WRONG_PASSWORD = "Wrong password.";
 const PASSWORD_FORMAT = "Enter your password (at most 128 characters).";
+
+function codeDigest(code: string): string {
+  return recoveryCodeDigest(normalizeRecoveryCode(code) ?? "").toString("hex");
+}
 
 function sendNoKeyPage(ctx: Ctx): void {
   sendHtml(ctx, 503, messagePage("Authenticator app", NO_KEY_TEXT));
@@ -234,9 +241,7 @@ function commitConfirmation(
 ): void {
   const { deps } = ctx;
   const codes = generateRecoveryCodes(deps.randomBytes);
-  const recoveryDigests = codes.map((code) =>
-    recoveryCodeDigest(normalizeRecoveryCode(code) ?? "").toString("hex"),
-  );
+  const recoveryDigests = codes.map(codeDigest);
   const session = newFullSession(ctx);
   const result = settleOnThrow(attempt, () =>
     deps.factorStore.confirmAuthenticator({
@@ -261,7 +266,67 @@ function commitConfirmation(
   sendHtml(ctx, 200, recoveryCodesPage({ codes, next: safeNext(current.session.nextPath) }));
 }
 
-/** The account pages that T4 adds; until then a `full` session gets 404. */
-export function sendNotYet(ctx: Ctx): void {
-  sendText(ctx, 404, NOT_FOUND);
+/** `GET /account/security`. */
+export function sendSecurity(ctx: Ctx): void {
+  const current = currentOf(ctx);
+  const { factorStore } = ctx.deps;
+  const page = securityPage({
+    confirmedAt: factorStore.authenticator(current.user.id)?.confirmedAt,
+    codesLeft: factorStore.unusedRecoveryCodeCount(current.user.id),
+  });
+  sendHtml(ctx, 200, page);
+}
+
+function newCodesView(ctx: Ctx, current: Current, error?: string): string {
+  return newCodesPage({
+    csrf: current.session.csrfToken,
+    codesLeft: ctx.deps.factorStore.unusedRecoveryCodeCount(current.user.id),
+    error,
+  });
+}
+
+/** `GET /account/recovery-codes`: the password confirmation. */
+export function sendNewCodesForm(ctx: Ctx): void {
+  sendHtml(ctx, 200, newCodesView(ctx, currentOf(ctx)));
+}
+
+/** `POST /account/recovery-codes`: the password again, then a new set replaces the old one. */
+export async function postNewCodes(ctx: Ctx): Promise<void> {
+  const current = currentOf(ctx);
+  const fields = await readPostForm(ctx, NEW_CODES_FIELDS, current.session.csrfToken);
+  if (fields === undefined) return;
+  const page = (error: string): string => newCodesView(ctx, current, error);
+  if (!(await recheckPassword(ctx, current, fields.password ?? "", page))) return;
+  const { deps } = ctx;
+  const codes = generateRecoveryCodes(deps.randomBytes);
+  deps.factorStore.replaceRecoveryCodes(current.user.id, codes.map(codeDigest));
+  deps.log.info("recovery codes created", { userId: current.user.id });
+  sendHtml(ctx, 200, recoveryCodesPage({ codes, next: "/account/security" }));
+}
+
+/** `GET /account/sessions`: the live `full` sessions of this user. */
+export function sendSessions(ctx: Ctx): void {
+  const current = currentOf(ctx);
+  const rows = ctx.deps.store.listSessions(current.user.id, current.id, ctx.deps.now());
+  const notice =
+    ctx.query.get("signed-out") === "others" ? "All other sessions are signed out." : undefined;
+  sendHtml(ctx, 200, sessionsPage({ csrf: current.session.csrfToken, rows, notice }));
+}
+
+/** `GET /account/sessions/sign-out-all`: the confirmation. */
+export function sendSignOutAllForm(ctx: Ctx): void {
+  sendHtml(ctx, 200, signOutAllPage(currentOf(ctx).session.csrfToken));
+}
+
+/**
+ * `POST /account/sessions/sign-out-all`: every other session row of the user goes, in every
+ * stage. The current row, cookie and CSRF token stay, so no Set-Cookie is sent.
+ */
+export async function postSignOutAll(ctx: Ctx): Promise<void> {
+  const current = currentOf(ctx);
+  const fields = await readPostForm(ctx, [], current.session.csrfToken);
+  if (fields === undefined) return;
+  const sessions = ctx.deps.store.deleteOtherSessions(current.user.id, current.id);
+  ctx.deps.log.info("signed out other sessions", { userId: current.user.id, sessions });
+  redirect(ctx, "/account/sessions?signed-out=others");
 }

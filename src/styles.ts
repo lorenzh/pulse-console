@@ -14,4 +14,6 @@ input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid 
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 code, .secret { font-family: ui-monospace, monospace; overflow-wrap: anywhere; word-break: break-all; }
 #recovery-codes { padding-left: 1.5rem; }
+#sessions { width: 100%; border-collapse: collapse; }
+#sessions th, #sessions td { text-align: left; padding: 0.25rem 0.5rem 0.25rem 0; vertical-align: top; }
 `;

@@ -11,7 +11,11 @@ import {
   csrfIn,
   EMAIL,
   enrolledConsole,
+  PASSWORD,
+  STEP_MS,
   startConsole,
+  stepAt,
+  totpCode,
 } from "./two-factor-harness.ts";
 
 afterEach(closeAll);
@@ -145,5 +149,60 @@ describe("recovery codes at sign-in", () => {
     });
     expect(res.status).toBe(401);
     expect(usedCount(c.dbPath)).toBe(0);
+  });
+});
+
+describe("new recovery codes", () => {
+  async function fullClient(c: Console, seed: Buffer): Promise<Client> {
+    c.clock.now += STEP_MS;
+    const client = await freshFactor(c);
+    expect((await client.factor({ code: totpCode(seed, stepAt(c.clock.now)) })).status).toBe(303);
+    return client;
+  }
+
+  test("wrong or empty passwords change nothing; the new set replaces every old code", async () => {
+    const { c, seed, codes: old } = await enrolledConsole();
+    const owner = await fullClient(c, seed);
+    const form = await owner.get("/account/recovery-codes");
+    expect(form.status).toBe(200);
+    expect(form.body).toContain("Your current recovery codes stop working.");
+    expect(form.body).toContain("10 of 10 recovery codes left");
+    const csrf = csrfIn(form.body);
+    const before = digests(c.dbPath);
+    const wrong = await owner.post("/account/recovery-codes", { csrf, password: "wrong-password" });
+    expect(wrong.status).toBe(401);
+    const empty = await owner.post("/account/recovery-codes", { csrf, password: "" });
+    expect(empty.status).toBe(422);
+    expect(digests(c.dbPath)).toEqual(before);
+
+    const made = await owner.post("/account/recovery-codes", { csrf, password: PASSWORD });
+    expect(made.status).toBe(200);
+    const fresh = [...made.body.matchAll(/<li><code>([^<]+)<\/code><\/li>/g)].map(
+      (m) => m[1] ?? "",
+    );
+    expect(fresh).toHaveLength(10);
+    expect(new Set(fresh).size).toBe(10);
+    for (const code of fresh) expect(code).toMatch(/^[0-9a-f]{4}(-[0-9a-f]{4}){7}$/);
+    for (const code of old) expect(fresh).not.toContain(code);
+    expect(digests(c.dbPath)).toEqual(fresh.map(digestOf).sort((x, y) => x.localeCompare(y)));
+    expect(c.logs.some((l) => l.includes("recovery codes created"))).toBe(true);
+    expect((await owner.get("/")).status).toBe(200);
+
+    const statuses: number[] = [];
+    let start = 0;
+    for (const size of [4, 4, 2]) {
+      const server = await startConsole({ dbPath: c.dbPath, clock: c.clock });
+      const client = await freshFactor(server);
+      for (const code of old.slice(start, start + size)) {
+        const res = await client.factor({ recovery_code: code });
+        statuses.push(res.status);
+        for (const later of old) expect(res.body).not.toContain(later);
+      }
+      start += size;
+    }
+    expect(statuses).toEqual(Array.from({ length: 10 }, () => 401));
+    const last = await freshFactor(await startConsole({ dbPath: c.dbPath, clock: c.clock }));
+    const ok = await last.factor({ recovery_code: fresh[0] ?? "" });
+    expect(ok.status).toBe(303);
   });
 });

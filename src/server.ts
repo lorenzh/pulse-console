@@ -1,7 +1,16 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { clientKeyOf, handleOps, type OpsHandlers, StartupError } from "@lorenzh/pulse-kit";
-import { postAuthenticator, sendAuthenticator, sendNotYet } from "./account-routes.ts";
+import {
+  postAuthenticator,
+  postNewCodes,
+  postSignOutAll,
+  sendAuthenticator,
+  sendNewCodesForm,
+  sendSecurity,
+  sendSessions,
+  sendSignOutAllForm,
+} from "./account-routes.ts";
 import {
   type AccountStore,
   isSessionLive,
@@ -279,7 +288,26 @@ function handleGet(ctx: Ctx, isSetUp: boolean): void {
       send(ctx, 200, "text/css; charset=utf-8", CONSOLE_CSS);
       return;
     default:
-      sendNotYet(ctx);
+      handleAccountGet(ctx);
+  }
+}
+
+function handleAccountGet(ctx: Ctx): void {
+  switch (ctx.path) {
+    case "/account/security":
+      sendSecurity(ctx);
+      return;
+    case "/account/recovery-codes":
+      sendNewCodesForm(ctx);
+      return;
+    case "/account/sessions":
+      sendSessions(ctx);
+      return;
+    case "/account/sessions/sign-out-all":
+      sendSignOutAllForm(ctx);
+      return;
+    default:
+      sendText(ctx, 404, NOT_FOUND);
   }
 }
 
@@ -584,8 +612,14 @@ async function handlePost(ctx: Ctx): Promise<void> {
     case "/account/authenticator":
       await postAuthenticator(ctx);
       return;
+    case "/account/recovery-codes":
+      await postNewCodes(ctx);
+      return;
+    case "/account/sessions/sign-out-all":
+      await postSignOutAll(ctx);
+      return;
     default:
-      sendNotYet(ctx);
+      sendText(ctx, 404, NOT_FOUND);
   }
 }
 
