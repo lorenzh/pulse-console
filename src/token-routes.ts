@@ -38,7 +38,12 @@ import {
   selfUnknownText,
   tokenRevision,
 } from "./token-view.ts";
-import { sendTokenWrite, type TokenWrite, type TokenWriteAnswer } from "./token-write.ts";
+import {
+  sendTokenWrite,
+  type TokenWrite,
+  type TokenWriteAnswer,
+  type TokenWriteDeps,
+} from "./token-write.ts";
 
 export type TokenRouteDeps = {
   store: AccountStore;
@@ -62,11 +67,13 @@ const CREATE = "/tokens/new";
 const ROTATE = "/tokens/rotate";
 const REVOKE = "/tokens/revoke";
 
-function apiUrlOf(deps: TokenRouteDeps): string {
+export function apiUrlOf(deps: Pick<TokenRouteDeps, "store" | "defaultApiUrl">): string {
   return deps.store.instance()?.apiUrl ?? deps.defaultApiUrl;
 }
 
-function readDeps(deps: TokenRouteDeps): ApiReadDeps {
+export function readDeps(
+  deps: Pick<TokenRouteDeps, "fetch" | "adminToken" | "schedule" | "log">,
+): ApiReadDeps {
   return {
     fetch: deps.fetch,
     token: deps.adminToken,
@@ -92,7 +99,10 @@ function backLink(): string {
 }
 
 /** A failed read as a banner and a body; `retry` is the link of the failure state. */
-function readProblem(read: Exclude<TokenRead<unknown>, { kind: "ok" }>, retry: string) {
+export function readProblem(
+  read: Exclude<TokenRead<unknown>, { kind: "ok" }>,
+  retry: string,
+): { banner: string | undefined; body: string } {
   switch (read.kind) {
     case "no-token":
       return { banner: undefined, body: alert(NO_TOKEN_TEXT) };
@@ -108,7 +118,7 @@ function readProblem(read: Exclude<TokenRead<unknown>, { kind: "ok" }>, retry: s
 }
 
 /** Section 3: the banner of a `/self` read that failed; changes are off. */
-function selfBanner(self: Exclude<TokenRead<TokenMetadata>, { kind: "ok" }>): string {
+export function selfBanner(self: Exclude<TokenRead<TokenMetadata>, { kind: "ok" }>): string {
   switch (self.kind) {
     case "token-rejected":
       return tokenRejectedBanner();
@@ -129,13 +139,13 @@ function selfRefused(self: Exclude<TokenRead<TokenMetadata>, { kind: "ok" }>, ti
   return page(status, title, backLink(), selfBanner(self));
 }
 
-function queryIdOf(query: URLSearchParams): string | undefined {
+export function queryIdOf(query: URLSearchParams): string | undefined {
   const ids = query.getAll("id");
   const [id] = ids;
   return ids.length === 1 && id !== undefined && id !== "" ? id : undefined;
 }
 
-function fieldOf(fields: PageRequest["fields"], name: string): string {
+export function fieldOf(fields: PageRequest["fields"], name: string): string {
   return Object.hasOwn(fields, name) ? (fields[name] ?? "") : "";
 }
 
@@ -241,7 +251,7 @@ async function showCreate(deps: TokenRouteDeps, request: PageRequest): Promise<P
   return createPage(request, input, { status: 200, errors: [], held: self.value.scopes });
 }
 
-function writeDeps(deps: TokenRouteDeps) {
+export function writeDeps(deps: TokenRouteDeps): TokenWriteDeps {
   return {
     store: deps.store,
     fetch: deps.fetch,

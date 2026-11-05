@@ -74,6 +74,7 @@ import {
 } from "./pages.ts";
 import { isSignInPasswordAcceptable } from "./passwords.ts";
 import { routeRole } from "./permissions.ts";
+import { probeRoutes } from "./probe-routes.ts";
 import type { PageMethod, PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
 import { isLoopbackHost, safeNext } from "./request-guard.ts";
 import { hasRole } from "./roles.ts";
@@ -1120,6 +1121,7 @@ function protectedRoutesOf(deps: ConsoleServerDeps): Map<string, ProtectedRoute>
   for (const route of teamRoutes(deps)) routes.set(route.path, route);
   for (const route of checkRoutes(deps)) routes.set(route.path, route);
   for (const route of tokenRoutes(deps)) routes.set(route.path, route);
+  for (const route of probeRoutes(deps)) routes.set(route.path, route);
   for (const [key, route] of deps.testRoutes ?? []) {
     const isProduction = key in ROUTES || OPS_PATHS.includes(key);
     if (!key.startsWith(TEST_PREFIX) || isProduction || route.path !== key) {

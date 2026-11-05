@@ -22,6 +22,7 @@ import {
 import type { ProtectedRoute } from "../src/protected-route.ts";
 import type { ConsoleRole } from "../src/roles.ts";
 import { createConsoleServer, listen } from "../src/server.ts";
+import type { ProbePrefill } from "../src/settings.ts";
 import { createTeamStore } from "../src/team-store.ts";
 
 export const OWNER_EMAIL = "owner@example.com";
@@ -52,6 +53,7 @@ export type SignedInOptions = {
   schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
   testRoutes?: ReadonlyMap<string, ProtectedRoute> | undefined;
   roleOf?: ((user: User) => ConsoleRole) | undefined;
+  probePrefill?: ProbePrefill | undefined;
   /** Replace the real argon2id hash and verifier, for the gated fakes of the race tests. */
   hashPassword?: HashPassword | undefined;
   verifier?: CredentialVerifier | undefined;
@@ -122,6 +124,7 @@ export async function startSignedInConsole(options: SignedInOptions): Promise<Si
     schedule: options.schedule,
     testRoutes: options.testRoutes,
     roleOf: options.roleOf,
+    probePrefill: options.probePrefill,
   });
   const port = await listen(server, "127.0.0.1", 0);
   return {
