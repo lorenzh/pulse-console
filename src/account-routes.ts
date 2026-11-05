@@ -2,6 +2,7 @@ import { clientKeyOf } from "@lorenzh/pulse-kit";
 import {
   type AuthenticatorView,
   authenticatorPage,
+  DECRYPT_FAILED_TEXT,
   NO_KEY_TEXT,
   pendingExpiredPage,
   recoveryCodesPage,
@@ -85,8 +86,17 @@ export function sendAuthenticator(ctx: Ctx): void {
     return;
   }
   const pending = ctx.deps.factorStore.pendingAuthenticator(current.id, ctx.deps.now());
-  const view = pending === undefined ? undefined : pendingView(current, pending, key);
-  sendHtml(ctx, 200, authenticatorPage(view ?? startView(ctx, current)));
+  if (pending === undefined) {
+    sendHtml(ctx, 200, authenticatorPage(startView(ctx, current)));
+    return;
+  }
+  const view = pendingView(current, pending, key);
+  if (view === undefined) {
+    ctx.deps.log.error("authenticator secret cannot be decrypted", { userId: current.user.id });
+    sendHtml(ctx, 500, messagePage("Authenticator app", DECRYPT_FAILED_TEXT));
+    return;
+  }
+  sendHtml(ctx, 200, authenticatorPage(view));
 }
 
 /** `POST /account/authenticator`: `action=new` or `action=confirm`. */

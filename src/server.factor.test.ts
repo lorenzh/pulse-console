@@ -581,6 +581,23 @@ describe("encryption at rest", () => {
     expect(storedSecret(c.dbPath)).toBe(before);
   });
 
+  test("a pending setup key sealed with another key answers 500 on GET", async () => {
+    const c = await startConsole();
+    const b = new Client(c);
+    await b.password();
+    const page = await b.get("/account/authenticator");
+    await b.post("/account/authenticator", { csrf: csrfIn(page.body), action: "new" });
+    const other = await startConsole({ dbPath: c.dbPath, clock: c.clock, key: OTHER_KEY });
+    b.c = other;
+    const r = await b.get("/account/authenticator");
+    expect(r.status).toBe(500);
+    expect(r.body).toContain(DECRYPT_TEXT);
+    expect(r.body).not.toContain("otpauth://");
+    expect(other.logs.some((l) => l.includes('"authenticator secret cannot be decrypted"'))).toBe(
+      true,
+    );
+  });
+
   test("without the key a TOTP code is 503 and nothing opens", async () => {
     const { c, seed } = await enrolledConsole();
     const none = await startConsole({ dbPath: c.dbPath, clock: c.clock, key: null });
