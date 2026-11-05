@@ -11,8 +11,8 @@ import {
 } from "./http-context.ts";
 import { alreadySubmittedPage, messagePage } from "./pages.ts";
 import { formExpiredResendNotice } from "./states.ts";
-import { acceptInvitePage, linkNotValidPage } from "./team-pages.ts";
-import type { LiveInvite } from "./team-store.ts";
+import { acceptInvitePage, linkNotValidPage, resetPasswordPage } from "./team-pages.ts";
+import type { LiveInvite, LiveResetLink } from "./team-store.ts";
 import { isSecondFactorRequired, signInStage } from "./two-factor-policy.ts";
 
 /** Starts a session after a committed acceptance, rotating the request's session cookie. */
@@ -151,4 +151,98 @@ async function commitAcceptance(
   });
   startSession(ctx, result.userId, { stage });
   redirect(ctx, stage === "enrol" ? "/account/authenticator" : "/");
+}
+
+const RESET_FIELDS = ["password", "password_confirm", "form_token"] as const;
+
+type ResetView = { csrf: string; link: LiveResetLink; error?: string; notice?: string };
+
+function resetPage(ctx: Ctx, view: ResetView): string {
+  return resetPasswordPage({
+    action: ctx.path,
+    csrf: view.csrf,
+    formToken: issueToken(ctx, view.csrf),
+    email: view.link.email,
+    error: view.error,
+    notice: view.notice,
+  });
+}
+
+function liveResetOf(ctx: Ctx, token: string): LiveResetLink | undefined {
+  return ctx.deps.teamStore.liveResetLink(linkDigest(token), ctx.deps.now());
+}
+
+/** `GET /reset/<token>`: the new-password form of a valid link, else the invalid-link page. */
+export function sendResetForm(ctx: Ctx, token: string): void {
+  const link = liveResetOf(ctx, token);
+  if (link === undefined) {
+    sendHtml(ctx, 404, linkNotValidPage());
+    return;
+  }
+  sendHtml(ctx, 200, resetPage(ctx, { csrf: ensureCsrf(ctx), link }));
+}
+
+/**
+ * `POST /reset/<token>`: the order of the invite POST. It never reads the session cookie; the
+ * commit ends every session of the link's user and starts none.
+ */
+export async function postReset(ctx: Ctx, token: string): Promise<void> {
+  const fields = await readPostForm(ctx, RESET_FIELDS);
+  if (fields === undefined) return;
+  const link = liveResetOf(ctx, token);
+  if (link === undefined) {
+    sendHtml(ctx, 404, linkNotValidPage());
+    return;
+  }
+  const view: ResetView = { csrf: fields.csrf ?? "", link };
+  const password = fields.password ?? "";
+  const error = passwordText(password, fields.password_confirm ?? "");
+  if (error !== undefined) {
+    sendHtml(ctx, 422, resetPage(ctx, { ...view, error }));
+    return;
+  }
+  const result = ctx.state.formTokens.consume(
+    fields.form_token ?? "",
+    anonBinding(view.csrf),
+    ctx.path,
+  );
+  if (result !== "accepted") {
+    ctx.deps.log.info("form token refused", { reason: result, path: linkPathLabel("reset") });
+    const page =
+      result === "replayed"
+        ? alreadySubmittedPage("/sign-in")
+        : resetPage(ctx, { ...view, notice: formExpiredResendNotice });
+    sendHtml(ctx, 409, page);
+    return;
+  }
+  await commitReset(ctx, token, password);
+}
+
+async function commitReset(ctx: Ctx, token: string, password: string): Promise<void> {
+  const { deps } = ctx;
+  const passwordHash = await deps.hashPassword(password);
+  let result: ReturnType<typeof deps.teamStore.redeemResetLink>;
+  try {
+    result = deps.teamStore.redeemResetLink({
+      tokenDigest: linkDigest(token),
+      passwordHash,
+      now: deps.now(),
+    });
+  } catch (err) {
+    deps.log.error("team change could not be saved", {
+      error: err instanceof Error ? err.name : "unknown",
+    });
+    sendHtml(ctx, 500, messagePage("Not saved", "The change could not be saved."));
+    return;
+  }
+  if (!result.ok) {
+    sendHtml(ctx, 404, linkNotValidPage());
+    return;
+  }
+  deps.log.info("team change", {
+    action: result.kind === "team" ? "user.password-reset" : "owner.recover",
+    actorId: result.kind === "team" ? result.userId : null,
+    targetId: result.userId,
+  });
+  redirect(ctx, "/sign-in?reset=done");
 }

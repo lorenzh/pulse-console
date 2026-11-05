@@ -1,7 +1,13 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { clientKeyOf, handleOps, type OpsHandlers, StartupError } from "@lorenzh/pulse-kit";
-import { isLinkPrefixedPath, linkOfPath, linkOrigin, linkPathLabel } from "./account-links.ts";
+import {
+  isLinkPrefixedPath,
+  type LinkKind,
+  linkOfPath,
+  linkOrigin,
+  linkPathLabel,
+} from "./account-links.ts";
 import {
   postAuthenticator,
   postNewCodes,
@@ -47,7 +53,7 @@ import {
   sendHtml,
   sendText,
 } from "./http-context.ts";
-import { postInvite, sendInviteForm } from "./link-routes.ts";
+import { postInvite, postReset, sendInviteForm, sendResetForm } from "./link-routes.ts";
 import type { PathLabel } from "./metrics.ts";
 import type { NavId } from "./navigation.ts";
 import { overviewView } from "./overview.ts";
@@ -190,11 +196,14 @@ function pathLabel(path: string): PathLabel {
     case "/team/role":
     case "/team/remove":
     case "/team/reset-2fa":
+    case "/team/reset-link":
     case "/team/transfer":
     case "/team/require-2fa":
       return path;
-    default:
-      return linkOfPath(path)?.kind === "invite" ? "/invite/:token" : "other";
+    default: {
+      const link = linkOfPath(path);
+      return link === undefined ? "other" : linkPathLabel(link.kind);
+    }
   }
 }
 
@@ -463,6 +472,7 @@ function signInNotice(ctx: Ctx): string | undefined {
     return EXPIRED;
   }
   if (ctx.query.get("transfer") === "done") return "Ownership is transferred. Sign in again.";
+  if (ctx.query.get("reset") === "done") return "Your password is set. Sign in.";
   return ctx.query.get("setup") === "done" ? "Setup is complete. Sign in." : undefined;
 }
 
@@ -962,11 +972,11 @@ const LINK_METHODS: readonly string[] = ["GET", "HEAD", "POST"];
  * A public link route: method, phase (404 before setup), loopback Host, then the route's own
  * order. No step reads the session cookie before the commit.
  */
-async function handleInviteLink(
+async function handleLink(
   ctx: Ctx,
   method: string,
   isSetUp: boolean,
-  token: string,
+  link: { kind: LinkKind; token: string },
 ): Promise<void> {
   if (!LINK_METHODS.includes(method)) {
     ctx.res.writeHead(405, { allow: LINK_METHODS.join(", "), "content-length": 0 }).end();
@@ -980,6 +990,12 @@ async function handleInviteLink(
     sendText(ctx, 421, MISDIRECTED);
     return;
   }
+  const token = link.token;
+  if (link.kind === "reset") {
+    if (method === "POST") await postReset(ctx, token);
+    else sendResetForm(ctx, token);
+    return;
+  }
   if (method === "POST") await postInvite(ctx, token, startSession);
   else sendInviteForm(ctx, token);
 }
@@ -988,8 +1004,8 @@ async function handleApp(ctx: Ctx): Promise<void> {
   const method = ctx.req.method ?? "GET";
   const isSetUp = ctx.deps.store.instance() !== undefined;
   const link = linkOfPath(ctx.path);
-  if (link?.kind === "invite") {
-    await handleInviteLink(ctx, method, isSetUp, link.token);
+  if (link !== undefined) {
+    await handleLink(ctx, method, isSetUp, link);
     return;
   }
   if (isLinkPrefixedPath(ctx.path)) {

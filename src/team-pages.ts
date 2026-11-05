@@ -46,6 +46,7 @@ export const LINK_NOT_VALID_TEXT =
 
 const MEMBER_ACTIONS = [
   { kind: "role-change", path: "/team/role", label: "Change role" },
+  { kind: "reset-link", path: "/team/reset-link", label: "Reset link" },
   { kind: "2fa-reset", path: "/team/reset-2fa", label: "Reset 2FA" },
   { kind: "remove", path: "/team/remove", label: "Remove" },
   { kind: "transfer", path: "/team/transfer", label: "Make owner" },
@@ -370,4 +371,57 @@ export function resetTwoFactorBody(view: MemberConfirmView): string {
     cancelHref: "/team",
     notice: view.notice,
   });
+}
+
+/** The plain confirmation of making a password reset link for another person. */
+export function resetLinkConfirmBody(view: MemberConfirmView): string {
+  const name = view.member.name;
+  return plainConfirmPage({
+    consequence: `Make a password reset link for ${name}? Using it signs ${name} out everywhere.`,
+    action: `/team/reset-link?user=${view.member.id}`,
+    csrf: view.csrf,
+    formToken: view.formToken,
+    revision: view.member.revision,
+    submitLabel: "Make reset link",
+    busyLabel: "Making…",
+    cancelHref: "/team",
+    notice: view.notice,
+  });
+}
+
+/** The `200` answer of a made reset link: the link, shown only now. */
+export function resetLinkBody(view: { link: string; name: string; expiresAt: number }): string {
+  return `<section aria-labelledby="link-heading">
+<h2 id="link-heading">Password reset link</h2>
+<label for="reset-link">Link to send to ${escapeHtml(view.name)}
+<input id="reset-link" class="link-output" type="text" readonly value="${escapeHtml(view.link)}">
+</label>
+<p><code>${escapeHtml(view.link)}</code></p>
+${paragraph(`It works once and expires on ${utcMinute(view.expiresAt)}. Using it signs ${view.name} out everywhere.`)}<p><a href="/team">Back to the team</a></p>
+</section>`;
+}
+
+/** The form of a valid reset link: the account's email as text, never as a field. */
+export function resetPasswordPage(view: {
+  action: string;
+  csrf: string;
+  formToken: string;
+  email: string;
+  error?: string | undefined;
+  notice?: string | undefined;
+}): string {
+  const summary = formErrorSummary(
+    view.error === undefined ? [] : [{ name: "password", text: view.error }],
+  );
+  return plainDocument(
+    "Set a new password",
+    `${paragraph(view.notice, ' role="alert" class="error"')}${summary}<p>Email: ${escapeHtml(view.email)}</p>
+<form method="post" action="${escapeHtml(view.action)}">
+${csrfField(view.csrf)}
+${formTokenField(view.formToken)}
+${field({ label: "New password", name: "password", type: "password", autocomplete: "new-password", error: view.error })}
+${field({ label: "Confirm password", name: "password_confirm", type: "password", autocomplete: "new-password" })}
+<div class="actions"><button type="submit">Set password</button></div>
+</form>`,
+  );
 }

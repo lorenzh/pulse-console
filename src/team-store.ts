@@ -10,6 +10,28 @@ import {
 } from "./permissions.ts";
 import { type ConsoleRole, hasRole, parseRole } from "./roles.ts";
 
+/** A password reset link lives this long after it was made. */
+export const RESET_LINK_TTL_MS = 86_400_000;
+
+/** The two kinds of password reset link. */
+export type ResetLinkKind = "team" | "owner-recovery";
+
+/** A valid reset link: unused, not expired, its target and issuer still match. */
+export interface LiveResetLink {
+  id: number;
+  kind: ResetLinkKind;
+  userId: number;
+  email: string;
+}
+
+export type IssueResetLinkResult =
+  | { ok: true; target: PeoplePerson; expiresAt: number }
+  | TargetRefusal;
+
+export type RedeemInput = { tokenDigest: string; passwordHash: string; now: number };
+
+export type RedeemResult = { ok: true; userId: number; kind: ResetLinkKind } | { ok: false };
+
 /** An invite lives this long after it was made. */
 export const INVITE_TTL_MS = 604_800_000;
 
@@ -103,6 +125,23 @@ export interface TeamStore {
     actor: CredentialGuard,
     input: { isOn: boolean; now: number },
   ) => SwitchResult;
+
+  /**
+   * In one BEGIN IMMEDIATE transaction: the checks of a team change, then the target's unused
+   * team links are replaced by one new link and `user.reset-link` is written. No session ends.
+   */
+  issueResetLink: (
+    actor: CredentialGuard,
+    input: TargetInput & { tokenDigest: string },
+  ) => IssueResetLinkResult;
+  /** The valid reset link of this token digest, or undefined. */
+  liveResetLink: (tokenDigest: string, now: number) => LiveResetLink | undefined;
+  /**
+   * In one BEGIN IMMEDIATE transaction: the link is still valid; then the new password hash,
+   * `used_at`, the end of the user's other unused links and sessions and the event. An
+   * owner-recovery link also deletes the Owner's second factors.
+   */
+  redeemResetLink: (input: RedeemInput) => RedeemResult;
 
   /** Every user, Owner first, then by role and name. */
   members: () => TeamMember[];
@@ -446,6 +485,99 @@ function memberMutations(db: Database) {
   };
 }
 
+interface ResetRow {
+  id: number;
+  kind: string;
+  user_id: number;
+  target_role: string;
+  issued_by: number | null;
+  expires_at: number;
+  used_at: number | null;
+  email: string;
+  name: string;
+  role: string;
+  issuer_role: string | null;
+}
+
+const RESET_SQL = `SELECT r.id, r.kind, r.user_id, r.target_role, r.issued_by, r.expires_at, r.used_at,
+  u.email, u.name, u.role, i.role AS issuer_role
+  FROM reset_links r JOIN users u ON u.id = r.user_id LEFT JOIN users i ON i.id = r.issued_by
+  WHERE r.token_digest = ?`;
+
+/** Section 11: unused, not expired, the target's role unchanged, the issuer still allowed. */
+function isResetValid(row: ResetRow, now: number): boolean {
+  if (row.used_at !== null || now >= row.expires_at || row.role !== row.target_role) return false;
+  if (row.kind === "owner-recovery") return row.role === "owner";
+  if (row.kind !== "team" || row.issuer_role === null) return false;
+  return targetDecision(parseRole(row.issuer_role), "reset-link", parseRole(row.role)).isAllowed;
+}
+
+function resetLinkMutations(db: Database) {
+  const byDigest = db.query<ResetRow, [string]>(RESET_SQL);
+  const validRow = (digest: string, now: number): ResetRow | undefined => {
+    const row = byDigest.get(digest);
+    return row !== null && isResetValid(row, now) ? row : undefined;
+  };
+  const issue = db.transaction(
+    (guard: CredentialGuard, input: TargetInput & { tokenDigest: string }) => {
+      const admitted = admit(db, guard, { action: "reset-link.member", kind: "reset-link" }, input);
+      if (!("actor" in admitted)) return admitted;
+      const { actor, target } = admitted;
+      db.query(
+        "DELETE FROM reset_links WHERE user_id = ? AND kind = 'team' AND used_at IS NULL",
+      ).run(target.id);
+      const expiresAt = input.now + RESET_LINK_TTL_MS;
+      db.query(
+        "INSERT INTO reset_links (token_digest, kind, user_id, target_role, issued_by, created_at, expires_at) VALUES (?, 'team', ?, ?, ?, ?, ?)",
+      ).run(input.tokenDigest, target.id, target.role, actor.id, input.now, expiresAt);
+      appendPeopleEvent(db, {
+        at: input.now,
+        actor: { kind: "user", person: personOf(actor) },
+        action: "user.reset-link",
+        target: { kind: "user", person: targetPerson(target) },
+      });
+      return { ok: true, target: targetPerson(target), expiresAt } as const;
+    },
+  );
+  const redeem = db.transaction((input: RedeemInput): RedeemResult => {
+    const row = validRow(input.tokenDigest, input.now);
+    if (row === undefined) return { ok: false };
+    const kind: ResetLinkKind = row.kind === "owner-recovery" ? "owner-recovery" : "team";
+    db.query("UPDATE users SET password_hash = ? WHERE id = ?").run(
+      input.passwordHash,
+      row.user_id,
+    );
+    db.query("UPDATE reset_links SET used_at = ? WHERE id = ?").run(input.now, row.id);
+    db.query("DELETE FROM reset_links WHERE user_id = ? AND used_at IS NULL").run(row.user_id);
+    db.query("DELETE FROM sessions WHERE user_id = ?").run(row.user_id);
+    if (kind === "owner-recovery") {
+      for (const table of ["authenticators", "recovery_codes", "pending_authenticators"]) {
+        db.query(`DELETE FROM ${table} WHERE user_id = ?`).run(row.user_id);
+      }
+    }
+    const person = { id: row.user_id, email: row.email, name: row.name };
+    appendPeopleEvent(db, {
+      at: input.now,
+      actor: kind === "team" ? { kind: "user", person } : { kind: "container" },
+      action: kind === "team" ? "user.password-reset" : "owner.recover",
+      target: { kind: "user", person },
+      value: kind,
+    });
+    return { ok: true, userId: row.user_id, kind };
+  });
+  return {
+    issueResetLink: (guard: CredentialGuard, input: TargetInput & { tokenDigest: string }) =>
+      issue.immediate(guard, input),
+    liveResetLink: (tokenDigest: string, now: number): LiveResetLink | undefined => {
+      const row = validRow(tokenDigest, now);
+      if (row === undefined) return undefined;
+      const kind: ResetLinkKind = row.kind === "owner-recovery" ? "owner-recovery" : "team";
+      return { id: row.id, kind, userId: row.user_id, email: row.email };
+    },
+    redeemResetLink: (input: RedeemInput) => redeem.immediate(input),
+  };
+}
+
 /** An INSERT … RETURNING gave no row. */
 export class InviteInsertError extends Error {
   override name = "InviteInsertError";
@@ -482,6 +614,7 @@ export function createTeamStore(db: Database): TeamStore {
   const selectMember = db.query<TargetRow, [number]>(TARGET_SQL);
   return {
     ...memberMutations(db),
+    ...resetLinkMutations(db),
     isGuardHeld: (guard) => isCredentialGuardHeld(db, guard),
     members: () => selectMembers.all().map(toMember),
     member: (id) => {

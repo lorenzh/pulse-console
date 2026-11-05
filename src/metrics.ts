@@ -24,9 +24,11 @@ export type PathLabel =
   | "/team/role"
   | "/team/remove"
   | "/team/reset-2fa"
+  | "/team/reset-link"
   | "/team/transfer"
   | "/team/require-2fa"
   | "/invite/:token"
+  | "/reset/:token"
   | "other";
 
 export type AuthKind =

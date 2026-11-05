@@ -12,6 +12,8 @@ import {
   type MemberConfirmView,
   notSavedBody,
   removeBody,
+  resetLinkBody,
+  resetLinkConfirmBody,
   resetTwoFactorBody,
   revokeInviteBody,
   roleFormBody,
@@ -267,13 +269,21 @@ type MemberFormExtras = {
   error?: string | undefined;
 };
 
+/** A committed change may answer with its own page (the reset link, shown once). */
+type OperationResult = TargetChangeResult & { page?: PageResult };
+
 /** One guarded change of one person: role change, removal, 2FA reset or transfer. */
 type MemberOperation = {
   path: string;
   title: string;
   kind: TeamActionKind;
   /** The route's coarse action; its lowest role is the route's `requiredRole`. */
-  routeAction: "remove.member" | "role.member-viewer" | "2fa-reset.member" | "owner.transfer";
+  routeAction:
+    | "remove.member"
+    | "role.member-viewer"
+    | "2fa-reset.member"
+    | "reset-link.member"
+    | "owner.transfer";
   knownFields: readonly string[];
   logAction: string;
   render: (view: MemberConfirmView & MemberFormExtras) => string;
@@ -288,8 +298,9 @@ type MemberOperation = {
     guard: ReturnType<typeof guardOf>,
     input: TargetInput,
     request: PageRequest,
-  ) => TargetChangeResult;
-  success: PageResult & { kind: "redirect" };
+    deps: TeamRouteDeps,
+  ) => OperationResult;
+  success: PageResult;
 };
 
 function memberForm(
@@ -347,7 +358,7 @@ function refusal(
   op: MemberOperation,
   request: PageRequest,
   member: TeamMember,
-  result: Exclude<TargetChangeResult, { ok: true }>,
+  result: Exclude<OperationResult, { ok: true }>,
 ): PageResult {
   switch (result.reason) {
     case "session-gone":
@@ -386,12 +397,14 @@ function runMemberOperation(
   const refused = precheck(op, request, member);
   if (refused !== undefined) return refused;
   const input = { userId: member.id, revision: member.revision, now: deps.now() };
-  const saved = commit(deps, () => op.commit(deps.teamStore, guardOf(request), input, request));
+  const saved = commit(deps, () =>
+    op.commit(deps.teamStore, guardOf(request), input, request, deps),
+  );
   if (!saved.ok) return saveFailed();
   const result = saved.value;
   if (!result.ok) return refusal(op, request, member, result);
   logChange(deps, op.logAction, request.user.id, result.target.id);
-  return op.success;
+  return result.page ?? op.success;
 }
 
 function memberRoute(deps: TeamRouteDeps, op: MemberOperation): ProtectedRoute {
@@ -476,6 +489,28 @@ const RESET_2FA_OPERATION: MemberOperation = {
   success: { kind: "redirect", location: "/team" },
 };
 
+const RESET_LINK_OPERATION: MemberOperation = {
+  path: "/team/reset-link",
+  title: "Password reset link",
+  kind: "reset-link",
+  routeAction: "reset-link.member",
+  knownFields: ["revision"],
+  logAction: "user.reset-link",
+  render: resetLinkConfirmBody,
+  commit: (store, guard, input, request, deps) => {
+    const token = newLinkToken(deps.randomBytes);
+    const result = store.issueResetLink(guard, { ...input, tokenDigest: linkDigest(token) });
+    if (!result.ok) return result;
+    const body = resetLinkBody({
+      link: linkUrl(request.linkOrigin, "reset", token),
+      name: result.target.name,
+      expiresAt: result.expiresAt,
+    });
+    return { ...result, page: { kind: "page", status: 200, title: "Password reset link", body } };
+  },
+  success: { kind: "redirect", location: "/team" },
+};
+
 const TRANSFER_OPERATION: MemberOperation = {
   path: "/team/transfer",
   title: "Make owner",
@@ -552,6 +587,7 @@ export function teamRoutes(deps: TeamRouteDeps): ProtectedRoute[] {
     memberRoute(deps, ROLE_OPERATION),
     memberRoute(deps, REMOVE_OPERATION),
     memberRoute(deps, RESET_2FA_OPERATION),
+    memberRoute(deps, RESET_LINK_OPERATION),
     memberRoute(deps, TRANSFER_OPERATION),
     requireTwoFactorRoute(deps),
   ];
