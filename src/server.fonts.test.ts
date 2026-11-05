@@ -178,6 +178,18 @@ describe.each(STARTS)("font routes %s", (_label, start) => {
     expect(res.headers.get("allow")).toBe("GET, HEAD");
   });
 
+  test.each([
+    ["/fonts/space-grotesk-latin-700-normal.woff2", "POST"],
+    ["/fonts/jetbrains-mono-latin-400-normal.woff2", "DELETE"],
+    ["/console.css", "POST"],
+    ["/healthz", "POST"],
+  ])("405 on %s %s keeps no-store", async (path, method) => {
+    const { base } = await start();
+    const res = await fetch(`${base}${path}`, { method });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
   test("another Host is refused with 421", async () => {
     const { port } = await start();
     const res = await rawRequest(

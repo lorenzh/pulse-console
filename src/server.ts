@@ -1071,7 +1071,13 @@ async function handleLink(
   link: { kind: LinkKind; token: string },
 ): Promise<void> {
   if (!LINK_METHODS.includes(method)) {
-    ctx.res.writeHead(405, { allow: LINK_METHODS.join(", "), "content-length": 0 }).end();
+    ctx.res
+      .writeHead(405, {
+        allow: LINK_METHODS.join(", "),
+        "cache-control": "no-store",
+        "content-length": 0,
+      })
+      .end();
     return;
   }
   if (!isSetUp) {
@@ -1113,7 +1119,13 @@ async function handleApp(ctx: Ctx): Promise<void> {
     return;
   }
   if (!allowed.includes(method)) {
-    ctx.res.writeHead(405, { allow: allowed.join(", "), "content-length": 0 }).end();
+    ctx.res
+      .writeHead(405, {
+        allow: allowed.join(", "),
+        "cache-control": "no-store",
+        "content-length": 0,
+      })
+      .end();
     return;
   }
   if (protectedRoute !== undefined && isPageMethod(method)) {
@@ -1153,7 +1165,9 @@ function protectedRoutesOf(deps: ConsoleServerDeps): Map<string, ProtectedRoute>
 
 function handleOpsRoute(req: IncomingMessage, res: ServerResponse, ops: OpsHandlers): void {
   if (req.method !== "GET" && req.method !== "HEAD") {
-    res.writeHead(405, { allow: "GET, HEAD", "content-length": 0 }).end();
+    res
+      .writeHead(405, { allow: "GET, HEAD", "cache-control": "no-store", "content-length": 0 })
+      .end();
     return;
   }
   handleOps(req, res, ops);
