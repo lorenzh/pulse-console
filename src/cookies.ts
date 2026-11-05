@@ -1,9 +1,11 @@
+import type { SessionStage } from "./account-store.ts";
 import type { ConsoleMode } from "./settings.ts";
 
 export type CookieKind = "session" | "csrf" | "setup";
 
 export const SESSION_COOKIE_MAX_AGE = 2_592_000;
 export const SETUP_COOKIE_MAX_AGE = 1800;
+export const PARTIAL_SESSION_COOKIE_MAX_AGE = 900;
 
 const BASE_NAMES = {
   session: "pulse_console_session",
@@ -41,6 +43,16 @@ function serialize(name: string, value: string, maxAge: number | undefined, mode
 /** A Set-Cookie value. A session refresh calls this with the unchanged value. */
 export function serializeCookie(kind: CookieKind, value: string, mode: ConsoleMode): string {
   return serialize(cookieName(kind, mode), value, maxAgeOf(kind), mode);
+}
+
+/** The session cookie of a stage: a `factor` or `enrol` session lives 900 seconds. */
+export function serializeSessionCookie(
+  value: string,
+  stage: SessionStage,
+  mode: ConsoleMode,
+): string {
+  const maxAge = stage === "full" ? SESSION_COOKIE_MAX_AGE : PARTIAL_SESSION_COOKIE_MAX_AGE;
+  return serialize(cookieName("session", mode), value, maxAge, mode);
 }
 
 /** A Set-Cookie value that removes the cookie. */

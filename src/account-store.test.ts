@@ -4,7 +4,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAccountStore, sessionDigest } from "./account-store.ts";
+import {
+  createAccountStore,
+  isSessionLive,
+  sessionDigest,
+  sessionExpiresAt,
+} from "./account-store.ts";
 import { type DatabaseFiles, openDatabase } from "./database.ts";
 
 const files: DatabaseFiles = {
@@ -129,6 +134,8 @@ describe("sessions", () => {
       csrfToken: "csrf-token",
       createdAt: 5000,
       lastSeenAt: 5000,
+      stage: "full",
+      nextPath: undefined,
     });
     const row = db.query<{ id_digest: string }, []>("SELECT id_digest FROM sessions").get();
     // SHA-256 of the id above, computed independently with `printf %s <id> | sha256sum`.
@@ -152,6 +159,79 @@ describe("sessions", () => {
     expect(store.session("b")).toBeUndefined();
     store.deleteSession("a");
     expect(store.session("a")).toBeUndefined();
+  });
+
+  test("full idle expiry is 2592000000 ms; partial expiry is 900000 ms and never touched", () => {
+    const { store, userId } = signedUp();
+    store.createSession("full", userId, "c1", 0);
+    store.createSession("factor", userId, "c2", 0, {
+      stage: "factor",
+      nextPath: "/account/security",
+    });
+    store.createSession("enrol", userId, "c3", 0, { stage: "enrol" });
+    const factor = store.session("factor");
+    expect(factor).toEqual({
+      userId,
+      csrfToken: "c2",
+      createdAt: 0,
+      lastSeenAt: 0,
+      stage: "factor",
+      nextPath: "/account/security",
+    });
+    store.touchSession("factor", 600_000);
+    expect(store.session("factor")?.lastSeenAt).toBe(0);
+    if (factor === undefined) throw new Error("no factor session");
+    expect(sessionExpiresAt(factor)).toBe(900_000);
+    expect(isSessionLive(factor, 899_999)).toBe(true);
+    expect(isSessionLive(factor, 900_000)).toBe(false);
+    const full = store.session("full");
+    if (full === undefined) throw new Error("no full session");
+    expect(sessionExpiresAt(full)).toBe(2_592_000_000);
+    expect(store.deleteExpiredSessions(899_999, 2_592_000_000)).toBe(0);
+    expect(store.deleteExpiredSessions(900_000, 2_592_000_000)).toBe(2);
+    expect(store.session("enrol")).toBeUndefined();
+    expect(store.session("full")?.stage).toBe("full");
+    expect(store.deleteExpiredSessions(2_592_000_000, 2_592_000_000)).toBe(1);
+  });
+
+  test("a full session stores no next path", () => {
+    const { store, userId } = signedUp();
+    store.createSession("f", userId, "c", 0, { stage: "full", nextPath: "/x" });
+    expect(store.session("f")?.nextPath).toBeUndefined();
+  });
+
+  test("listSessions: live full rows only, newest last use first, current marked", () => {
+    const { store, userId } = signedUp();
+    store.createSession("old", userId, "c1", 0);
+    store.createSession("a", userId, "c2", 1000);
+    store.createSession("b", userId, "c3", 2000);
+    store.createSession("p", userId, "c4", 2000, { stage: "factor" });
+    store.touchSession("a", 3000);
+    expect(store.listSessions(userId, "b", 2_592_000_000)).toEqual([
+      { createdAt: 1000, lastSeenAt: 3000, isCurrent: false },
+      { createdAt: 2000, lastSeenAt: 2000, isCurrent: true },
+    ]);
+    expect(store.session("old")).toBeUndefined();
+  });
+
+  test("deleteOtherSessions deletes every other row of the user in one statement", () => {
+    const { db, store, userId } = signedUp();
+    db.run(
+      "INSERT INTO users (id, email, name, password_hash, role, created_at) VALUES (2, 'second@example.com', 'S', 'h', 'member', 0)",
+    );
+    store.createSession("kept", userId, "kept-csrf", 10);
+    store.createSession("full-2", userId, "c2", 10);
+    store.createSession("factor", userId, "c3", 10, { stage: "factor" });
+    store.createSession("enrol", userId, "c4", 10, { stage: "enrol" });
+    store.createSession("second", 2, "c5", 10);
+    const before = store.session("kept");
+    expect(store.deleteOtherSessions(userId, "kept")).toBe(3);
+    expect(store.session("kept")).toEqual(before);
+    expect(store.session("second")?.userId).toBe(2);
+    expect(store.session("full-2")).toBeUndefined();
+    expect(store.session("factor")).toBeUndefined();
+    expect(store.session("enrol")).toBeUndefined();
+    expect(store.deleteOtherSessions(userId, "kept")).toBe(0);
   });
 
   test("a session for an unknown user is refused by the foreign key", () => {

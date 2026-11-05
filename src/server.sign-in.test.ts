@@ -1,6 +1,6 @@
 /* eslint-disable sonarjs/no-clear-text-protocols -- loopback test servers */
 import { afterEach, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { chmodSync, closeSync, mkdtempSync, openSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -8,14 +8,28 @@ import { join } from "node:path";
 import { createLogger } from "@lorenzh/pulse-kit";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
+import { createFactorStore } from "./factor-store.ts";
 import { createMetrics, type Metrics } from "./metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
+import { sealSecret } from "./secret-box.ts";
 import { createConsoleServer, listen } from "./server.ts";
+
+const TEST_SECRET_KEY = Uint8Array.from(Buffer.from("0123456789abcdef".repeat(4), "hex"));
 
 const PASSWORD = "sign-in-password-sentinel-42";
 const EMAIL = "owner-sentinel@example.com";
 const START = 5_000_000;
 const SESSION = "pulse_console_session";
+const SEED = Buffer.from("12345678901234567890", "ascii");
+
+/** RFC 6238 SHA-1, 6 digits, written here so it does not depend on the code under test. */
+function totpCode(step: number): string {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(step));
+  const mac = createHmac("sha1", SEED).update(counter).digest();
+  const offset = (mac[19] ?? 0) & 0xf;
+  return String((mac.readUInt32BE(offset) % 2_147_483_648) % 1_000_000).padStart(6, "0");
+}
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -42,6 +56,7 @@ type Console = {
   clock: { now: number };
   verifications: { count: number };
   metrics: Metrics;
+  lastStep: { step: number };
 };
 
 async function startConsole(
@@ -78,6 +93,11 @@ async function startConsole(
       "http://api.example:3000/pulse",
       START,
     );
+    // An enrolled owner, so a password leads to the factor step.
+    const secret = sealSecret(TEST_SECRET_KEY, 1, SEED, (n) => new Uint8Array(n).fill(9));
+    db.query(
+      "INSERT INTO authenticators (user_id, secret, last_step, confirmed_at) VALUES (1, ?, 0, ?)",
+    ).run(secret, START);
   }
   const clock = opts.clock ?? { now: START };
   const verifications = { count: 0 };
@@ -100,6 +120,8 @@ async function startConsole(
     defaultApiUrl: "http://api.invalid:3000",
     adminToken: undefined,
     store,
+    factorStore: createFactorStore(db),
+    secretKey: TEST_SECRET_KEY,
     gate: undefined,
     now: () => clock.now,
     randomBytes: (size) => crypto.getRandomValues(new Uint8Array(size)),
@@ -127,6 +149,7 @@ async function startConsole(
     clock,
     verifications,
     metrics,
+    lastStep: { step: 0 },
   };
 }
 
@@ -170,7 +193,8 @@ class Client {
   /** A fresh form token from the page of that form, sent with only the cookies it needs. */
   private async freshFormToken(path: string): Promise<string | undefined> {
     const page = path === "/sign-out" ? "/" : path;
-    const names = FORM_COOKIES[path] ?? ["pulse_console_csrf"];
+    const names =
+      FORM_COOKIES[path] ?? (path === "/sign-in/factor" ? [SESSION] : ["pulse_console_csrf"]);
     const cookie = names
       .filter((n) => this.jar.has(n))
       .map((n) => `${n}=${this.jar.get(n)}`)
@@ -208,6 +232,21 @@ class Client {
   async signIn(email = EMAIL, password = PASSWORD, next = "/"): Promise<Reply> {
     if (!this.jar.has("pulse_console_csrf")) await this.get("/sign-in");
     return this.post("/sign-in", { email, password, next });
+  }
+
+  /** Password, then a fresh TOTP code; the clock moves to the next step when one was used. */
+  async signInFull(next = "/"): Promise<Reply> {
+    const password = await this.signIn(EMAIL, PASSWORD, next);
+    expect(password.headers.get("location")).toBe("/sign-in/factor");
+    const page = await this.get("/sign-in/factor");
+    const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)?.[1] ?? "";
+    let step = Math.floor(this.c.clock.now / 30_000);
+    if (step <= this.c.lastStep.step) {
+      step = this.c.lastStep.step + 1;
+      this.c.clock.now = step * 30_000;
+    }
+    this.c.lastStep.step = step;
+    return this.post("/sign-in/factor", { csrf, code: totpCode(step) });
   }
 }
 
@@ -268,7 +307,9 @@ describe("credentials", () => {
     const c = await startConsole();
     const res = await new Client(c).signIn("  Owner-Sentinel@Example.COM ");
     expect(res.status).toBe(303);
-    expect(c.logs.some((l) => l.includes('"signed in"') && l.includes('"userId":1'))).toBe(true);
+    expect(c.logs.some((l) => l.includes('"password accepted"') && l.includes('"userId":1'))).toBe(
+      true,
+    );
   });
 });
 
@@ -370,7 +411,13 @@ describe("sessions", () => {
     const c = await startConsole();
     c.store.createSession("expired-session-id", 1, "csrf-x", START - 2_592_000_000);
     const client = new Client(c);
-    const first = await client.signIn();
+    const password = await client.signIn();
+    expect(password.headers.get("location")).toBe("/sign-in/factor");
+    const partial = password.headers.getSetCookie().find((l) => l.startsWith(`${SESSION}=`)) ?? "";
+    expect(partial).toMatch(
+      /^pulse_console_session=[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; SameSite=Strict; Max-Age=900$/,
+    );
+    const first = await client.signInFull();
     expect(first.status).toBe(303);
     expect(first.headers.get("location")).toBe("/");
     const cookie = first.headers.getSetCookie().find((l) => l.startsWith(`${SESSION}=`)) ?? "";
@@ -380,7 +427,7 @@ describe("sessions", () => {
     const firstId = client.jar.get(SESSION) ?? "";
     const firstDigest = createHash("sha256").update(firstId).digest("hex");
     expect(sessionRows(c.dbPath)).toEqual([firstDigest]);
-    const second = await client.signIn();
+    const second = await client.signInFull();
     expect(second.status).toBe(303);
     const secondId = client.jar.get(SESSION) ?? "";
     expect(secondId).not.toBe(firstId);
@@ -399,7 +446,7 @@ describe("sessions", () => {
       [`/${"a".repeat(512)}`, "/"],
     ];
     for (const [next, location] of cases) {
-      const res = await new Client(c).signIn(EMAIL, PASSWORD, next);
+      const res = await new Client(c).signInFull(next);
       expect(res.headers.get("location")).toBe(location);
     }
   });
@@ -407,7 +454,7 @@ describe("sessions", () => {
   test("the landing page shows the owner; fabricated and revoked cookies do not", async () => {
     const c = await startConsole();
     const client = new Client(c);
-    await client.signIn();
+    await client.signInFull();
     const landing = await client.get("/");
     expect(landing.status).toBe(200);
     expect(landing.body).toContain("Signed in as Owner &lt;Sentinel&gt;");
@@ -433,7 +480,7 @@ describe("sessions", () => {
   test("idle expiry at 30 days and cookie refresh after 60 s", async () => {
     const c = await startConsole();
     const client = new Client(c);
-    await client.signIn();
+    await client.signInFull();
     const t = c.clock.now;
     c.clock.now = t + 59_999;
     const quiet = await client.get("/");
@@ -450,7 +497,7 @@ describe("sessions", () => {
     expect((await client.get("/")).status).toBe(200);
 
     const idle = new Client(c);
-    await idle.signIn();
+    await idle.signInFull();
     const s = c.clock.now;
     c.clock.now = s + 2_592_000_000;
     const expired = await idle.get("/");
@@ -460,7 +507,7 @@ describe("sessions", () => {
   test("an active session lives past 30 days after sign-in", async () => {
     const c = await startConsole();
     const client = new Client(c);
-    await client.signIn();
+    await client.signInFull();
     const id = client.jar.get(SESSION) ?? "";
     const t = c.clock.now;
     c.clock.now = t + 2_505_600_000;
@@ -476,7 +523,7 @@ describe("sessions", () => {
   test("sessions survive a new server on the same file", async () => {
     const first = await startConsole();
     const client = new Client(first);
-    await client.signIn();
+    await client.signInFull();
     const second = await startConsole({ dbPath: first.dbPath, clock: first.clock });
     const again = new Client(second);
     for (const [k, v] of client.jar) again.jar.set(k, v);
@@ -488,7 +535,7 @@ describe("sign-out", () => {
   test("the session CSRF signs out; the anonymous token fails 403", async () => {
     const c = await startConsole();
     const client = new Client(c);
-    await client.signIn();
+    await client.signInFull();
     const landing = await client.get("/");
     const csrf = /name="csrf" value="([^"]+)"/.exec(landing.body)?.[1] ?? "";
     expect(csrf).not.toBe(client.jar.get("pulse_console_csrf"));
@@ -510,7 +557,7 @@ describe("sign-out", () => {
   test("sign-out without a session changes nothing", async () => {
     const c = await startConsole();
     const owner = new Client(c);
-    await owner.signIn();
+    await owner.signInFull();
     const other = new Client(c);
     await other.get("/sign-in");
     const res = await other.post("/sign-out", {});

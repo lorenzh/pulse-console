@@ -64,7 +64,7 @@ describe("navigation registry", () => {
       title: "Overview",
       body: "",
     });
-    expect(html.match(/<a href="[^"]*"/g)).toEqual(['<a href="/"']);
+    expect(html.match(/<a href="[^"]*"/g)).toEqual(['<a href="/account/security"', '<a href="/"']);
     for (const path of ["/checks", "/incidents", "/tokens", "/system"]) {
       expect(html).not.toContain(`href="${path}"`);
     }

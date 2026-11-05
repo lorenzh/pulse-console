@@ -1,5 +1,6 @@
 import { type Env, readPort, readString, readUrl, StartupError } from "@lorenzh/pulse-kit";
 import { readAdminToken } from "./admin-token.ts";
+import { readSecretKey } from "./secret-key.ts";
 
 export const DEFAULT_PORT = 8082;
 export const DEFAULT_HOST = "127.0.0.1";
@@ -17,6 +18,8 @@ export interface Settings {
   publicOrigin: string | undefined;
   mode: ConsoleMode;
   dbPath: string;
+  /** The 32 bytes of PULSE_CONSOLE_SECRET_KEY_FILE, or undefined when unset. */
+  secretKey: Uint8Array | undefined;
 }
 
 // The URL parser drops tabs and newlines inside a value, so they are refused before it runs.
@@ -68,7 +71,7 @@ export function consoleMode(publicOrigin: string | undefined): ConsoleMode {
 
 /**
  * Reads and validates the console settings in this order: PULSE_API_URL, PULSE_CONSOLE_PORT,
- * PULSE_CONSOLE_HOST, PULSE_CONSOLE_PUBLIC_URL, PULSE_CONSOLE_DB, admin token. DATABASE_URL is
+ * PULSE_CONSOLE_HOST, PULSE_CONSOLE_PUBLIC_URL, PULSE_CONSOLE_DB, admin token, PULSE_CONSOLE_SECRET_KEY_FILE. DATABASE_URL is
  * not read. The first failure throws a StartupError. Pure: the token
  * file is read through `readFile`.
  */
@@ -79,5 +82,7 @@ export function readSettings(env: Env, readFile: (path: string) => string): Sett
   const publicOrigin = readPublicOrigin(env);
   const dbPath = readString(env, "PULSE_CONSOLE_DB") ?? DEFAULT_DB;
   const adminToken = readAdminToken(env, readFile);
-  return { apiUrl, port, host, adminToken, publicOrigin, mode: consoleMode(publicOrigin), dbPath };
+  const secretKey = readSecretKey(env, readFile, adminToken);
+  const mode = consoleMode(publicOrigin);
+  return { apiUrl, port, host, adminToken, publicOrigin, mode, dbPath, secretKey };
 }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createFixtureRoutes, type Recorder } from "../test/fixture-routes.ts";
 import {
+  completeSignIn,
   formTokenOf,
   getPage,
   OWNER_EMAIL,
@@ -170,8 +171,11 @@ describe("state fixtures", () => {
       { cookie: csrfCookie },
     );
     expect(signIn.status).toBe(303);
-    expect(signIn.headers.get("location")).toBe(path);
-    const session = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    expect(signIn.headers.get("location")).toBe("/sign-in/factor");
+    const full = await completeSignIn(c, signIn);
+    expect(full.status).toBe(303);
+    expect(full.headers.get("location")).toBe(path);
+    const session = (full.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
     const back = await getPage(c, path, session);
     expect(back.status).toBe(200);
     expect(back.body).toContain("You are signed in.");

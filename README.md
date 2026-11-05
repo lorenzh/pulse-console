@@ -7,17 +7,22 @@ pulse: Web console to manage checks, incidents, tokens, notify and status settin
 The console is the fifth service of the pulse Compose stack. Today it serves:
 
 - first-run setup: a one-time setup code from the container log unlocks `/setup/owner`. That page tests the connection to pulse-api (wire version and check count) and creates the one owner account in a local SQLite database;
-- password sign-in for the owner, a session that ends after 30 days without use, a signed-in shell with navigation and sign-out, and the Overview at `/`: the pulse-api origin, the overall check state and the count of checks per state, read from pulse-api on each visit;
-- a single-use form token on every POST form (setup, sign-in, sign-out): a form sent twice changes nothing the second time;
+- password sign-in for the owner, then a required second factor: a TOTP authenticator app (RFC 6238) or one of ten single-use recovery codes. A full session ends after 30 days without use; a signed-in shell with navigation, the Overview and sign-out;
+- enrolment of the authenticator at `/account/authenticator` right after setup, with the setup key shown as text (no QR code), and replacement of it with the current password;
+- the account security page `/account/security` (linked from the shell): new recovery codes with the current password, the list of signed-in sessions, and "Sign out all other sessions";
+- a single-use form token on every POST form, including the account and second-factor forms: a form sent twice changes nothing the second time;
 - the stylesheet `/console.css`, the busy-button script `/console.js` and the ops routes `/healthz`, `/readyz` and `/metrics`.
 
-Two-factor sign-in (and any second factor or password recovery) follows in [#563](https://github.com/lorenzh/pulse-meta/issues/563). Checks, incidents, tokens and the notify and status settings come in later items of [#460](https://github.com/lorenzh/pulse-meta/issues/460).
+Password recovery, roles and passkeys are not part of the console yet. Checks, incidents, tokens and the notify and status settings come in later items of [#460](https://github.com/lorenzh/pulse-meta/issues/460).
 
 ## First-run setup
 
 1. Start the console with `PULSE_API_URL` and an admin token (`PULSE_CONSOLE_ADMIN_TOKEN_FILE`). The token needs the `read` or `checks` scope and the `admin` scope of pulse-api.
 2. Find the setup code in the log: `docker logs <container> | grep 'setup code'`. The line is `pulse-console setup code: <code> (open /setup; a restart prints a new code)`. It is written to stdout outside the logger, so `PULSE_LOG_LEVEL` never hides it.
 3. Open `/setup`, enter the code, then fill in the API URL, the owner email, name and password on `/setup/owner`. "Test connection" saves nothing; "Finish setup" tests again and saves.
+4. "Secure the owner account": Finish setup leads to `/account/authenticator`. Create a setup key, add it to an authenticator app (SHA-1, 6 digits, 30 seconds), and enter the code it shows. The answer lists ten recovery codes once; save them. This step cannot be skipped: until it is done, every protected page leads back to it, also after a new password sign-in.
+
+Enrolment and TOTP need `PULSE_CONSOLE_SECRET_KEY_FILE`, a file with 64 lowercase hex characters that encrypts the TOTP seeds at rest (pulse-deploy generates it). Without it the console starts and logs a warning, but enrolment and TOTP sign-in answer `503`, so the owner gets no protected access. Recovery codes still work without it.
 
 After setup the saved API URL is used. A different `PULSE_API_URL` logs one warning at start and is ignored. There is no way to change the saved URL yet.
 
@@ -25,7 +30,13 @@ After setup the saved API URL is used. A different `PULSE_API_URL` logs one warn
 
 The console stores only SQLite; Postgres and `DATABASE_URL` are not supported.
 
-**Backup.** Copy the database file while the console is stopped, or use `sqlite3 console.db ".backup backup.db"` while it runs. On restore, remove any `-wal` and `-shm` files beside the restored file.
+**Lost key.** Without the key file the stored seed cannot be read: TOTP sign-in answers `500` (`The authenticator secret cannot be read. Sign in with a recovery code.`). Sign in with the password and a recovery code, then replace the authenticator on `/account/authenticator`; the new seed is encrypted with the key in use. With the key and every recovery code lost, only the reset above helps.
+
+**Sign out.** "Sign out" (`POST /sign-out`) ends only this browser. "Sign out all other sessions" (`/account/sessions/sign-out-all`) ends every other session of the account, also half-finished sign-ins and their pending setup keys, and keeps this browser signed in with the same cookie. After a suspected cookie theft, use both: first sign out all other sessions, then sign out. Replacing the authenticator also ends every other session. The console has no password change yet; when it gets one, that change must call `deleteOtherSessions` in the transaction that writes the new hash, so it ends every other session and keeps the current one.
+
+**Known limits.** No passkeys yet. No QR code for the setup key. The throttles live in memory and a restart clears them. TOTP needs a correct clock (NTP) on the server and the phone: the console accepts one 30-second step before and after.
+
+**Backup.** Back up the database file and the key file together. Copy the database file while the console is stopped, or use `sqlite3 console.db ".backup backup.db"` while it runs. On restore, remove any `-wal` and `-shm` files beside the restored file.
 
 ## Run locally
 
@@ -67,30 +78,43 @@ The image listens on `0.0.0.0:8082` inside the container and runs as the non-roo
 | `PULSE_CONSOLE_DB`               | `./console.db`                 | Path of the SQLite database file; the image sets `/data/console.db`. `DATABASE_URL` is not read. |
 | `PULSE_CONSOLE_ADMIN_TOKEN`      | unset                          | Optional pulse-api admin token, at least 32 characters. Never logged.                            |
 | `PULSE_CONSOLE_ADMIN_TOKEN_FILE` | unset                          | File with the admin token (at least 32 characters), instead of the env var.                      |
+| `PULSE_CONSOLE_SECRET_KEY_FILE`  | unset                          | File with the 32-byte seed key as 64 lowercase hex characters. Without it TOTP answers `503`.    |
 | `PULSE_LOG_LEVEL`                | `info`                         | `debug`, `info`, `warn` or `error`.                                                              |
 
 An invalid setting stops the start with exit code 2 and one line on stderr. Every rule and error text is in [docs/configuration.md](docs/configuration.md).
 
 ## HTTP endpoints
 
-| Path                | Before setup                                                     | After setup                                                        |
-| ------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `GET /`             | `303` to `/setup`                                                | `200` Overview when signed in, else `303` to `/sign-in?next=%2F`   |
-| `GET /setup`        | `200`, the setup code form                                       | `404`                                                              |
-| `POST /setup`       | `303` to `/setup/owner` with a grant; `401`, `409`, `422`, `429` | `404`                                                              |
-| `GET /setup/owner`  | `200` with a grant, else `303` to `/setup`                       | `404`                                                              |
-| `POST /setup/owner` | test: `200` or `502`; finish: `303`, `409` or `500`              | `404`                                                              |
-| `GET /sign-in`      | `303` to `/setup`                                                | `200`, the sign-in form; `303` to `/` when signed in               |
-| `POST /sign-in`     | `404`                                                            | `303` to `next`; `401`, `409`, `422`, `429`                        |
-| `POST /sign-out`    | `303` to `/sign-in`                                              | `303` to `/sign-in`; ends the session; `409` for a form sent twice |
-| `GET /console.css`  | `200`, `text/css`                                                | same                                                               |
-| `GET /console.js`   | `200`, `text/javascript`                                         | same                                                               |
-| `GET /healthz`      | `200 ok`                                                         | same                                                               |
-| `GET /readyz`       | `200 ok`; `503 shutting down` after `SIGTERM`                    | same                                                               |
-| `GET /metrics`      | Prometheus text                                                  | same                                                               |
-| any other path      | `404 not found`                                                  | signed-in `GET`/`HEAD`: `404` shell page; else `404 not found`     |
+| Path                                  | Before setup                                                     | After setup                                                                                             |
+| ------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GET /`                               | `303` to `/setup`                                                | `200` Overview with a full session, else the access gate                                                |
+| `GET /setup`                          | `200`, the setup code form                                       | `404`                                                                                                   |
+| `POST /setup`                         | `303` to `/setup/owner` with a grant; `401`, `409`, `422`, `429` | `404`                                                                                                   |
+| `GET /setup/owner`                    | `200` with a grant, else `303` to `/setup`                       | `404`                                                                                                   |
+| `POST /setup/owner`                   | test: `200` or `502`; finish: `303`, `409` or `500`              | `404`                                                                                                   |
+| `GET /sign-in`                        | `303` to `/setup`                                                | `200`, the sign-in form; `303` to `/` when signed in                                                    |
+| `POST /sign-in`                       | `404`                                                            | `303` to `/sign-in/factor` or `/account/authenticator`; `401`, `422`, `429`                             |
+| `POST /sign-out`                      | `303` to `/sign-in`                                              | `303` to `/sign-in`; ends the session                                                                   |
+| `GET /sign-in/factor`                 | `404`                                                            | `200`, the TOTP and recovery-code forms (`factor` session)                                              |
+| `POST /sign-in/factor`                | `404`                                                            | `303` to `next`; `401`, `422`, `429`, `500`, `503`                                                      |
+| `GET /account/authenticator`          | `404`                                                            | `200`, setup key or replace form (`enrol` or full session); `503` without the key                       |
+| `POST /account/authenticator`         | `404`                                                            | `action=new`: `303`; `action=confirm`: `200` with the recovery codes; `401`, `409`, `422`, `429`, `503` |
+| `GET /account/security`               | `404`                                                            | `200`, authenticator date, recovery codes left, links (full session)                                    |
+| `GET /account/recovery-codes`         | `404`                                                            | `200`, the password confirmation for new codes                                                          |
+| `POST /account/recovery-codes`        | `404`                                                            | `200` with 10 new codes; the old ones stop working; `401`, `422`, `429`                                 |
+| `GET /account/sessions`               | `404`                                                            | `200`, the live full sessions with "This browser"                                                       |
+| `GET /account/sessions/sign-out-all`  | `404`                                                            | `200`, the confirmation                                                                                 |
+| `POST /account/sessions/sign-out-all` | `404`                                                            | `303` to `/account/sessions?signed-out=others`; ends every other session, keeps this one                |
+| `GET /console.css`                    | `200`, `text/css`                                                | same                                                                                                    |
+| `GET /console.js`                     | `200`, `text/javascript`                                         | same                                                                                                    |
+| `GET /healthz`                        | `200 ok`                                                         | same                                                                                                    |
+| `GET /readyz`                         | `200 ok`; `503 shutting down` after `SIGTERM`                    | same                                                                                                    |
+| `GET /metrics`                        | Prometheus text                                                  | same                                                                                                    |
+| any other path                        | `404 not found`                                                  | full-session `GET`/`HEAD`: shell `404`; else plain `404`                                                |
 
-`HEAD` works wherever `GET` does; another method on a known path answers `405` with `allow`. A finished setup redirects to `/sign-in?setup=done`. In loopback mode the app routes answer only a loopback `Host`. Every form POST checks `Origin` and a CSRF token. Cookies, modes, the POST order and the metrics are in [docs/configuration.md](docs/configuration.md). More in [docs/](docs/index.md).
+Every form POST can also answer `409` when its single-use form token is missing, expired or replayed.
+
+`HEAD` works wherever `GET` does; another method on a known path answers `405` with `allow`. A finished setup starts an enrolment session and redirects to `/account/authenticator`. After setup an access gate sends a request without the needed session stage to its step: no session to `/sign-in?next=<path>`, a password-only session to `/sign-in/factor`, an owner without an authenticator to `/account/authenticator`. In loopback mode the app routes answer only a loopback `Host`. Every form POST checks `Origin` and a CSRF token. Cookies, modes, the POST order and the metrics are in [docs/configuration.md](docs/configuration.md). More in [docs/](docs/index.md).
 
 ## License
 

@@ -9,10 +9,13 @@ import { join } from "node:path";
 import { createLogger } from "@lorenzh/pulse-kit";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
+import { createFactorStore } from "./factor-store.ts";
 import { createMetrics } from "./metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { createConsoleServer, listen } from "./server.ts";
 import { createSetupGate } from "./setup-code.ts";
+
+const TEST_SECRET_KEY = Uint8Array.from(Buffer.from("0123456789abcdef".repeat(4), "hex"));
 
 const TOKEN = "console-test-sentinel-token-0123456789abcdef";
 const PASSWORD = "console-test-password-sentinel-42";
@@ -108,6 +111,8 @@ async function startConsole(
     defaultApiUrl: opts.defaultApiUrl ?? "http://api.invalid:3000",
     adminToken: "adminToken" in opts ? opts.adminToken : TOKEN,
     store,
+    factorStore: createFactorStore(db),
+    secretKey: TEST_SECRET_KEY,
     gate: realStore.instance() === undefined ? setup.gate : undefined,
     now,
     randomBytes,
@@ -178,14 +183,16 @@ class Client {
 
   /** A fresh form token from the page of that form, sent with only the cookies it needs. */
   private async freshFormToken(path: string): Promise<string | undefined> {
-    const page = path === "/sign-out" ? "/" : path;
+    const page = path === "/sign-out" ? "/account/authenticator" : path;
     const names = FORM_COOKIES[path] ?? ["pulse_console_csrf"];
     const cookie = names
       .filter((n) => this.jar.has(n))
       .map((n) => `${n}=${this.jar.get(n)}`)
       .join("; ");
     const res = await fetch(this.c.base + page, { redirect: "manual", headers: { cookie } });
-    return /name="form_token" value="([^"]+)"/.exec(await res.text())?.[1];
+    const html = await res.text();
+    const form = html.slice(Math.max(0, html.indexOf(`action="${path}"`)));
+    return /name="form_token" value="([^"]+)"/.exec(form)?.[1];
   }
 
   async post(
@@ -539,7 +546,7 @@ describe("completion", () => {
     await client.unlock();
     const done = await client.post("/setup/owner", ownerFields(`${api.url}/`, "complete"));
     expect(done.status).toBe(303);
-    expect(done.headers.get("location")).toBe("/sign-in?setup=done");
+    expect(done.headers.get("location")).toBe("/account/authenticator");
     expect(c.store.instance()?.apiUrl).toBe(api.url);
     expect(userCount(c.dbPath)).toBe(1);
     const complete = c.logs.find((l) => l.includes('"setup complete"'));
@@ -550,7 +557,8 @@ describe("completion", () => {
     expect(signIn.status).toBe(200);
     expect(signIn.body).toContain("Setup is complete. Sign in.");
     expect(signIn.body).toContain('autocomplete="current-password"');
-    expect((await client.get("/")).headers.get("location")).toBe("/sign-in?next=%2F");
+    // Finish setup started an enrolment session: protected pages lead to enrolment.
+    expect((await client.get("/")).headers.get("location")).toBe("/account/authenticator");
     expect((await client.post("/setup", { code: c.code })).status).toBe(404);
     expect((await client.get("/setup")).status).toBe(404);
     expect((await client.get("/setup/owner")).status).toBe(404);
@@ -571,11 +579,15 @@ describe("completion", () => {
     const sessionId = other.jar.get("pulse_console_session") ?? "";
     expect(sessionId.length).toBeGreaterThan(20);
     const reader = new Database(c.dbPath, { readonly: true });
-    const digestRow = reader.query("SELECT id_digest FROM sessions").all();
+    const digestRow = reader
+      .query("SELECT id_digest FROM sessions WHERE id_digest = ?")
+      .all(nodeCrypto.createHash("sha256").update(sessionId).digest("hex"));
+    const rawIds = reader
+      .query("SELECT id_digest FROM sessions WHERE id_digest = ?")
+      .all(sessionId);
     reader.close();
-    expect(digestRow).toEqual([
-      { id_digest: nodeCrypto.createHash("sha256").update(sessionId).digest("hex") },
-    ]);
+    expect(digestRow).toHaveLength(1);
+    expect(rawIds).toHaveLength(0);
 
     // The database scan: the file must be read; a sidecar is skipped only when it is absent.
     const chunks: Buffer[] = [readFileSync(c.dbPath)];
@@ -650,7 +662,7 @@ describe("completion", () => {
     );
     const done = await client.post("/setup/owner", ownerFields(api.url, "complete"));
     expect(done.status).toBe(303);
-    expect(done.headers.get("location")).toBe("/sign-in?setup=done");
+    expect(done.headers.get("location")).toBe("/account/authenticator");
     for (const r of client.responses) expect(r.body).not.toContain(TOKEN);
   });
 
@@ -731,9 +743,10 @@ function rawText(r: Recording): string {
 }
 
 function sessionCsrfOf(body: string): string {
-  const match = /action="\/sign-out">\n<input type="hidden" name="csrf" value="([^"]+)">/.exec(
-    body,
-  );
+  const match =
+    /action="\/account\/authenticator">\n<input type="hidden" name="csrf" value="([^"]+)">/.exec(
+      body,
+    );
   return match?.[1] ?? "";
 }
 
@@ -756,7 +769,8 @@ describe("leak scan of the full flow", () => {
     });
     expect(signedIn.status).toBe(303);
     const sessionA = a.jar.get("pulse_console_session") ?? "";
-    const landingA = await a.get("/");
+    expect(signedIn.headers.get("location")).toBe("/account/authenticator");
+    const landingA = await a.get("/account/authenticator");
     expect(landingA.status).toBe(200);
     const sessionCsrfA = sessionCsrfOf(landingA.body);
     expect(sessionCsrfA.length).toBeGreaterThan(20);
@@ -766,7 +780,7 @@ describe("leak scan of the full flow", () => {
     ).toBe(401);
     expect((await b.post("/sign-in", { email: OWNER_EMAIL, password: PASSWORD })).status).toBe(303);
     const sessionB = b.jar.get("pulse_console_session") ?? "";
-    const landingB = await b.get("/");
+    const landingB = await b.get("/account/authenticator");
     const sessionCsrfB = sessionCsrfOf(landingB.body);
     expect(sessionCsrfB.length).toBeGreaterThan(20);
     expect(sessionCsrfB).not.toBe(sessionCsrfA);
@@ -820,7 +834,7 @@ describe("leak scan of the full flow", () => {
       for (const s of sentinels) expect(rest.split(s).length - 1).toBe(0);
       for (const s of secretsA) expect(rawText(r).split(s).length - 1).toBe(0);
     }
-    expect(c.logs.some((l) => l.includes('"signed in"'))).toBe(true);
+    expect(c.logs.some((l) => l.includes('"password accepted"'))).toBe(true);
     for (const line of c.logs) {
       for (const s of [...sentinels, OWNER_EMAIL]) expect(line).not.toContain(s);
     }

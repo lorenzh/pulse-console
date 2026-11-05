@@ -167,6 +167,90 @@ jobs:
             exit 1
           fi
           grep -F 'PULSE_API_URL must be set' stderr.txt
+      - name: Check a malformed key file exits 2
+        run: |
+          printf 'not-a-key' > key.txt
+          chmod 644 key.txt
+          set +e
+          docker run --rm \
+            -e PULSE_API_URL=http://api.invalid:3000 \
+            -e PULSE_CONSOLE_SECRET_KEY_FILE=/run/key \
+            -v "$PWD/key.txt:/run/key:ro" \
+            pulse-console:local 2> key-stderr.txt
+          code=$?
+          set -e
+          cat key-stderr.txt
+          if [ "$code" != "2" ]; then
+            echo "Exit code with a malformed key file: $code"
+            exit 1
+          fi
+          grep -F 'PULSE_CONSOLE_SECRET_KEY_FILE=/run/key: must hold 64 lowercase hex characters' key-stderr.txt
+          if grep -F 'not-a-key' key-stderr.txt; then
+            echo "The key file content is in stderr"
+            exit 1
+          fi
+          echo "ok: a malformed key file exits 2 without its content"
+
+  # The dev stack of pulse-deploy main with this console checkout and the two-factor flow.
+  deploy-dev:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: pulse-console
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-deploy
+          ref: main
+          path: pulse-deploy
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-api
+          ref: main
+          path: pulse-api
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-probe
+          ref: main
+          path: pulse-probe
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-status
+          ref: main
+          path: pulse-status
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: lorenzh/pulse-notify
+          ref: main
+          path: pulse-notify
+          persist-credentials: false
+      - working-directory: pulse-deploy
+        run: scripts/init-secrets.sh
+      - working-directory: pulse-deploy
+        run: docker compose -f dev/compose.yaml up -d --build
+      - working-directory: pulse-deploy
+        run: scripts/wait-ready.sh dev/compose.yaml 900
+      - name: Console two-factor flow
+        working-directory: pulse-deploy
+        run: E2E_CONSOLE_FLOW=two-factor bash e2e/console-setup.sh dev/compose.yaml
+      - name: Stack state and logs
+        if: failure()
+        working-directory: pulse-deploy
+        run: |
+          docker compose -f dev/compose.yaml ps --all
+          docker compose -f dev/compose.yaml logs --no-color
+      - name: Teardown
+        if: always()
+        working-directory: pulse-deploy
+        run: docker compose -f dev/compose.yaml down -v --remove-orphans
 
   browser:
     runs-on: ubuntu-24.04

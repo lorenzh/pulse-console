@@ -5,6 +5,7 @@ import {
   type Recorder,
 } from "../test/fixture-routes.ts";
 import {
+  completeSignIn,
   formTokenOf,
   getPage,
   OWNER_EMAIL,
@@ -290,8 +291,11 @@ describe("refused confirmation POSTs", () => {
       { cookie: csrfCookie },
     );
     expect(signIn.status).toBe(303);
-    expect(signIn.headers.get("location")).toBe(TYPED_PATH);
-    const session = (signIn.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    expect(signIn.headers.get("location")).toBe("/sign-in/factor");
+    const full = await completeSignIn(c, signIn);
+    expect(full.status).toBe(303);
+    expect(full.headers.get("location")).toBe(TYPED_PATH);
+    const session = (full.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
     const back = await getPage(c, TYPED_PATH, session);
     expect(back.status).toBe(200);
     expect(back.body).toContain("Type Checkout API to confirm");

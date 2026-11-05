@@ -65,11 +65,20 @@ async function startEnv(waitMs: number): Promise<Env> {
   return { console: server, api, recorder, target, role, hold };
 }
 
-async function signIn(page: Page, base: string): Promise<void> {
+async function signIn(page: Page, env: Env): Promise<void> {
+  const base = env.console.base;
   await page.goto(`${base}/sign-in`);
   await page.fill('input[name="email"]', OWNER_EMAIL);
   await page.fill('input[name="password"]', OWNER_PASSWORD);
-  await Promise.all([page.waitForURL(`${base}/`), page.click('button[type="submit"]')]);
+  await Promise.all([
+    page.waitForURL(`${base}/sign-in/factor`),
+    page.click('button[type="submit"]'),
+  ]);
+  await page.fill('input[name="recovery_code"]', env.console.recoveryCodes.shift() ?? "");
+  await Promise.all([
+    page.waitForURL(`${base}/`),
+    page.getByRole("button", { name: "Use recovery code" }).click(),
+  ]);
   assert((await page.content()).includes("Signed in as"), "sign-in reaches the shell");
 }
 
@@ -153,7 +162,7 @@ async function checkLayout(env: Env, browser: Browser, width: number, height: nu
   const base = env.console.base;
   await page.goto(`${base}/sign-in`);
   await assertFits(page, width, `${width}px sign-in`);
-  await signIn(page, base);
+  await signIn(page, env);
   for (const c of OVERVIEW_CASES) {
     c.apply(env);
     await page.goto(`${base}/`);
@@ -191,7 +200,7 @@ async function checkAxe(env: Env, browser: Browser): Promise<void> {
   const page = await newPage(context, violations);
   const base = env.console.base;
   await axeOn(page, `${base}/sign-in`, "sign-in");
-  await signIn(page, base);
+  await signIn(page, env);
   await axeOn(page, `${base}/`, "Overview");
   await axeOn(page, `${base}/does-not-exist`, "shell 404");
   env.role.current = "viewer";
@@ -214,9 +223,9 @@ async function focusedOutline(page: Page): Promise<{ text: string; outline: stri
 async function checkFocus(env: Env, browser: Browser): Promise<void> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
-  await signIn(page, env.console.base);
+  await signIn(page, env);
   await page.goto(`${env.console.base}/`);
-  const expected = ["Skip to content", "Sign out", "Overview"];
+  const expected = ["Skip to content", "Account security", "Sign out", "Overview"];
   for (const text of expected) {
     await page.keyboard.press("Tab");
     const got = await focusedOutline(page);
@@ -224,7 +233,9 @@ async function checkFocus(env: Env, browser: Browser): Promise<void> {
     assert(got.outline !== "none", `${text} has no focus outline`);
   }
   await context.close();
-  ok("Tab reaches Skip to content, Sign out and Overview in order, each with an outline");
+  ok(
+    "Tab reaches Skip to content, Account security, Sign out and Overview in order, each with an outline",
+  );
 }
 
 /** Presses Tab from the top until the element with this text has focus. */
@@ -241,7 +252,7 @@ async function checkNoScript(env: Env, browser: Browser): Promise<void> {
   const context = await browser.newContext({ javaScriptEnabled: false });
   const page = await newPage(context, violations);
   const base = env.console.base;
-  await signIn(page, base);
+  await signIn(page, env);
   env.recorder.actions.length = 0;
   await page.goto(`${base}/__test/confirm/typed/delete-check`);
   await page.fill('input[name="confirm_name"]', "Checkout API");
@@ -325,7 +336,7 @@ async function checkBusyScript(env: Env, browser: Browser): Promise<void> {
   const context = await browser.newContext();
   const page = await newPage(context, violations);
   const base = env.console.base;
-  await signIn(page, base);
+  await signIn(page, env);
   env.recorder.actions.length = 0;
   await page.goto(`${base}/__test/states/busy`);
   await page.fill('input[name="choice"]', "first");
@@ -391,6 +402,69 @@ async function checkPageShow(env: Env, page: Page): Promise<void> {
   ok("pageshow from the back/forward cache leaves the restored form usable");
 }
 
+/** The account confirmations and two-browser revocation work with page JavaScript off. */
+async function checkAccountNoScript(env: Env, browser: Browser): Promise<void> {
+  const a = await browser.newContext({
+    javaScriptEnabled: false,
+    viewport: { width: 390, height: 844 },
+  });
+  const b = await browser.newContext({
+    javaScriptEnabled: false,
+    viewport: { width: 390, height: 844 },
+  });
+  const owner = await a.newPage();
+  const other = await b.newPage();
+  const base = env.console.base;
+  try {
+    await signIn(owner, env);
+    await signIn(other, env);
+    await owner.goto(`${base}/account/sessions/sign-out-all`);
+    await Promise.all([
+      owner.waitForURL(`${base}/account/sessions?signed-out=others`),
+      owner.getByRole("button", { name: "Sign out all other sessions", exact: true }).click(),
+    ]);
+    assert(
+      (await owner.content()).includes("All other sessions are signed out."),
+      "sign out all confirmed",
+    );
+    await other.goto(`${base}/`);
+    assert(other.url().includes("/sign-in?next="), "other browser is signed out");
+    await owner.goto(`${base}/`);
+    assert((await owner.content()).includes("Signed in as"), "current browser stays signed in");
+    await owner.goto(`${base}/account/recovery-codes`);
+    await owner.fill('input[name="password"]', OWNER_PASSWORD);
+    await owner.getByRole("button", { name: "Create new recovery codes" }).click();
+    const codes = await owner.locator("#recovery-codes li").allTextContents();
+    assert(codes.length === 10, "new recovery codes confirmation shows ten codes");
+    await assertFits(owner, 390, "recovery codes");
+    await owner.goto(`${base}/account/authenticator`);
+    await owner.fill('input[name="password"]', OWNER_PASSWORD);
+    await owner.getByRole("button", { name: "Replace authenticator", exact: true }).click();
+    await owner.locator("#totp-secret").waitFor();
+    await assertFits(owner, 390, "authenticator setup key");
+    await other.fill('input[name="email"]', OWNER_EMAIL);
+    await other.fill('input[name="password"]', OWNER_PASSWORD);
+    await Promise.all([
+      other.waitForURL(`${base}/sign-in/factor`),
+      other.getByRole("button", { name: "Sign in", exact: true }).click(),
+    ]);
+    await assertFits(other, 390, "sign-in factor");
+    await owner.goto(`${base}/account/sessions`);
+    await Promise.all([
+      owner.waitForURL(`${base}/sign-in`),
+      owner.getByRole("button", { name: "Sign out", exact: true }).click(),
+    ]);
+    await owner.goto(`${base}/`);
+    assert(owner.url().includes("/sign-in?next="), "final sign out ends this browser");
+    ok(
+      "no JavaScript: both account confirmations, two-browser sign out all, final sign out and 390px factor/key/code pages",
+    );
+  } finally {
+    await a.close();
+    await b.close();
+  }
+}
+
 async function runChecks(): Promise<void> {
   const env = await startEnv(0);
   const browser = await chromium.launch();
@@ -401,6 +475,7 @@ async function runChecks(): Promise<void> {
     await checkFocus(env, browser);
     await checkNoScript(env, browser);
     await checkBusyScript(env, browser);
+    await checkAccountNoScript(env, browser);
   } finally {
     await browser.close();
     await env.console.close();

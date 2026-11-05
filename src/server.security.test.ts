@@ -7,17 +7,34 @@ import { createLogger } from "@lorenzh/pulse-kit";
 import {
   getPage,
   postForm,
-  type Reply,
   type SignedInConsole,
   startSignedInConsole,
 } from "../test/signed-in-console.ts";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
+import { createFactorStore } from "./factor-store.ts";
 import { createMetrics } from "./metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { createConsoleServer, listen } from "./server.ts";
 import type { ConsoleMode } from "./settings.ts";
 import { createSetupGate } from "./setup-code.ts";
+import {
+  closeAll,
+  csrfIn,
+  enrol,
+  enrolledConsole,
+  KEY_HEX,
+  PASSWORD as OWNER_PASSWORD,
+  type Reply,
+  SESSION,
+  STEP_MS,
+  startConsole as startTwoFactorConsole,
+  stepAt,
+  Client as TwoFactorClient,
+  totpCode,
+} from "./two-factor-harness.ts";
+
+const TEST_SECRET_KEY = Uint8Array.from(Buffer.from("0123456789abcdef".repeat(4), "hex"));
 
 const CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
@@ -75,6 +92,8 @@ async function startConsole(
     defaultApiUrl: `http://127.0.0.1:${api.port}`,
     adminToken: TOKEN,
     store,
+    factorStore: createFactorStore(db),
+    secretKey: TEST_SECRET_KEY,
     gate: setup.gate,
     now: () => 0,
     randomBytes,
@@ -392,6 +411,157 @@ describe("leak scan of the setup flow", () => {
     }
     for (const line of c.logs) for (const s of sentinels) expect(line).not.toContain(s);
     for (const s of sentinels) expect(c.metricsText()).not.toContain(s);
+  });
+});
+
+class RecordingClient extends TwoFactorClient {
+  readonly replies: Reply[] = [];
+  readonly posted: string[] = [];
+
+  override async request(
+    method: string,
+    path: string,
+    fields?: Record<string, string>,
+  ): Promise<Reply> {
+    for (const [name, value] of Object.entries(fields ?? {})) {
+      if (name === "code" || name === "recovery_code") this.posted.push(value);
+    }
+    const reply = await super.request(method, path, fields);
+    this.replies.push(reply);
+    return reply;
+  }
+}
+
+async function rawPost(
+  base: string,
+  path: string,
+  body: string,
+  headers: Record<string, string>,
+): Promise<number> {
+  const res = await fetch(base + path, { method: "POST", redirect: "manual", headers, body });
+  await res.arrayBuffer();
+  return res.status;
+}
+
+describe("gate and POST order of the new routes", () => {
+  afterEach(closeAll);
+
+  test("the gate answers before Origin, content type and body; then the documented order", async () => {
+    const { c } = await enrolledConsole();
+    const anonymous = { origin: "http://evil.example", "content-type": "text/plain" };
+    const huge = "x".repeat(10_000);
+    for (const path of [
+      "/sign-in/factor",
+      "/account/authenticator",
+      "/account/recovery-codes",
+      "/account/sessions/sign-out-all",
+    ]) {
+      expect(await rawPost(c.base, path, huge, anonymous)).toBe(303);
+    }
+    const client = new TwoFactorClient(c);
+    await client.password();
+    const page = await client.get("/sign-in/factor");
+    const csrf = csrfIn(page.body);
+    const cookie = [...client.jar].map(([k, v]) => `${k}=${v}`).join("; ");
+    const form = "application/x-www-form-urlencoded";
+    const steps: [string, Record<string, string>, number][] = [
+      [`csrf=${csrf}&code=1`, { cookie, origin: "http://evil.example", "content-type": form }, 403],
+      [`csrf=${csrf}&code=1`, { cookie, origin: c.base, "content-type": "text/plain" }, 415],
+      [`csrf=${csrf}&code=${huge}`, { cookie, origin: c.base, "content-type": form }, 413],
+      [`csrf=${csrf}&code=1&code=2`, { cookie, origin: c.base, "content-type": form }, 400],
+      ["csrf=wrong&code=1", { cookie, origin: c.base, "content-type": form }, 403],
+      [`csrf=${csrf}&code=1`, { cookie, origin: c.base, "content-type": form }, 422],
+    ];
+    for (const [body, headers, status] of steps) {
+      expect(await rawPost(c.base, "/sign-in/factor", body, headers)).toBe(status);
+    }
+    // None of these counted: four wrong codes still answer 401, not 429.
+    for (let i = 0; i < 4; i += 1) {
+      expect((await client.factor({ code: "000000" })).status).not.toBe(429);
+    }
+  });
+});
+
+describe("leak scan of the two-factor flows", () => {
+  afterEach(closeAll);
+
+  test("no seed, setup key, typed code, recovery code, key or session secret leaks", async () => {
+    const c = await startTwoFactorConsole();
+    const owner = new RecordingClient(c);
+    await owner.password();
+    const enrolled = await enrol(owner);
+    c.clock.now += STEP_MS;
+    const other = new RecordingClient(c);
+    await other.password();
+    const otherFactorId = other.jar.get(SESSION) ?? "";
+    const otherCsrf = csrfIn((await other.get("/sign-in/factor")).body);
+    await other.factor({ code: totpCode(enrolled.seed, stepAt(c.clock.now) + 4) });
+    await other.factor({ recovery_code: enrolled.codes[1] ?? "" });
+    const ownerId = owner.jar.get(SESSION) ?? "";
+    await owner.get("/");
+    const otherFullId = other.jar.get(SESSION) ?? "";
+    const otherFullCsrf = csrfIn((await other.get("/")).body);
+    await owner.get("/account/security");
+    const listed = await owner.get("/account/sessions");
+    const ownerCsrf = csrfIn(listed.body);
+    const renewed = await owner.post("/account/recovery-codes", {
+      csrf: ownerCsrf,
+      password: OWNER_PASSWORD,
+    });
+    const freshCodes = [...renewed.body.matchAll(/<li><code>([^<]+)<\/code><\/li>/g)].map(
+      (m) => m[1] ?? "",
+    );
+    expect(freshCodes).toHaveLength(10);
+    await owner.get("/account/sessions/sign-out-all");
+    await owner.post("/account/sessions/sign-out-all", { csrf: ownerCsrf });
+    await owner.get("/account/sessions?signed-out=others");
+    const metrics = await owner.get("/metrics");
+
+    // Positive controls: the intended disclosures exist before they are cut out.
+    const keyText = enrolled.key.replaceAll(" ", "");
+    const intended = owner.replies.filter(
+      (r) => r.body.includes('id="totp-secret"') || r.body.includes('id="recovery-codes"'),
+    );
+    expect(intended.length).toBeGreaterThanOrEqual(3);
+    const sentinels = [
+      keyText,
+      enrolled.seed.toString("hex"),
+      enrolled.seed.toString("base64url"),
+      KEY_HEX,
+      ...enrolled.codes,
+      ...enrolled.codes.map((code) => code.replaceAll("-", "")),
+      ...owner.posted,
+      ...other.posted,
+      ...freshCodes,
+      OWNER_PASSWORD,
+    ];
+    const replies = [...owner.replies, ...other.replies].filter((r) => !intended.includes(r));
+    for (const r of replies) {
+      const text = [r.headers.get("location") ?? "", r.body].join("\n");
+      for (const s of sentinels) expect(text).not.toContain(s);
+      for (const line of r.headers.getSetCookie()) {
+        for (const s of sentinels) expect(line).not.toContain(s);
+      }
+    }
+    for (const r of owner.replies) {
+      for (const s of [otherFactorId, otherCsrf, otherFullId, otherFullCsrf]) {
+        expect(r.body).not.toContain(s);
+      }
+    }
+    for (const line of c.logs) {
+      for (const s of [...sentinels, ownerId, otherFactorId, otherCsrf, otherFullId]) {
+        expect(line).not.toContain(s);
+      }
+    }
+    for (const s of [...sentinels, ownerId, otherFactorId, otherCsrf]) {
+      expect(metrics.body).not.toContain(s);
+    }
+    expect(metrics.body).toContain('path="/sign-in/factor"');
+    expect(metrics.body).toContain('kind="enrolment",result="success"');
+    expect(metrics.body).toContain('kind="recovery-code",result="success"');
+    expect(metrics.body).toContain('path="/account/sessions/sign-out-all"');
+    expect(metrics.body).toContain('kind="password-confirm",result="success"');
+    expect(c.logs.some((l) => l.includes("signed out other sessions"))).toBe(true);
   });
 });
 

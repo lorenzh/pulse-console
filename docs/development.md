@@ -27,6 +27,7 @@ Open <http://127.0.0.1:8082>. Bun runs the TypeScript source directly (no build 
 - `src/protected-route.ts` holds the `ProtectedRoute`, `PageRequest` and `PageResult` types of a signed-in page. `src/server.ts` runs them through one dispatcher (phase, `Host`, session, POST checks, role, form token, handler) and renders the result in the shell.
 - `src/overview-read.ts` reads `GET /admin/config` (with the token) and `GET /checks` (without it) at the same time; `src/overview.ts` counts the check states, picks the overall state and renders the Overview body.
 - `src/form-tokens.ts` is the in-memory single-use form-token store (lifetime, per-binding and pool bounds); `src/console-script.ts` holds `CONSOLE_JS`, the busy-button script served at `/console.js`.
+- `src/http-context.ts` holds the shared HTTP and session form helpers. `src/account-routes.ts` and `src/sign-in-factor.ts` handle the staged authentication and account pages; `src/account-pages.ts` renders them. `src/factor-store.ts` commits authenticator, recovery-code and session changes atomically.
 - `src/metrics.ts` holds `pulse_up`, the request and auth counters and the readiness state.
 
 ## Checks
@@ -57,7 +58,7 @@ Work test first. Tests sit next to the code as `src/<module>.test.ts`, use hand-
 - `src/main.startup.test.ts` spawns `bun src/main.ts` and checks bad settings and database errors, the setup code line, the warnings, the start log, the file mode and the exit code `0` on `SIGTERM`.
 - Test helpers used by one test file stay inside it. Helpers shared by several test files, such as the fake pulse-api in `test/fake-api.ts`, live in `test/`. The image copies only `src`, so `test/` never ships; `tsconfig.json` includes `test` so it is typechecked and linted.
 - `e2e/run.ts` is a plain Bun script, not a `*.test.ts` file, so `bun test` does not run it. `bun run check:browser` runs it: it starts the fake pulse-api and a console with the fixture routes, a temp database and a completed setup, signs in through the real form and drives Chromium (Playwright `1.64.1`, `@axe-core/playwright` `4.14.0`, both dev dependencies). It checks that no page is wider than 390 px at 390 × 844 or than 1280 px at 1280 × 800, axe with `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa` and `wcag22aa` on sign-in, Overview, the shell 404 and 403 and one confirmation of each kind, the Tab order and focus outline, the confirmations and the busy button with JavaScript off (including a replay of the captured POST that answers `409`) and on (one POST only, the submitter value kept, `pageshow` restore), and that the browser reports no CSP violation. It prints `ok:` per check and exits non-zero on the first failure. `e2e/tsconfig.json` adds the `dom` library, and `bun run typecheck` also runs `tsc -p e2e`.
-- `bun e2e/run.ts --serve` starts the same fixture console on `127.0.0.1`, prints its URL and the test sign-in, makes the busy POST wait 3000 ms and runs until stopped. Use it for a manual check with a browser.
+- `bun e2e/run.ts --serve` starts the same fixture console on `127.0.0.1`, prints its URL and the test sign-in, makes the busy POST wait 3000 ms and runs until stopped. Use it for a manual check with a browser. After the password, use a fixture recovery code: 32 lowercase hex digits for the numbers 1 through 10, padded with zeros (for example `00000000000000000000000000000001`). Each works once; restarting the fixture resets the codes.
 
 ## Lefthook
 
@@ -65,7 +66,7 @@ Work test first. Tests sit next to the code as `src/<module>.test.ts`, use hand-
 
 ## CI
 
-`.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on `v*` tags. It has four jobs:
+`.github/workflows/ci.yml` runs on pull requests, on pushes to `main` and on `v*` tags. It has five jobs:
 
 - `check` uses the shared `check.yml` workflow of `lorenzh/pulse-config`, pinned to a commit SHA: install from the lockfile, lint (with `pulse-workflows`: every action pinned to an approved SHA, every checkout with `persist-credentials: false`, config workflow refs equal to the `package.json` pin), typecheck, tests with coverage.
 - `docker` runs as a matrix on two native runners, `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64), with `fail-fast: false`. Both legs run the same steps, so the arm64 image is built and smoke-tested in every pull request. Each leg builds the image and runs it:
@@ -81,7 +82,9 @@ Work test first. Tests sit next to the code as `src/<module>.test.ts`, use hand-
   10. scans the database file and its sidecars for the sentinel token: the file must be readable, start with `SQLite format 3`, and `grep -c` must exit `1` with `0` for each file;
   11. checks that the sentinel token is in neither the container logs nor the page (no secret leaks);
   12. checks that `docker stop` gives exit code `0` (graceful shutdown);
-  13. checks that a container without `PULSE_API_URL` exits `2` with `PULSE_API_URL must be set` (settings are validated).
+  13. checks that a container without `PULSE_API_URL` exits `2` with `PULSE_API_URL must be set` (settings are validated);
+  14. checks that a malformed secret key file exits `2` with the required error text and without disclosing its content.
+- `deploy-dev` builds the dev stack of pulse-deploy main with this checkout and runs `E2E_CONSOLE_FLOW=two-factor bash e2e/console-setup.sh dev/compose.yaml`. It keeps logs on failure and always tears down the stack.
 - `browser` runs on `ubuntu-24.04` with a 15 minute limit and read-only contents: install from the lockfile, `bunx playwright install --with-deps chromium`, `bun run check:browser`.
 - `release` runs only on a tag. It needs `check`, both `docker` legs and `browser`, and calls the shared `release.yml` workflow of `lorenzh/pulse-config` (see [Releasing](#releasing)). On pull requests and on `main` it is skipped.
 

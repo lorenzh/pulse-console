@@ -1,5 +1,7 @@
 // A real console server on 127.0.0.1 port 0 with a temp database, a completed setup and a
 // signed-in owner session, for the protected-route tests.
+
+import { createHash } from "node:crypto";
 import { chmodSync, closeSync, mkdtempSync, openSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -8,6 +10,7 @@ import { createLogger } from "@lorenzh/pulse-kit";
 import type { User } from "../src/account-store.ts";
 import { type AccountStore, createAccountStore } from "../src/account-store.ts";
 import { openDatabase } from "../src/database.ts";
+import { createFactorStore } from "../src/factor-store.ts";
 import { createMetrics, type Metrics } from "../src/metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "../src/passwords.ts";
 import type { ProtectedRoute } from "../src/protected-route.ts";
@@ -24,6 +27,7 @@ export type SignedInConsole = {
   base: string;
   /** The cookie header of the signed-in owner. */
   cookie: string;
+  recoveryCodes: string[];
   store: AccountStore;
   logs: string[];
   metrics: Metrics;
@@ -58,6 +62,19 @@ export async function startSignedInConsole(options: SignedInOptions): Promise<Si
   );
   const owner = store.userByEmail(OWNER_EMAIL);
   if (owner === undefined) throw new Error("owner missing");
+  // Protected-page fixtures start with an enrolled owner, just as production requires.
+  db.query(
+    "INSERT INTO authenticators (user_id, secret, last_step, confirmed_at) VALUES (?, ?, ?, ?)",
+  ).run(owner.id, "fixture-secret", -1, START);
+  const recoveryCodes = Array.from({ length: 10 }, (_, i) =>
+    (i + 1).toString(16).padStart(32, "0"),
+  );
+  for (const code of recoveryCodes) {
+    db.query("INSERT INTO recovery_codes (user_id, digest) VALUES (?, ?)").run(
+      owner.id,
+      createHash("sha256").update(code).digest("hex"),
+    );
+  }
   store.createSession(SESSION_ID, owner.id, SESSION_CSRF, START);
   let now = START;
   const logs: string[] = [];
@@ -71,6 +88,8 @@ export async function startSignedInConsole(options: SignedInOptions): Promise<Si
     defaultApiUrl: options.apiUrl,
     adminToken: options.adminToken,
     store,
+    factorStore: createFactorStore(db),
+    secretKey: new Uint8Array(32).fill(7),
     gate: undefined,
     now: () => now,
     randomBytes: (size) => crypto.getRandomValues(new Uint8Array(size)),
@@ -89,6 +108,7 @@ export async function startSignedInConsole(options: SignedInOptions): Promise<Si
   return {
     base: `http://127.0.0.1:${port}`,
     cookie: `pulse_console_session=${SESSION_ID}`,
+    recoveryCodes,
     store,
     logs,
     metrics,
@@ -140,4 +160,21 @@ export function formTokenOf(html: string, action: string): string {
   const start = html.indexOf(`action="${action}"`);
   const match = /name="form_token" value="([^"]*)"/.exec(html.slice(Math.max(start, 0)));
   return match?.[1] ?? "";
+}
+
+/** Completes the fixture owner's required second factor after a password POST. */
+export async function completeSignIn(c: SignedInConsole, passwordReply: Reply): Promise<Reply> {
+  const cookie = (passwordReply.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+  const page = await getPage(c, "/sign-in/factor", cookie);
+  const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)?.[1] ?? "";
+  return postForm(
+    c,
+    "/sign-in/factor",
+    {
+      csrf,
+      form_token: formTokenOf(page.body, "/sign-in/factor"),
+      recovery_code: c.recoveryCodes.shift() ?? "",
+    },
+    { cookie },
+  );
 }

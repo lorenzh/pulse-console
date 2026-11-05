@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { readCookie, serializeCookie, serializeCookieDeletion } from "./cookies.ts";
+import {
+  readCookie,
+  serializeCookie,
+  serializeCookieDeletion,
+  serializeSessionCookie,
+} from "./cookies.ts";
 
 describe("serialize", () => {
   test("loopback and strict-http: plain names, no Secure, no Domain", () => {
@@ -52,5 +57,19 @@ describe("read", () => {
     expect(readCookie("__Host-pulse_console_session=h; junk", "session", "strict-https")).toBe("h");
     expect(readCookie(null, "session", "loopback")).toBeUndefined();
     expect(readCookie(undefined, "session", "loopback")).toBeUndefined();
+  });
+});
+
+describe("session cookie of a stage", () => {
+  test("partial stages get Max-Age=900, full keeps 30 days", () => {
+    expect(serializeSessionCookie("s1", "factor", "loopback")).toBe(
+      "pulse_console_session=s1; Path=/; HttpOnly; SameSite=Strict; Max-Age=900",
+    );
+    expect(serializeSessionCookie("s1", "enrol", "strict-https")).toBe(
+      "__Host-pulse_console_session=s1; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=900",
+    );
+    expect(serializeSessionCookie("s1", "full", "loopback")).toBe(
+      "pulse_console_session=s1; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000",
+    );
   });
 });

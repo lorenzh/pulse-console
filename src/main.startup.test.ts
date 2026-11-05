@@ -188,18 +188,76 @@ test("database start errors exit 2 with their literal text and print no code", a
   writeFileSync(corrupt, Buffer.alloc(4096, 0xab));
   const newer = join(dir, "newer.db");
   const db = new Database(newer);
-  db.run("PRAGMA user_version = 2");
+  db.run("PRAGMA user_version = 3");
   db.close();
   for (const [path, text] of [
     [missing, `PULSE_CONSOLE_DB=${missing}: cannot open (ENOENT)`],
     [corrupt, `PULSE_CONSOLE_DB=${corrupt}: cannot open (SQLITE_NOTADB)`],
-    [newer, `PULSE_CONSOLE_DB=${newer}: schema version 2 is newer than this console (1)`],
+    [newer, `PULSE_CONSOLE_DB=${newer}: schema version 3 is newer than this console (2)`],
   ] as const) {
     const r = await collect(spawnMain({ PULSE_API_URL: API_URL, PULSE_CONSOLE_DB: path }));
     assertOneLine(r, `pulse-console: ${text}`);
   }
 }, 20_000);
 
+const KEY_HEX = "0123456789abcdef".repeat(4);
+
+test("an unset key file warns and the listening line has hasSecretKey false", async () => {
+  const r = await runUntilListening({ PULSE_API_URL: API_URL });
+  const warn = r.stderr.split("\n").filter((l) => l.includes("PULSE_CONSOLE_SECRET_KEY_FILE"));
+  expect(warn).toHaveLength(1);
+  expect(JSON.parse(warn[0] ?? "{}")).toMatchObject({
+    level: "warn",
+    msg: "PULSE_CONSOLE_SECRET_KEY_FILE is not set: authenticator enrolment and TOTP sign-in are unavailable",
+  });
+  const listening = r.stdout.split("\n").find((l) => l.includes("pulse-console listening"));
+  expect(JSON.parse(listening ?? "{}")).toMatchObject({ hasSecretKey: false });
+}, 20_000);
+
+test("a valid key file starts with hasSecretKey true and never prints the key", async () => {
+  const path = join(tempDir(), "key");
+  writeFileSync(path, `${KEY_HEX}\n`);
+  const r = await runUntilListening({
+    PULSE_API_URL: API_URL,
+    PULSE_CONSOLE_SECRET_KEY_FILE: path,
+  });
+  const listening = r.stdout.split("\n").find((l) => l.includes("pulse-console listening"));
+  expect(JSON.parse(listening ?? "{}")).toMatchObject({ hasSecretKey: true });
+  expect(r.stderr).not.toContain("PULSE_CONSOLE_SECRET_KEY_FILE is not set");
+  expect(r.stdout + r.stderr).not.toContain(KEY_HEX);
+}, 20_000);
+
+test("key file start errors exit 2 with one line, after the admin token check", async () => {
+  const dir = tempDir();
+  const missing = join(dir, "missing");
+  const bad = join(dir, "bad");
+  writeFileSync(bad, "not-a-key");
+  const same = join(dir, "same");
+  writeFileSync(same, KEY_HEX);
+  for (const [env, text] of [
+    [
+      { PULSE_CONSOLE_SECRET_KEY_FILE: missing },
+      `PULSE_CONSOLE_SECRET_KEY_FILE=${missing}: cannot read (ENOENT)`,
+    ],
+    [
+      { PULSE_CONSOLE_SECRET_KEY_FILE: bad },
+      `PULSE_CONSOLE_SECRET_KEY_FILE=${bad}: must hold 64 lowercase hex characters`,
+    ],
+    [
+      { PULSE_CONSOLE_SECRET_KEY_FILE: same, PULSE_CONSOLE_ADMIN_TOKEN: KEY_HEX },
+      `PULSE_CONSOLE_SECRET_KEY_FILE=${same}: must differ from the admin token`,
+    ],
+    [
+      { PULSE_CONSOLE_SECRET_KEY_FILE: bad, PULSE_CONSOLE_ADMIN_TOKEN: "short" },
+      "PULSE_CONSOLE_ADMIN_TOKEN must hold at least 32 characters",
+    ],
+  ] as const) {
+    const r = await collect(spawnMain({ PULSE_API_URL: API_URL, ...env }));
+    assertOneLine(r, `pulse-console: ${text}`);
+    expect(r.stderr).not.toContain("not-a-key");
+    expect(r.stderr).not.toContain(KEY_HEX);
+  }
+}, 20_000);
 test("bun src/main.ts serves no /__test/ route", async () => {
   const child = spawnMain({ PULSE_API_URL: API_URL });
   let answer: Promise<{ status: number; body: string }> | undefined;

@@ -1,5 +1,6 @@
 /* eslint-disable sonarjs/no-clear-text-protocols -- loopback test servers */
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { chmodSync, closeSync, mkdtempSync, openSync, rmSync } from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -17,6 +18,7 @@ import {
 } from "../test/signed-in-console.ts";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
+import { createFactorStore } from "./factor-store.ts";
 import { createMetrics, type Metrics } from "./metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { createConsoleServer, listen } from "./server.ts";
@@ -26,6 +28,7 @@ const PASSWORD = "form-token-password-sentinel-42";
 const EMAIL = "owner@example.com";
 const TOKEN = "form-token-admin-token-sentinel-0123456789";
 const START = 5_000_000;
+const RECOVERY_CODE = "0123456789abcdef0123456789abcdef";
 const EXPIRED_RESEND = "This form has expired. Send it again.";
 const EXPIRED_KEPT = "This form has expired. Your input is kept below. Send it again.";
 const TOKEN_LINE = /<input type="hidden" name="form_token" value="([A-Za-z0-9_-]{43})">/g;
@@ -90,6 +93,12 @@ async function startConsole(isSetUp: boolean): Promise<Console> {
       "http://api.example:3000",
       START,
     );
+    db.query(
+      "INSERT INTO authenticators (user_id, secret, last_step, confirmed_at) VALUES (1, ?, -1, ?)",
+    ).run("fixture-secret", START);
+    db.query("INSERT INTO recovery_codes (user_id, digest) VALUES (1, ?)").run(
+      createHash("sha256").update(RECOVERY_CODE).digest("hex"),
+    );
   }
   const randomBytes = (size: number): Uint8Array => crypto.getRandomValues(new Uint8Array(size));
   const setup = createSetupGate({ now: () => START, randomBytes });
@@ -104,6 +113,8 @@ async function startConsole(isSetUp: boolean): Promise<Console> {
     defaultApiUrl: "http://api.invalid:3000",
     adminToken: TOKEN,
     store,
+    factorStore: createFactorStore(db),
+    secretKey: undefined,
     gate: isSetUp ? undefined : setup.gate,
     now: () => START,
     randomBytes,
@@ -189,7 +200,16 @@ async function signedIn(c: Console): Promise<{ cookie: string; csrf: string; tok
   const fields = { csrf: form.csrf, form_token: form.token, email: EMAIL, password: PASSWORD };
   const res = await post(c, "/sign-in", form.cookie, { ...fields, next: "/" });
   expect(res.status).toBe(303);
-  const cookie = `pulse_console_session=${cookieValue(res, "pulse_console_session")}`;
+  const partial = `pulse_console_session=${cookieValue(res, "pulse_console_session")}`;
+  const factor = await get(c, "/sign-in/factor", partial);
+  const factorCsrf = /name="csrf" value="([^"]+)"/.exec(factor.body)?.[1] ?? "";
+  const full = await post(c, "/sign-in/factor", partial, {
+    csrf: factorCsrf,
+    form_token: tokenOf(factor.body),
+    recovery_code: RECOVERY_CODE,
+  });
+  expect(full.status).toBe(303);
+  const cookie = `pulse_console_session=${cookieValue(full, "pulse_console_session")}`;
   const home = await get(c, "/", cookie);
   const csrf = /name="csrf" value="([^"]+)"/.exec(home.body)?.[1] ?? "";
   return { cookie, csrf, token: tokenOf(home.body) };
@@ -274,7 +294,9 @@ describe("sign-in form token", () => {
     expect(fresh).not.toBe("");
     const ok = await post(c, "/sign-in", form.cookie, { ...fields, form_token: fresh });
     expect(ok.status).toBe(303);
-    expect(ok.headers.get("location")).toBe("/kept");
+    expect(ok.headers.get("location")).toBe("/sign-in/factor");
+    const sessionId = cookieValue(ok, "pulse_console_session");
+    expect(c.store.session(sessionId)?.nextPath).toBe("/kept");
     expect(c.logs.some((l) => l.includes("form token refused") && l.includes("invalid"))).toBe(
       true,
     );

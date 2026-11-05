@@ -1,7 +1,8 @@
 import { chmodSync, closeSync, openSync, readFileSync } from "node:fs";
 import { createLogger, readLogLevel, runService, StartupError } from "@lorenzh/pulse-kit";
-import { createAccountStore } from "./account-store.ts";
+import { createAccountStore, SESSION_IDLE_MS } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
+import { createFactorStore } from "./factor-store.ts";
 import { createMetrics } from "./metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
 import { createConsoleServer, listen } from "./server.ts";
@@ -11,7 +12,6 @@ import { createSetupGate } from "./setup-code.ts";
 const SHUTDOWN_TIMEOUT_MS = 5000;
 const EXIT_STARTUP = 2;
 const EXIT_RUNTIME = 1;
-const SESSION_IDLE_MS = 2_592_000_000;
 
 let level: ReturnType<typeof readLogLevel>;
 try {
@@ -40,6 +40,11 @@ async function start(): Promise<void> {
   store.deleteExpiredSessions(Date.now(), SESSION_IDLE_MS);
   if (instance !== undefined && instance.apiUrl !== settings.apiUrl) {
     log.warn("PULSE_API_URL differs from the API URL saved at setup; the saved URL is used");
+  }
+  if (settings.secretKey === undefined) {
+    log.warn(
+      "PULSE_CONSOLE_SECRET_KEY_FILE is not set: authenticator enrolment and TOTP sign-in are unavailable",
+    );
   }
   if (settings.mode === "strict-http") {
     log.warn("PULSE_CONSOLE_PUBLIC_URL uses http: session cookies are not marked Secure");
@@ -70,6 +75,8 @@ async function start(): Promise<void> {
     defaultApiUrl: settings.apiUrl,
     adminToken: settings.adminToken,
     store,
+    factorStore: createFactorStore(db),
+    secretKey: settings.secretKey,
     gate,
     now: Date.now,
     randomBytes,
@@ -96,6 +103,7 @@ async function start(): Promise<void> {
     port,
     apiUrl: new URL(instance?.apiUrl ?? settings.apiUrl).origin,
     hasAdminToken: settings.adminToken !== undefined,
+    hasSecretKey: settings.secretKey !== undefined,
     mode: settings.mode,
     isSetUp: instance !== undefined,
   });

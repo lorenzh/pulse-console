@@ -1,34 +1,52 @@
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { clientKeyOf, handleOps, type OpsHandlers, StartupError } from "@lorenzh/pulse-kit";
 import {
-  BodyError,
-  clientKeyOf,
-  handleOps,
-  type Logger,
-  type OpsHandlers,
-  readBody,
-  StartupError,
-} from "@lorenzh/pulse-kit";
-import { type AccountStore, type Session, sessionDigest, type User } from "./account-store.ts";
-import { type AuthThrottle, createAuthThrottle } from "./auth-throttle.ts";
-import { type FetchLike, NO_TOKEN_TEXT, testConnection } from "./connection-test.ts";
+  postAuthenticator,
+  postNewCodes,
+  postSignOutAll,
+  sendAuthenticator,
+  sendNewCodesForm,
+  sendSecurity,
+  sendSessions,
+  sendSignOutAllForm,
+} from "./account-routes.ts";
+import {
+  type AccountStore,
+  isSessionLive,
+  type NewSessionOptions,
+  SESSION_IDLE_MS,
+  type Session,
+  type SessionStage,
+  sessionDigest,
+  type User,
+} from "./account-store.ts";
+import { createAuthThrottle } from "./auth-throttle.ts";
+import { NO_TOKEN_TEXT, testConnection } from "./connection-test.ts";
 import { CONSOLE_JS } from "./console-script.ts";
-import { readCookie, serializeCookie, serializeCookieDeletion } from "./cookies.ts";
-import { createFormTokens, type FormTokenResult, type FormTokens } from "./form-tokens.ts";
-import {
-  checkApiUrl,
-  checkEmail,
-  checkName,
-  type FormFields,
-  isFormContentType,
-  MAX_FORM_BYTES,
-  type ParsedForm,
-  parseForm,
-  passwordText,
-} from "./forms.ts";
+import { serializeCookie, serializeCookieDeletion } from "./cookies.ts";
+import { createFormTokens, type FormTokenResult } from "./form-tokens.ts";
+import { checkApiUrl, checkEmail, checkName, type FormFields, passwordText } from "./forms.ts";
 import { paragraph } from "./html.ts";
-import type { Metrics, PathLabel } from "./metrics.ts";
+import {
+  type ConsoleServerDeps,
+  type Ctx,
+  type Current,
+  cookieOf,
+  ensureCsrf,
+  NOT_FOUND,
+  newToken,
+  pushSessionCookie,
+  readFormFields,
+  readPostForm,
+  redirect,
+  type State,
+  send,
+  sendHtml,
+  sendText,
+} from "./http-context.ts";
+import type { PathLabel } from "./metrics.ts";
 import type { NavId } from "./navigation.ts";
 import { overviewView } from "./overview.ts";
 import { readOverview } from "./overview-read.ts";
@@ -42,23 +60,12 @@ import {
   setupOwnerPage,
   signInPage,
 } from "./pages.ts";
-import {
-  type CredentialVerifier,
-  type HashPassword,
-  isSignInPasswordAcceptable,
-} from "./passwords.ts";
+import { isSignInPasswordAcceptable } from "./passwords.ts";
 import type { PageMethod, PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
-import {
-  expectedOrigin,
-  isCsrfTokenValid,
-  isLoopbackHost,
-  isOriginAllowed,
-  safeNext,
-} from "./request-guard.ts";
+import { isLoopbackHost, safeNext } from "./request-guard.ts";
 import { type ConsoleRole, hasRole } from "./roles.ts";
-import type { ConsoleMode } from "./settings.ts";
-import type { SetupGate } from "./setup-code.ts";
 import { shellPage } from "./shell.ts";
+import { postFactor, sendFactorForm } from "./sign-in-factor.ts";
 import {
   alreadySubmittedState,
   forbiddenState,
@@ -67,6 +74,9 @@ import {
   notFoundState,
 } from "./states.ts";
 import { CONSOLE_CSS } from "./styles.ts";
+import { isSecondFactorRequired, signInStage } from "./two-factor-policy.ts";
+
+export type { ConsoleServerDeps };
 
 export const CONTENT_SECURITY_POLICY =
   "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
@@ -77,22 +87,43 @@ const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "x-frame-options": "DENY",
   "referrer-policy": "same-origin",
 };
-const NOT_FOUND = "not found\n";
 const MISDIRECTED = "misdirected request: set PULSE_CONSOLE_PUBLIC_URL to serve this host\n";
-const REFUSED = "Request refused. Reload the page and try again.";
 const ERROR_CODE = /^E[A-Z0-9_]+$/;
-const TOKEN_BYTES = 32;
+
+/**
+ * The session stage a route needs after setup. `public` routes run no gate; `any-session` is
+ * sign-out; `enrol-or-full` is the authenticator page.
+ */
+type Access = "public" | "any-session" | "full" | "factor" | "enrol-or-full";
+type Route = { methods: readonly string[]; access: Access; isNewInPhase2?: true };
 
 const OPS_PATHS: readonly string[] = ["/healthz", "/readyz", "/metrics"];
 const TEST_PREFIX = "/__test/";
-const ROUTES: Readonly<Record<string, readonly string[]>> = {
-  "/": ["GET", "HEAD"],
-  "/setup": ["GET", "HEAD", "POST"],
-  "/setup/owner": ["GET", "HEAD", "POST"],
-  "/sign-in": ["GET", "HEAD", "POST"],
-  "/sign-out": ["POST"],
-  "/console.css": ["GET", "HEAD"],
-  "/console.js": ["GET", "HEAD"],
+const ROUTES: Readonly<Record<string, Route>> = {
+  "/setup": { methods: ["GET", "HEAD", "POST"], access: "public" },
+  "/setup/owner": { methods: ["GET", "HEAD", "POST"], access: "public" },
+  "/sign-in": { methods: ["GET", "HEAD", "POST"], access: "public" },
+  "/sign-out": { methods: ["POST"], access: "any-session" },
+  "/console.js": { methods: ["GET", "HEAD"], access: "public" },
+  "/console.css": { methods: ["GET", "HEAD"], access: "public" },
+  "/sign-in/factor": { methods: ["GET", "HEAD", "POST"], access: "factor", isNewInPhase2: true },
+  "/account/authenticator": {
+    methods: ["GET", "HEAD", "POST"],
+    access: "enrol-or-full",
+    isNewInPhase2: true,
+  },
+  "/account/security": { methods: ["GET", "HEAD"], access: "full", isNewInPhase2: true },
+  "/account/recovery-codes": {
+    methods: ["GET", "HEAD", "POST"],
+    access: "full",
+    isNewInPhase2: true,
+  },
+  "/account/sessions": { methods: ["GET", "HEAD"], access: "full", isNewInPhase2: true },
+  "/account/sessions/sign-out-all": {
+    methods: ["GET", "HEAD", "POST"],
+    access: "full",
+    isNewInPhase2: true,
+  },
 };
 
 const CODE_FIELDS = ["code", "csrf", "form_token"] as const;
@@ -108,62 +139,15 @@ const OWNER_FIELDS = [
 ] as const;
 const SIGN_OUT_FIELDS = ["csrf", "form_token"] as const;
 const SIGN_IN_FIELDS = ["email", "password", "next", "form_token"] as const;
-const SESSION_IDLE_MS = 2_592_000_000;
 const SESSION_TOUCH_MS = 60_000;
 const WRONG_CREDENTIALS = "Wrong email or password.";
 const EXPIRED = "Your session has expired.";
-
-export interface ConsoleServerDeps {
-  metrics: Metrics;
-  log: Logger;
-  /** The name in the shell header and the page titles. */
-  instanceName: string;
-  mode: ConsoleMode;
-  publicOrigin: string | undefined;
-  /** PULSE_API_URL: the default of the setup form. */
-  defaultApiUrl: string;
-  adminToken: string | undefined;
-  store: AccountStore;
-  /** The setup gate; undefined when the console was set up at start. */
-  gate: SetupGate | undefined;
-  now: () => number;
-  randomBytes: (size: number) => Uint8Array;
-  hashPassword: HashPassword;
-  /** Checks a sign-in password; an unknown account runs the dummy verification. */
-  verifier: CredentialVerifier;
-  fetch: FetchLike;
-  schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
-  /** Test-only protected routes under /__test/. `main.ts` never sets them. */
-  testRoutes?: ReadonlyMap<string, ProtectedRoute> | undefined;
-  /** The role of a user. Defaults to `user.role`; only a test passes another. */
-  roleOf?: ((user: User) => ConsoleRole) | undefined;
-}
 
 /** A test route key outside /__test/ or on a production path. */
 export class TestRouteError extends Error {
   override name = "TestRouteError";
 }
-
-type State = {
-  gate: SetupGate | undefined;
-  setupThrottle: AuthThrottle<"client">;
-  signInThrottle: AuthThrottle<"account" | "client">;
-  formTokens: FormTokens;
-  protectedRoutes: ReadonlyMap<string, ProtectedRoute>;
-};
-
-type SignedIn = { id: string; session: Session; user: User };
-
-type Ctx = {
-  req: IncomingMessage;
-  res: ServerResponse;
-  path: string;
-  query: URLSearchParams;
-  deps: ConsoleServerDeps;
-  state: State;
-  cookies: string[];
-};
-
+type SignedIn = Current;
 /**
  * The raw path before the first "?", not decoded and not normalised, as kit's handleOps reads
  * it. A parsed URL would turn "//healthz" or "/%2e%2e/" into "/".
@@ -189,6 +173,12 @@ function pathLabel(path: string): PathLabel {
     case "/sign-in":
     case "/sign-out":
     case "/console.css":
+    case "/sign-in/factor":
+    case "/account/authenticator":
+    case "/account/security":
+    case "/account/recovery-codes":
+    case "/account/sessions":
+    case "/account/sessions/sign-out-all":
     case "/console.js":
       return path;
     default:
@@ -196,80 +186,75 @@ function pathLabel(path: string): PathLabel {
   }
 }
 
-function send(
-  ctx: Ctx,
-  status: number,
-  contentType: string,
-  body: string,
-  headers: Record<string, string> = {},
-): void {
-  if (ctx.cookies.length > 0) ctx.res.setHeader("set-cookie", ctx.cookies);
-  ctx.res.writeHead(status, {
-    "content-type": contentType,
-    "cache-control": "no-store",
-    "content-length": Buffer.byteLength(body),
-    ...headers,
-  });
-  ctx.res.end(ctx.req.method === "HEAD" ? undefined : body);
-}
-
-function sendHtml(ctx: Ctx, status: number, html: string, headers?: Record<string, string>): void {
-  send(ctx, status, "text/html; charset=utf-8", html, headers);
-}
-
-function sendText(ctx: Ctx, status: number, text: string): void {
-  send(ctx, status, "text/plain; charset=utf-8", text);
-}
-
-function redirect(ctx: Ctx, location: string): void {
-  if (ctx.cookies.length > 0) ctx.res.setHeader("set-cookie", ctx.cookies);
-  ctx.res.writeHead(303, { location, "cache-control": "no-store", "content-length": 0 });
-  ctx.res.end();
-}
-
-function newToken(ctx: Ctx): string {
-  return Buffer.from(ctx.deps.randomBytes(TOKEN_BYTES)).toString("base64url");
-}
-
-function cookieOf(ctx: Ctx, kind: "csrf" | "setup" | "session"): string | undefined {
-  return readCookie(ctx.req.headers.cookie, kind, ctx.deps.mode);
-}
-
-/** The anonymous CSRF token of this client; a GET of a form page sets it when it is missing. */
-function ensureCsrf(ctx: Ctx): string {
-  const existing = cookieOf(ctx, "csrf");
-  if (existing !== undefined) return existing;
-  const token = newToken(ctx);
-  ctx.cookies.push(serializeCookie("csrf", token, ctx.deps.mode));
-  return token;
-}
-
-/** The live session row of this request's cookie, without touching it. */
-function liveSession(ctx: Ctx): { id: string; session: Session } | undefined {
+/**
+ * The live session of this request's cookie with its effective stage, or undefined (anonymous).
+ * A `full` row of a user who must have a second factor but has none counts as `enrol`.
+ */
+function currentSession(ctx: Ctx): Current | undefined {
   const id = cookieOf(ctx, "session");
   if (id === undefined) return undefined;
   const session = ctx.deps.store.session(id);
-  if (session === undefined || ctx.deps.now() >= session.lastSeenAt + SESSION_IDLE_MS) {
-    return undefined;
-  }
-  return { id, session };
+  if (session === undefined || !isSessionLive(session, ctx.deps.now())) return undefined;
+  const user = ctx.deps.store.userById(session.userId);
+  if (user === undefined) return undefined;
+  const isMissingFactor =
+    session.stage === "full" &&
+    isSecondFactorRequired(user) &&
+    ctx.deps.factorStore.authenticator(user.id) === undefined;
+  return { id, session, user, stage: isMissingFactor ? "enrol" : session.stage };
 }
 
-/**
- * The signed-in user of this request, or undefined. A touch after 60000 ms also refreshes the
- * session cookie with the same value.
- */
-function signedInOf(ctx: Ctx): SignedIn | undefined {
-  const live = liveSession(ctx);
-  if (live === undefined) return undefined;
-  const user = ctx.deps.store.userById(live.session.userId);
-  if (user === undefined) return undefined;
+/** A touch of a `full` session after 60000 ms; it refreshes the cookie with the same value. */
+function touch(ctx: Ctx, current: Current): void {
   const now = ctx.deps.now();
-  if (now - live.session.lastSeenAt >= SESSION_TOUCH_MS) {
-    ctx.deps.store.touchSession(live.id, now);
-    ctx.cookies.push(serializeCookie("session", live.id, ctx.deps.mode));
+  if (current.stage !== "full" || now - current.session.lastSeenAt < SESSION_TOUCH_MS) return;
+  ctx.deps.store.touchSession(current.id, now);
+  pushSessionCookie(ctx, current.id, "full");
+}
+
+/** Where a request of `stage` goes when the route needs `access`; undefined lets it pass. */
+function gateTarget(
+  access: Access,
+  stage: Current["stage"] | "anonymous",
+  path: string,
+): string | undefined {
+  if (access === "public" || access === "any-session") return undefined;
+  if (stage === access || (access === "enrol-or-full" && (stage === "enrol" || stage === "full"))) {
+    return undefined;
   }
-  return { ...live, user };
+  switch (stage) {
+    case "anonymous":
+      return access === "factor" ? "/sign-in" : `/sign-in?next=${encodeURIComponent(path)}`;
+    case "factor":
+      return "/sign-in/factor";
+    case "enrol":
+      return "/account/authenticator";
+    case "full":
+      return "/";
+    default: {
+      const never: never = stage;
+      return never;
+    }
+  }
+}
+
+/** The access gate: it runs after setup, before Origin and the body. True lets the request on. */
+function passesGate(ctx: Ctx, access: Access): boolean {
+  const current = currentSession(ctx);
+  const target = gateTarget(access, current?.stage ?? "anonymous", safeNext(ctx.req.url));
+  if (target !== undefined) {
+    redirect(ctx, target);
+    return false;
+  }
+  ctx.current = current;
+  // Sign out all must leave the current row and cookie unchanged, so its POST never touches.
+  const isSignOutAll = ctx.req.method === "POST" && ctx.path === "/account/sessions/sign-out-all";
+  if (current !== undefined && access !== "public" && !isSignOutAll) touch(ctx, current);
+  return true;
+}
+
+function signedInOf(ctx: Ctx): SignedIn | undefined {
+  return ctx.current?.stage === "full" ? ctx.current : undefined;
 }
 
 function anonBinding(csrf: string): string {
@@ -405,8 +390,36 @@ function handleGet(ctx: Ctx, isSetUp: boolean): void {
     case "/console.js":
       send(ctx, 200, "text/javascript; charset=utf-8", CONSOLE_JS);
       return;
-    default:
+    case "/sign-in/factor":
+      sendFactorForm(ctx);
+      return;
+    case "/account/authenticator":
+      sendAuthenticator(ctx);
+      return;
+    case "/console.css":
       send(ctx, 200, "text/css; charset=utf-8", CONSOLE_CSS);
+      return;
+    default:
+      handleAccountGet(ctx);
+  }
+}
+
+function handleAccountGet(ctx: Ctx): void {
+  switch (ctx.path) {
+    case "/account/security":
+      sendSecurity(ctx);
+      return;
+    case "/account/recovery-codes":
+      sendNewCodesForm(ctx);
+      return;
+    case "/account/sessions":
+      sendSessions(ctx);
+      return;
+    case "/account/sessions/sign-out-all":
+      sendSignOutAllForm(ctx);
+      return;
+    default:
+      sendText(ctx, 404, NOT_FOUND);
   }
 }
 
@@ -415,7 +428,7 @@ function sendSignInForm(ctx: Ctx, isSetUp: boolean): void {
     redirect(ctx, "/setup");
     return;
   }
-  if (signedInOf(ctx) !== undefined) {
+  if (ctx.current?.stage === "full") {
     redirect(ctx, "/");
     return;
   }
@@ -425,66 +438,12 @@ function sendSignInForm(ctx: Ctx, isSetUp: boolean): void {
 }
 
 function signInNotice(ctx: Ctx): string | undefined {
-  if (cookieOf(ctx, "session") !== undefined) {
+  if (cookieOf(ctx, "session") !== undefined && ctx.current === undefined) {
     // The cookie names no valid session here, so the notice shows and the cookie is cleared.
     ctx.cookies.push(serializeCookieDeletion("session", ctx.deps.mode));
     return EXPIRED;
   }
   return ctx.query.get("setup") === "done" ? "Setup is complete. Sign in." : undefined;
-}
-
-async function readBodyOrFail(ctx: Ctx): Promise<string | undefined> {
-  try {
-    return await readBody(ctx.req, MAX_FORM_BYTES);
-  } catch (err) {
-    if (!(err instanceof BodyError)) throw err;
-    ctx.res.setHeader("connection", "close");
-    sendText(ctx, err.status, err.status === 413 ? "request body too large\n" : "bad request\n");
-    return undefined;
-  }
-}
-
-/**
- * Steps 4 to 7 of the POST order: Origin, content type, body size and repeated fields. It
- * answers the first failure and returns undefined then.
- */
-async function readFormFields<K extends string>(
-  ctx: Ctx,
-  known: readonly K[],
-): Promise<FormFields<K | "csrf"> | undefined> {
-  const { req, deps } = ctx;
-  const origin = expectedOrigin(deps.mode, req.headers.host, deps.publicOrigin);
-  if (!isOriginAllowed(req.headers.origin, origin)) {
-    sendHtml(ctx, 403, messagePage("Request refused", REFUSED));
-    return undefined;
-  }
-  if (!isFormContentType(req.headers["content-type"])) {
-    sendText(ctx, 415, "unsupported content type\n");
-    return undefined;
-  }
-  const body = await readBodyOrFail(ctx);
-  if (body === undefined) return undefined;
-  const parsed: ParsedForm<K | "csrf"> = parseForm<K | "csrf">(body, [...known, "csrf"]);
-  if (!parsed.isOk) {
-    sendText(ctx, 400, "repeated form field\n");
-    return undefined;
-  }
-  return parsed.fields;
-}
-
-/** Steps 4 to 8 of the POST order: `readFormFields`, then the CSRF token. */
-async function readPostForm<K extends string>(
-  ctx: Ctx,
-  known: readonly K[],
-  expectedCsrf: string | undefined = cookieOf(ctx, "csrf"),
-): Promise<FormFields<K | "csrf"> | undefined> {
-  const fields = await readFormFields(ctx, known);
-  if (fields === undefined) return undefined;
-  if (!isCsrfTokenValid(fields.csrf, expectedCsrf)) {
-    sendHtml(ctx, 403, messagePage("Request refused", REFUSED));
-    return undefined;
-  }
-  return fields;
 }
 
 function csrfOf(fields: { csrf?: string }): string {
@@ -654,7 +613,9 @@ async function commitSetup(
   ctx.state.gate = undefined;
   deps.log.info("setup complete", { apiOrigin: new URL(owner.apiUrl).origin, checks });
   ctx.cookies.push(serializeCookieDeletion("setup", deps.mode));
-  redirect(ctx, "/sign-in?setup=done");
+  // The password was set in this request, which is the proof for the enrolment session.
+  startSession(ctx, outcome.userId, { stage: "enrol" });
+  redirect(ctx, "/account/authenticator");
 }
 
 /**
@@ -662,7 +623,7 @@ async function commitSetup(
  * the POST order with no expected token, so it changes nothing.
  */
 async function postSignOut(ctx: Ctx): Promise<void> {
-  const live = liveSession(ctx);
+  const live = ctx.current;
   if (live === undefined) {
     await postSignOutWithoutSession(ctx);
     return;
@@ -750,29 +711,53 @@ async function postSignIn(ctx: Ctx): Promise<void> {
     admission.attempt.release();
     return;
   }
+  const stage = passwordStage(ctx, user);
   try {
-    startSession(ctx, user.id);
+    startSession(ctx, user.id, stage === "full" ? { stage } : { stage, nextPath: next });
   } catch (err) {
     // A failed session write must not hold the reservation: it would lock the owner out.
     admission.attempt.release();
     throw err;
   }
+  // Only the password throttle succeeds here; the factor throttle is untouched.
   admission.attempt.succeed();
-  deps.log.info("signed in", { userId: user.id });
+  deps.log.info("password accepted", { userId: user.id, stage });
   deps.metrics.recordAuthAttempt("sign-in", "success");
-  redirect(ctx, next);
+  redirect(ctx, stageTarget(stage, next));
+}
+
+function passwordStage(ctx: Ctx, user: User): SessionStage {
+  return signInStage({
+    isRequired: isSecondFactorRequired(user),
+    hasAuthenticator: ctx.deps.factorStore.authenticator(user.id) !== undefined,
+  });
+}
+
+function stageTarget(stage: SessionStage, next: string): string {
+  switch (stage) {
+    case "factor":
+      return "/sign-in/factor";
+    case "enrol":
+      return "/account/authenticator";
+    case "full":
+      return next;
+    default: {
+      const never: never = stage;
+      return never;
+    }
+  }
 }
 
 /** Rotation: the old session row goes, expired rows go, then a new id is made. */
-function startSession(ctx: Ctx, userId: number): void {
-  const { store, now, mode } = ctx.deps;
+function startSession(ctx: Ctx, userId: number, options: NewSessionOptions): void {
+  const { store, now } = ctx.deps;
   const old = cookieOf(ctx, "session");
   if (old !== undefined) store.deleteSession(old);
   const time = now();
   store.deleteExpiredSessions(time, SESSION_IDLE_MS);
   const id = newToken(ctx);
-  store.createSession(id, userId, newToken(ctx), time);
-  ctx.cookies.push(serializeCookie("session", id, mode));
+  store.createSession(id, userId, newToken(ctx), time, options);
+  pushSessionCookie(ctx, id, options.stage);
 }
 
 async function handlePost(ctx: Ctx): Promise<void> {
@@ -786,14 +771,33 @@ async function handlePost(ctx: Ctx): Promise<void> {
     case "/sign-in":
       await postSignIn(ctx);
       return;
-    default:
+    case "/sign-out":
       await postSignOut(ctx);
+      return;
+    case "/sign-in/factor":
+      await postFactor(ctx);
+      return;
+    case "/account/authenticator":
+      await postAuthenticator(ctx);
+      return;
+    case "/account/recovery-codes":
+      await postNewCodes(ctx);
+      return;
+    case "/account/sessions/sign-out-all":
+      await postSignOutAll(ctx);
+      return;
+    default:
+      sendText(ctx, 404, NOT_FOUND);
   }
 }
 
-/** Step 2 of the order: setup routes close after setup; sign-in has no POST before it. */
-function isClosedInPhase(path: string, method: string, isSetUp: boolean): boolean {
+/**
+ * Step 2 of the order: setup routes close after setup; sign-in has no POST before it, and the
+ * second-factor and account routes do not exist before it.
+ */
+function isClosedInPhase(path: string, route: Route, method: string, isSetUp: boolean): boolean {
   if (path === "/setup" || path === "/setup/owner") return isSetUp;
+  if (route.isNewInPhase2 === true) return !isSetUp;
   return path === "/sign-in" && method === "POST" && !isSetUp;
 }
 
@@ -817,12 +821,6 @@ function sendPageResult(ctx: Ctx, signedIn: SignedIn, route: ProtectedRoute, res
     return;
   }
   sendShell(ctx, signedIn, result.status, { ...result, navId: route.navId });
-}
-
-/** Decision 8: back to sign-in with the raw target as `next` when it is a safe path. */
-function redirectToSignIn(ctx: Ctx): void {
-  const next = safeNext(ctx.req.url);
-  redirect(ctx, `/sign-in?next=${encodeURIComponent(next)}`);
 }
 
 function pageRequest(
@@ -894,11 +892,9 @@ async function handleProtected(
     sendText(ctx, 421, MISDIRECTED);
     return;
   }
+  if (!passesGate(ctx, "full")) return;
   const signedIn = signedInOf(ctx);
-  if (signedIn === undefined) {
-    redirectToSignIn(ctx);
-    return;
-  }
+  if (signedIn === undefined) return;
   let fields: PageRequest["fields"] = {};
   if (method === "POST") {
     const known = [...(route.knownFields ?? []), "form_token"];
@@ -927,6 +923,7 @@ function sendNotFound(ctx: Ctx, method: string, isSetUp: boolean): void {
     sendText(ctx, 404, NOT_FOUND);
     return;
   }
+  touch(ctx, signedIn);
   sendShell(ctx, signedIn, 404, { title: "Page not found", body: notFoundState() });
 }
 
@@ -936,22 +933,25 @@ function isPageMethod(method: string): method is PageMethod {
 
 async function handleApp(ctx: Ctx): Promise<void> {
   const method = ctx.req.method ?? "GET";
-  const isSetUp = (): boolean => ctx.deps.store.instance() !== undefined;
-  const route = ctx.state.protectedRoutes.get(ctx.path);
-  const allowed = route === undefined ? ROUTES[ctx.path] : allowedMethods(route);
+  const isSetUp = ctx.deps.store.instance() !== undefined;
+  const protectedRoute = ctx.state.protectedRoutes.get(ctx.path);
+  const route = ROUTES[ctx.path];
+  const allowed = protectedRoute === undefined ? route?.methods : allowedMethods(protectedRoute);
   if (allowed === undefined) {
-    sendNotFound(ctx, method, isSetUp());
+    ctx.current = currentSession(ctx);
+    sendNotFound(ctx, method, isSetUp);
     return;
   }
   if (!allowed.includes(method)) {
     ctx.res.writeHead(405, { allow: allowed.join(", "), "content-length": 0 }).end();
     return;
   }
-  if (route !== undefined && isPageMethod(method)) {
-    await handleProtected(ctx, route, method, isSetUp());
+  if (protectedRoute !== undefined && isPageMethod(method)) {
+    await handleProtected(ctx, protectedRoute, method, isSetUp);
     return;
   }
-  if (isClosedInPhase(ctx.path, method, isSetUp())) {
+  if (route === undefined) return;
+  if (isClosedInPhase(ctx.path, route, method, isSetUp)) {
     sendText(ctx, 404, NOT_FOUND);
     return;
   }
@@ -959,8 +959,9 @@ async function handleApp(ctx: Ctx): Promise<void> {
     sendText(ctx, 421, MISDIRECTED);
     return;
   }
+  if (isSetUp && !passesGate(ctx, route.access)) return;
   if (method === "POST") await handlePost(ctx);
-  else handleGet(ctx, isSetUp());
+  else handleGet(ctx, isSetUp);
 }
 
 /** The protected routes: `/` and the test routes, whose keys must be under /__test/. */
@@ -1000,6 +1001,12 @@ export function createConsoleServer(deps: ConsoleServerDeps): Server {
       tables: ["account", "client"],
       clearsOnSuccess: ["account"],
     }),
+    // Second factors have their own limiter: a correct password never clears it.
+    factorThrottle: createAuthThrottle({
+      now: deps.now,
+      tables: ["account", "client"],
+      clearsOnSuccess: ["account"],
+    }),
     formTokens: createFormTokens({ now: deps.now, randomBytes: deps.randomBytes }),
     protectedRoutes: protectedRoutesOf(deps),
   };
@@ -1011,7 +1018,16 @@ export function createConsoleServer(deps: ConsoleServerDeps): Server {
       handleOpsRoute(req, res, ops);
       return;
     }
-    const ctx: Ctx = { req, res, path, query: rawQuery(req), deps, state, cookies: [] };
+    const ctx: Ctx = {
+      req,
+      res,
+      path,
+      query: rawQuery(req),
+      deps,
+      state,
+      cookies: [],
+      current: undefined,
+    };
     handleApp(ctx).catch((err: unknown) => {
       deps.log.error("request failed", { error: err instanceof Error ? err.name : "unknown" });
       if (!res.headersSent) {

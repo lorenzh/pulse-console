@@ -13,6 +13,10 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visib
 .error { color: #a4161a; font-weight: 400; margin: 0; }
 .notice { padding: 0.5rem; border-left: 4px solid #1b4f9c; background: #fff; }
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+code, .secret { font-family: ui-monospace, monospace; overflow-wrap: anywhere; word-break: break-all; }
+#recovery-codes { padding-left: 1.5rem; }
+#sessions { width: 100%; border-collapse: collapse; }
+#sessions th, #sessions td { text-align: left; padding: 0.25rem 0.5rem 0.25rem 0; vertical-align: top; }
 body, p, h1, h2, li, label, a { overflow-wrap: anywhere; }
 .skip-link { position: absolute; left: 0.5rem; top: -3rem; padding: 0.5rem; background: #fff; }
 .skip-link:focus { top: 0.5rem; }
