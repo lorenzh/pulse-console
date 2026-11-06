@@ -8,6 +8,8 @@
  * `[data-secret]` element loses its text, so a back/forward cache restore shows no secret. Every
  * `time[data-countdown]` counts down once a second from its `datetime`; one interval serves all
  * of them, it starts only while one is above zero and stops when all reach zero or on `pagehide`.
+ * A form with `data-preview-form` updates the `.incident-preview` parts of its page on every
+ * `input` and `change`, only through `textContent` and `hidden`; it adds no timer.
  * Plain ES2020, no page data, no request and no storage.
  */
 export const CONSOLE_JS = `"use strict";
@@ -54,6 +56,49 @@ export const CONSOLE_JS = `"use strict";
       );
     });
   });
+  function setPart(root, name, text) {
+    var element = root.querySelector('[data-part="' + name + '"]');
+    if (element) element.textContent = text;
+  }
+  function checkedValue(form, name) {
+    var input = form.querySelector('input[name="' + name + '"]:checked');
+    return input ? input.value : null;
+  }
+  function renderPreview(form) {
+    var preview = document.querySelector(".incident-preview");
+    if (!preview) return;
+    var title = form.querySelector('input[name="title"]');
+    if (title) setPart(preview, "title", title.value);
+    var impact = checkedValue(form, "impact");
+    if (impact !== null) setPart(preview, "impact", "Impact: " + impact);
+    var status = checkedValue(form, "status");
+    var updates = preview.querySelectorAll('[data-part="update"]');
+    var last = updates.length > 0 ? updates[updates.length - 1] : null;
+    if (status !== null) {
+      setPart(preview, "status", "Status: " + status);
+      if (last) setPart(last, "update-status", status);
+    }
+    var message = form.querySelector('textarea[name="message"]');
+    if (message && last) setPart(last, "message", message.value.replace(/\r\n?/g, "\n"));
+    var boxes = form.querySelectorAll('input[name="component"]');
+    var affects = preview.querySelector('[data-part="affects"]');
+    if (boxes.length === 0 || !affects) return;
+    var names = [];
+    boxes.forEach(function (box) {
+      if (box.checked) names.push(box.getAttribute("data-name") || box.value);
+    });
+    affects.textContent = "Affects: " + names.join(", ");
+    affects.hidden = names.length === 0;
+  }
+  function onPreviewInput(event) {
+    var target = event.target;
+    var form = target && target.form;
+    if (form instanceof HTMLFormElement && form.hasAttribute("data-preview-form")) {
+      renderPreview(form);
+    }
+  }
+  document.addEventListener("input", onPreviewInput);
+  document.addEventListener("change", onPreviewInput);
   var HIDDEN = "Hidden: the secret was shown once.";
   function clearSecrets() {
     document.querySelectorAll("[data-secret]").forEach(function (element) {

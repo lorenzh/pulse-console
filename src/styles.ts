@@ -266,4 +266,8 @@ button[data-copy] { align-self: flex-start; }
   .table-scroll-hint { display: block; }
   #recovery-codes code { font-size: 0.75rem; }
 }
+.incident-message, .preview-message { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.incident-preview { border: 1px solid var(--line-strong); border-radius: var(--radius-panel); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.incident-preview h3 { margin: 0; }
+.preview-updates { display: flex; flex-direction: column; gap: 8px; }
 `;

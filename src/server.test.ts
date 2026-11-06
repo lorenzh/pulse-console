@@ -542,7 +542,14 @@ describe("/console.js", () => {
     );
     expectSecurityHeaders(res);
     const js = await res.text();
-    for (const part of ["data-busy-label", "aria-busy", "pageshow", "setTimeout"]) {
+    for (const part of [
+      "data-busy-label",
+      "aria-busy",
+      "pageshow",
+      "setTimeout",
+      "data-preview-form",
+      ".incident-preview",
+    ]) {
       expect(js).toContain(part);
     }
     for (const part of ["eval", "innerHTML", "fetch(", "XMLHttpRequest", "localStorage"]) {
