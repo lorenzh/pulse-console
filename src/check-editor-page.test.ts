@@ -84,6 +84,33 @@ describe("quorum rule above submit", () => {
 });
 
 describe("create form", () => {
+  test("fields carry their widths and the submit sits in an actions row", () => {
+    const http = checkEditorHtml(createModel("http"));
+    expect(http).toContain('<input id="field-name" class="input-medium" name="name"');
+    expect(http).toContain('<input id="field-interval_ms" class="input-narrow" name="interval_ms"');
+    expect(http).toContain('<input id="field-timeout_ms" class="input-narrow" name="timeout_ms"');
+    expect(http).toContain('<input id="field-retries" class="input-narrow" name="retries"');
+    expect(http).toContain(
+      '<input id="field-availability_target" class="input-narrow" name="availability_target"',
+    );
+    expect(http).toContain('<select id="field-method" class="input-narrow" name="method"');
+    expect(http).toContain(
+      '<input id="field-header_0_name" class="input-medium" name="header_0_name"',
+    );
+    expect(http).toContain('<input id="field-url" name="url" type="url"');
+    expect(http).toContain(
+      '<div class="actions"><button type="submit" data-busy-label="Saving…">Create check</button></div>\n</form>',
+    );
+    const dns = checkEditorHtml(createModel("dns"));
+    expect(dns).toContain('<select id="field-record_type" class="input-narrow" name="record_type"');
+    expect(checkEditorHtml(createModel("tcp"))).toContain(
+      '<input id="field-port" class="input-narrow" name="port"',
+    );
+    expect(checkEditorHtml(createModel("tls"))).toContain(
+      '<input id="field-warn_days" class="input-narrow" name="warn_days"',
+    );
+  });
+
   test("http has 20 header rows, 10 assertion rows, 5 visible header rows and ms labels", () => {
     const html = checkEditorHtml(createModel("http"));
     for (let i = 0; i < 20; i++) expect(html).toContain(`name="header_${i}_name"`);
@@ -96,7 +123,7 @@ describe("create form", () => {
     expect(html).toContain("Interval (ms)");
     expect(html).toContain("Retry delay (ms)");
     expect(html).toContain('<input type="hidden" name="type" value="http">');
-    expect(html).toContain('<input id="field-id" name="id"');
+    expect(html).toContain('<input id="field-id" class="input-medium" name="id"');
     expect(html).toContain("<option selected>GET</option>");
     expect(html).toContain(
       '<input type="hidden" name="csrf" value="csrf-1">\n<input type="hidden" name="form_token" value="token-1">',
@@ -177,7 +204,7 @@ describe("edit form uses the trusted view", () => {
   test("the host-binding line is the escaped literal, selectable and copyable", () => {
     const html = checkEditorHtml(editModel(web));
     expect(html).toContain(
-      `<pre id="editor-host-binding-line">${escapeHtml(HOST_LINE)}</pre>\n<button type="button" data-copy="editor-host-binding-line" hidden>Copy</button>`,
+      `<pre id="editor-host-binding-line">${escapeHtml(HOST_LINE)}</pre>\n<button type="button" class="secondary small" data-copy="editor-host-binding-line" hidden>Copy</button>`,
     );
     expect(html).not.toContain(UNSAFE_LINE);
     expect(html).not.toContain(escapeHtml(UNSAFE_LINE));

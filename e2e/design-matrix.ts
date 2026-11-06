@@ -743,3 +743,234 @@ export async function assertTeamTable(page: Page, ownerName: string, label: stri
   );
   check(bad.length === 0, `${label}: Team action cells ${bad.join(" | ")}`);
 }
+
+const RECOVERY_CODE = /^[0-9a-f]{4}(-[0-9a-f]{4}){7}$/;
+
+/** R3: ten codes of 39 characters, each on 1 line, unclipped, inside the panel content box. */
+export async function assertRecoveryCodes(page: Page, label: string): Promise<string[]> {
+  await page.evaluate(() => document.fonts.ready);
+  const codes = await page.locator("#recovery-codes li code").evaluateAll((els) =>
+    els.map((el) => {
+      const panel = el.closest(".plain-panel");
+      const r = el.getBoundingClientRect();
+      const tops = new Set<number>();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      for (const rect of Array.from(range.getClientRects())) {
+        if (rect.width > 0) tops.add(Math.round(rect.top));
+      }
+      let inside = "no .plain-panel";
+      if (panel !== null) {
+        const p = panel.getBoundingClientRect();
+        const s = getComputedStyle(panel);
+        const left =
+          p.left + Number.parseFloat(s.paddingLeft) + Number.parseFloat(s.borderLeftWidth);
+        const right =
+          p.right - Number.parseFloat(s.paddingRight) - Number.parseFloat(s.borderRightWidth);
+        inside =
+          r.left >= left - 0.5 && r.right <= right + 0.5
+            ? ""
+            : `rect ${r.left}-${r.right} outside content ${left}-${right}`;
+      }
+      return {
+        text: el.textContent ?? "",
+        lines: tops.size,
+        scroll: el.scrollWidth,
+        client: el.clientWidth,
+        inside,
+      };
+    }),
+  );
+  check(codes.length === 10, `${label}: ${codes.length} recovery codes, want 10`);
+  for (const code of codes) {
+    check(RECOVERY_CODE.test(code.text), `${label}: code "${code.text}" has the wrong format`);
+    check(code.lines === 1, `${label}: code "${code.text}" has ${code.lines} lines, want 1`);
+    check(
+      code.scroll <= code.client,
+      `${label}: code "${code.text}" scrollWidth ${code.scroll} > ${code.client}`,
+    );
+    check(code.inside === "", `${label}: code "${code.text}" ${code.inside}`);
+  }
+  await assertNoSidewaysScroll(page, label);
+  return codes.map((c) => c.text);
+}
+
+/** R4 literals, written from the spec. */
+export const PRESET_CARDS = [
+  ["read", "Reads the checks and their configuration. Changes nothing."],
+  ["checks", "Reads checks and creates, changes and deletes them."],
+  ["incidents", "Reads checks and posts incidents."],
+  ["full", "Reads and changes checks and posts incidents."],
+] as const;
+
+export const PRESET_NOTE =
+  "Manage checks, Post incidents and Full access can also create, rotate and revoke tokens with the same or fewer scopes, and read the audit log.";
+
+type CardGeometry = {
+  radios: number;
+  value: string;
+  description: string;
+  width: number;
+  height: number;
+  gap: number;
+  centers: number;
+  inside: boolean;
+  checked: boolean;
+  disabled: boolean;
+};
+
+/** R4 on /tokens/new: four cards in order, literal texts, radio geometry and native behavior. */
+export async function assertPresetCards(page: Page, label: string): Promise<void> {
+  await page.evaluate(() => document.fonts.ready);
+  const cards: CardGeometry[] = await page.locator("label.choice.option-card").evaluateAll((els) =>
+    els.map((card) => {
+      const radios = card.querySelectorAll('input[name="preset"]');
+      const radio = radios[0];
+      const title = card.querySelector(".choice-title");
+      const hint = card.querySelector(".choice-text small.hint");
+      const c = card.getBoundingClientRect();
+      const i = radio?.getBoundingClientRect();
+      const t = title?.getBoundingClientRect();
+      return {
+        radios: radios.length,
+        value: radio?.getAttribute("value") ?? "",
+        description: (hint?.textContent ?? "").trim(),
+        width: i?.width ?? 0,
+        height: i?.height ?? 0,
+        gap: i === undefined || t === undefined ? -1 : t.left - i.right,
+        centers:
+          i === undefined || t === undefined
+            ? 99
+            : Math.abs(i.top + i.height / 2 - (t.top + t.height / 2)),
+        inside:
+          i !== undefined &&
+          i.left >= c.left &&
+          i.right <= c.right &&
+          i.top >= c.top &&
+          i.bottom <= c.bottom,
+        checked: radio instanceof HTMLInputElement && radio.checked,
+        disabled: radio instanceof HTMLInputElement && radio.disabled,
+      };
+    }),
+  );
+  check(cards.length === 4, `${label}: ${cards.length} option cards, want 4`);
+  PRESET_CARDS.forEach(([id, text], n) => {
+    const card = cards[n];
+    check(card !== undefined, `${label}: card ${n + 1} missing`);
+    if (card === undefined) return;
+    check(card.radios === 1, `${label}: card ${id} has ${card.radios} radios, want 1`);
+    check(card.value === id, `${label}: card ${n + 1} is "${card.value}", want ${id}`);
+    check(card.description === text, `${label}: card ${id} text "${card.description}"`);
+    check(
+      Math.abs(card.width - 18) <= 0.5 && Math.abs(card.height - 18) <= 0.5,
+      `${label}: card ${id} radio ${card.width}x${card.height}`,
+    );
+    check(Math.abs(card.gap - 12) <= 1, `${label}: card ${id} title gap ${card.gap}`);
+    check(card.centers <= 2, `${label}: card ${id} radio center offset ${card.centers}`);
+    check(card.inside, `${label}: card ${id} radio outside its card`);
+    check(!card.checked, `${label}: card ${id} checked on load`);
+  });
+  const note = (await page.locator("#preset-note").textContent())?.trim();
+  check(note === PRESET_NOTE, `${label}: preset note "${note}"`);
+  const enabled = cards.filter((c) => !c.disabled).map((c) => c.value);
+  const [first, second] = enabled;
+  if (first === undefined || second === undefined) return;
+  await page
+    .locator("label.choice.option-card", { has: page.locator(`input[value="${first}"]`) })
+    .locator("small.hint")
+    .first()
+    .click();
+  check(
+    await page.locator(`input[name="preset"][value="${first}"]`).isChecked(),
+    `${label}: a click on the ${first} description checks its radio`,
+  );
+  await page.locator(`input[name="preset"][value="${first}"]`).focus();
+  await page.keyboard.press("ArrowDown");
+  check(
+    await page.locator(`input[name="preset"][value="${second}"]`).isChecked(),
+    `${label}: ArrowDown from ${first} checks ${second}`,
+  );
+}
+
+type Box = { left: number; width: number; contentLeft: number; contentWidth: number };
+
+function boxOf(page: Page, selector: string): Promise<Box | undefined> {
+  return page
+    .locator(selector)
+    .first()
+    .evaluate((el) => {
+      const form = el.closest("form");
+      if (!form) return undefined;
+      const r = el.getBoundingClientRect();
+      const f = form.getBoundingClientRect();
+      const s = getComputedStyle(form);
+      const pl = Number.parseFloat(s.paddingLeft) + Number.parseFloat(s.borderLeftWidth);
+      const pr = Number.parseFloat(s.paddingRight) + Number.parseFloat(s.borderRightWidth);
+      return {
+        left: r.left,
+        width: r.width,
+        contentLeft: f.left + pl,
+        contentWidth: f.width - pl - pr,
+      };
+    });
+}
+
+/** R6 on /checks/edit?id=web: Save check keeps its width, narrow and medium fields are capped. */
+export async function assertEditorWidths(page: Page, width: number, label: string): Promise<void> {
+  const save = await boxOf(page, 'button[type="submit"]:has-text("Save check")');
+  const interval = await boxOf(page, 'input[name="interval_ms"]');
+  const name = await boxOf(page, 'input[name="name"]');
+  check(save !== undefined && interval !== undefined && name !== undefined, `${label}: fields`);
+  if (save === undefined || interval === undefined || name === undefined) return;
+  if (width === 1280) {
+    check(
+      save.width < 0.5 * save.contentWidth,
+      `${label}: Save check width ${save.width}, form content ${save.contentWidth}`,
+    );
+    check(
+      Math.abs(save.left - save.contentLeft) <= 1,
+      `${label}: Save check left ${save.left}, form content left ${save.contentLeft}`,
+    );
+    check(interval.width <= 192.5, `${label}: interval_ms width ${interval.width}`);
+    check(name.width <= 384.5, `${label}: name width ${name.width}`);
+  }
+  for (const [field, box] of [
+    ["interval_ms", interval],
+    ["name", name],
+  ] as const) {
+    check(
+      box.width <= box.contentWidth + 0.5,
+      `${label}: ${field} width ${box.width} > form ${box.contentWidth}`,
+    );
+  }
+}
+
+/** R6: a Copy button is small, 36px high with a 44px hit area, and left aligned. */
+export async function assertCopyButton(page: Page, selector: string, label: string): Promise<void> {
+  const got = await page.locator(selector).evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const parent = el.parentElement;
+    const p = parent?.getBoundingClientRect();
+    const ps = parent === null ? undefined : getComputedStyle(parent);
+    const left =
+      p === undefined || ps === undefined
+        ? Number.NaN
+        : p.left + Number.parseFloat(ps.paddingLeft) + Number.parseFloat(ps.borderLeftWidth);
+    return {
+      isSmall: el.classList.contains("small"),
+      minHeight: getComputedStyle(el).minHeight,
+      after: getComputedStyle(el, "::after").top,
+      width: r.width,
+      left: r.left,
+      parentLeft: left,
+    };
+  });
+  check(got.isSmall, `${label}: Copy has no class small`);
+  check(got.minHeight === "36px", `${label}: Copy min-height ${got.minHeight}`);
+  check(got.width < 200, `${label}: Copy width ${got.width}`);
+  check(
+    Math.abs(got.left - got.parentLeft) <= 1,
+    `${label}: Copy left ${got.left}, parent content left ${got.parentLeft}`,
+  );
+  check(got.after === "-4px", `${label}: Copy ::after top ${got.after}`);
+}

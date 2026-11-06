@@ -131,7 +131,7 @@ function inviteFormHtml(view: TeamView): string {
 ${warningNotice(form.notice)}${summary}<form method="post" action="/team/invites" class="invite-form">
 ${csrfField(view.csrf)}
 ${formTokenField(view.inviteFormToken)}
-${field({ label: "Email", name: "email", type: "email", autocomplete: "off", value: form.email, error: errors.email })}
+${field({ label: "Email", name: "email", type: "email", autocomplete: "off", value: form.email, error: errors.email, width: "medium" })}
 <label for="field-role">Role
 <select id="field-role" name="role"${roleDescribed}>
 ${roleOption("member", "Member", form.role)}

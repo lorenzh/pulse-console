@@ -71,8 +71,10 @@ form { display: flex; flex-direction: column; gap: 16px; }
 label { display: grid; gap: 8px; font-size: 0.875rem; font-weight: 500; }
 legend { font-size: 0.875rem; font-weight: 500; padding: 0; margin: 0 0 8px; }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 0; }
-input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), select, textarea { width: 100%; min-height: var(--touch); padding: 0 14px; background: var(--field); border: 1px solid var(--field-line); border-radius: var(--radius-field); color: var(--text); font: inherit; font-size: 1rem; font-weight: 400; }
+input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), select, textarea { width: 100%; max-width: 40rem; min-height: var(--touch); padding: 0 14px; background: var(--field); border: 1px solid var(--field-line); border-radius: var(--radius-field); color: var(--text); font: inherit; font-size: 1rem; font-weight: 400; }
 textarea { padding: 12px 14px; line-height: 1.6; }
+input.input-narrow:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), select.input-narrow { max-width: 12rem; }
+input.input-medium:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), select.input-medium { max-width: 24rem; }
 input.link-output:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), input.mono:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]) { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 input:not([type="radio"]):not([type="checkbox"]):focus-visible, select:focus-visible, textarea:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
 [aria-invalid="true"] { border-color: var(--error) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 20%, transparent); }
@@ -80,6 +82,11 @@ select { appearance: none; padding-right: 36px; background-image: linear-gradien
 input[type="radio"], input[type="checkbox"] { width: 18px; height: 18px; margin: 0; flex: none; accent-color: var(--accent); }
 label.choice { display: inline-flex; align-items: center; gap: 12px; min-height: var(--touch); width: auto; align-self: flex-start; font-size: 1rem; font-weight: 400; }
 label.choice.option-card { display: flex; align-self: stretch; padding: 14px 16px; border: 1px solid var(--line-strong); border-radius: var(--radius-panel); }
+label.choice.option-card { align-items: flex-start; }
+label.choice.option-card input { margin-top: 3px; }
+.choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.choice-title { line-height: 24px; }
+label.choice.option-card:has(input:disabled) { color: var(--muted); }
 label.choice.option-card:has(input:checked) { border-color: var(--accent); background: var(--tint); }
 .hint { display: block; font-size: 0.875rem; font-weight: 400; color: var(--muted); }
 .error { color: var(--error); font-size: 0.8125rem; font-weight: 400; margin: 0; }
@@ -210,6 +217,8 @@ dl.settings, .settings { display: grid; grid-template-columns: 150px minmax(0, 1
 .confirm input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"])[name="confirm_name"] { font-family: var(--font-mono); }
 .quorum-rule, .invite-form { max-width: 40rem; }
 #recovery-codes { padding-left: 24px; font-family: var(--font-mono); }
+#recovery-codes code { white-space: nowrap; word-break: normal; overflow-wrap: normal; font-size: 0.8125rem; }
+button[data-copy] { align-self: flex-start; }
 @media (max-width: 1180px) {
   .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -231,5 +240,6 @@ dl.settings, .settings { display: grid; grid-template-columns: 150px minmax(0, 1
   main.shell-main { padding: 20px 16px 40px; }
   .plain-panel { padding: 20px; }
   .table-scroll-hint { display: block; }
+  #recovery-codes code { font-size: 0.75rem; }
 }
 `;

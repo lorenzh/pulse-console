@@ -646,7 +646,7 @@ describe("GET /checks/check", () => {
     // The host-binding line, escaped once, never the old template.
     expect(res.body).toContain(`<pre id="host-binding-line">${escapeHtml(HOST_LINE)}</pre>`);
     expect(res.body).toContain(
-      '<button type="button" data-copy="host-binding-line" hidden>Copy</button>',
+      '<button type="button" class="secondary small" data-copy="host-binding-line" hidden>Copy</button>',
     );
     expect(res.body).not.toContain(escapeHtml(UNSAFE_TEMPLATE));
     expect(res.body).not.toContain(UNSAFE_TEMPLATE);
@@ -832,7 +832,7 @@ describe("GET /checks/check", () => {
     const line = `curl -fsS -X POST -H 'Authorization: Bearer <secret>' '${api.url}/heartbeat/nightly-backup'`;
     expect(res.body).toContain(`<pre id="heartbeat-line">${escapeHtml(line)}</pre>`);
     expect(res.body).toContain(
-      '<button type="button" data-copy="heartbeat-line" hidden>Copy</button>',
+      '<button type="button" class="secondary small" data-copy="heartbeat-line" hidden>Copy</button>',
     );
     expect(res.body).toContain(
       "Use the address under which your job reaches pulse-api. The secret is not shown again.",

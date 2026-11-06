@@ -240,6 +240,9 @@ describe("add location", () => {
     const res = await getPage(c, "/probes/new", c.cookies.admin);
     expect(res.status).toBe(200);
     const form = res.body.slice(res.body.indexOf('action="/probes/new"'));
+    expect(form).toContain('<input id="field-location" class="input-medium" name="location"');
+    expect(form).toContain('<input id="field-name" class="input-medium" name="name"');
+    expect(form).toContain('<input id="field-api_url" name="api_url"');
     const names = [...form.matchAll(/<input[^>]* name="([^"]+)"/g)].map((m) => m[1]);
     expect(names).toEqual([
       "csrf",
@@ -299,7 +302,9 @@ describe("add location", () => {
       "probe-compose-command",
     ]) {
       expect(res.body).toContain(`<pre id="${id}"`);
-      expect(res.body).toContain(`<button type="button" data-copy="${id}" hidden>Copy</button>`);
+      expect(res.body).toContain(
+        `<button type="button" class="secondary small" data-copy="${id}" hidden>Copy</button>`,
+      );
     }
     expect(res.body).toContain("-e &#39;PULSE_PROBE_BLOCK_PRIVATE_RANGES=false&#39;");
     expect(res.body).toContain("PULSE_PROBE_BLOCK_PRIVATE_RANGES: &quot;false&quot;");

@@ -80,6 +80,18 @@ test("field errors have labels, aria-invalid and aria-describedby", () => {
   expect(html).toContain('<span class="error" id="field-name-error">Too &lt;long&gt;</span>');
 });
 
+test("a field width adds its class to the input only", () => {
+  const base = { label: "Name", name: "name", type: "text", autocomplete: "off" } as const;
+  expect(field({ ...base, width: "medium" })).toContain(
+    '<input id="field-name" class="input-medium" name="name" type="text"',
+  );
+  expect(field({ ...base, width: "narrow" })).toContain(
+    '<input id="field-name" class="input-narrow"',
+  );
+  expect(field(base)).toContain('<input id="field-name" name="name"');
+  expect(field({ ...base, width: "medium" })).toContain('<label for="field-name">Name\n<input');
+});
+
 test("textarea fields keep the value and show errors", () => {
   const html = textareaField({ label: "Note", name: "note", value: "</textarea>", error: "Bad" });
   expect(html).toContain('<label for="field-note">Note');

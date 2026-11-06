@@ -211,6 +211,14 @@ describe("app routes", () => {
       "td.cell-nowrap",
       ".row-actions { display: inline-flex; flex-wrap: nowrap; gap: 12px; }",
       ".cell-empty {",
+      "#recovery-codes code { white-space: nowrap; word-break: normal; overflow-wrap: normal; font-size: 0.8125rem; }",
+      "  #recovery-codes code { font-size: 0.75rem; }",
+      "textarea { width: 100%; max-width: 40rem;",
+      'input.input-narrow:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), select.input-narrow { max-width: 12rem; }',
+      'input.input-medium:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), select.input-medium { max-width: 24rem; }',
+      "button[data-copy] { align-self: flex-start; }",
+      "label.choice.option-card { align-items: flex-start; }",
+      ".choice-text { display: flex; flex-direction: column;",
     ]) {
       expect(css).toContain(rule);
     }

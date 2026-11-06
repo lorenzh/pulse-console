@@ -54,6 +54,9 @@ describe("GET /team", () => {
       '<td class="cell-nowrap">On</td>\n<td class="actions-cell"><span class="cell-empty"><span aria-hidden="true">—</span><span class="visually-hidden">No actions</span></span></td>',
     );
     expect(r.body).not.toContain("2FA: on");
+    expect(r.body).toContain(
+      '<input id="field-email" class="input-medium" name="email" type="email"',
+    );
     expect(r.body).not.toContain("2FA: off");
     expect(r.body).toContain('<h2 id="org-2fa-heading">Organisation 2FA</h2>');
     expect(r.body).toContain("<p>Two-factor sign-in for everyone: off.</p>");

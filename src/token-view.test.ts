@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { adminToken, probeToken, selfToken, T0 } from "../test/token-fixtures.ts";
 import {
+  ADMIN_PRESET_TEXT,
   accessText,
   countdownSeconds,
   countdownText,
@@ -9,6 +10,7 @@ import {
   lastUsedText,
   locationGroups,
   missingScope,
+  PRESET_DESCRIPTIONS,
   presetOf,
   selfUnknownText,
   sourceText,
@@ -18,6 +20,18 @@ import {
 } from "./token-view.ts";
 
 describe("presets", () => {
+  test("each preset has its own literal description and the admin note names the three", () => {
+    expect(PRESET_DESCRIPTIONS).toEqual({
+      read: "Reads the checks and their configuration. Changes nothing.",
+      checks: "Reads checks and creates, changes and deletes them.",
+      incidents: "Reads checks and posts incidents.",
+      full: "Reads and changes checks and posts incidents.",
+    });
+    expect(ADMIN_PRESET_TEXT).toBe(
+      "Manage checks, Post incidents and Full access can also create, rotate and revoke tokens with the same or fewer scopes, and read the audit log.",
+    );
+  });
+
   test("the four presets hold the literal scope arrays of #460 s3", () => {
     expect(TOKEN_PRESETS.map((p) => [p.id, p.label, [...p.scopes]])).toEqual([
       ["read", "Read", ["read"]],

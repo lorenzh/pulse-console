@@ -39,7 +39,9 @@ import {
   assertChecksActions,
   assertChecksBoxEnd,
   assertChecksFit,
+  assertCopyButton,
   assertDanger,
+  assertEditorWidths,
   assertFontsUsed,
   assertForbidden,
   assertHeaderLines,
@@ -49,8 +51,10 @@ import {
   assertNoSidewaysScroll,
   assertNotFound,
   assertOverviewColors,
+  assertPresetCards,
   assertPrimary,
   assertRadio,
+  assertRecoveryCodes,
   assertSettingsBreakpoint,
   assertShellGeometry,
   assertTeamTable,
@@ -1374,6 +1378,7 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     const copy = page.locator("button[data-copy]").first();
     assert((await copy.isVisible()) === hasScript, `${label}: copy button visible ${hasScript}`);
     if (hasScript) {
+      await assertCopyButton(page, "button[data-copy]", `${label} detail host binding`);
       await copy.click();
       const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
       assert(copied[0] === HOST_LINE, `${label}: copied host line is the literal`);
@@ -1775,6 +1780,7 @@ async function createInBrowser(page: Page, base: string, label: string): Promise
 async function checkCopy(page: Page, label: string): Promise<string> {
   const button = page.locator('button[data-copy="token-secret"]');
   if (!(await button.isVisible())) return "copy button hidden";
+  await assertCopyButton(page, 'button[data-copy="token-secret"]', `${label} token secret`);
   await button.click();
   const copied = await page.evaluate(() => navigator.clipboard.readText());
   assert(copied === E2E_SECRET, `${label}: the copy button copies the secret`);
@@ -1969,9 +1975,18 @@ async function checkTokenLayout(page: Page, base: string, state: TokensApi): Pro
     await checkTokenWords(page, base, state, width);
     await page.goto(`${base}/tokens/new`);
     await assertFits(page, width, `/tokens/new at ${width}`);
+    await assertPresetCards(page, `light ${width}px /tokens/new`);
+    ok(
+      `/tokens/new at ${width}: 4 preset cards in order with their texts, 18px radio centered on its title, click and ArrowDown, none checked`,
+    );
     await page.goto(`${base}/tokens/revoke?id=${E2E_OPS.id}`);
     await assertFits(page, width, `/tokens/revoke at ${width}`);
   }
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto(`${base}/tokens/new`);
+  await assertPresetCards(page, "dark 1280px /tokens/new");
+  await page.emulateMedia({ colorScheme: "light" });
+  ok("/tokens/new dark at 1280: 4 preset cards with their texts and radio geometry");
 }
 
 /** Tokens in a real browser: create, copy, Back, reload, typed revoke, countdown, layout. */
@@ -2347,10 +2362,11 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   );
   await assertInput(page, 'input[name="name"]', scheme, `${at} edit Name`);
   await assertRadio(page, `${at} edit`);
+  await assertEditorWidths(page, width, `${at} edit`);
   await assertNoSidewaysScroll(page, `${at} edit`);
   await axeOn(page, `${base}/checks/edit?id=web`, `${at} /checks/edit`);
   ok(
-    `matrix ${at}: edit form primary, input and focus colors; 18px radio 12px from its text on a 44px row, arrow keys move it`,
+    `matrix ${at}: edit form primary, input and focus colors; 18px radio 12px from its text on a 44px row, arrow keys move it; ${width === 1280 ? "Save check under half the form, interval_ms <= 192.5px, name <= 384.5px" : "interval_ms and name fit the form"}`,
   );
 
   await page.goto(`${base}/checks/delete?id=hostile`);
@@ -2574,6 +2590,27 @@ async function matrixCold(env: Env, browser: Browser): Promise<void> {
 }
 
 /** Shell geometry (5), breakpoints (6) and the long data (11) at 390 px. */
+/** Browser check 3: real new recovery codes on 1 line each at 1280 and 390. */
+async function matrixRecoveryCodes(env: Env, page: Page, scheme: Scheme): Promise<void> {
+  const base = env.console.base;
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`${base}/account/recovery-codes`);
+  await page.fill('input[name="password"]', OWNER_PASSWORD);
+  await Promise.all([
+    page.waitForURL(`${base}/account/recovery-codes`),
+    page.getByRole("button", { name: "Create new recovery codes", exact: true }).click(),
+  ]);
+  const codes = await assertRecoveryCodes(page, `${scheme} 1280px recovery codes`);
+  // The old codes stop working; later sign-ins use the new ones.
+  env.console.recoveryCodes.splice(0, env.console.recoveryCodes.length, ...codes);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await assertRecoveryCodes(page, `${scheme} 390px recovery codes`);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  ok(
+    `matrix ${scheme}: 10 recovery codes of 39 characters, 1 line each inside the panel at 1280 and 390`,
+  );
+}
+
 async function matrixGeometry(env: Env, page: Page, scheme: Scheme): Promise<void> {
   const base = env.console.base;
   await page.goto(`${base}/`);
@@ -2633,6 +2670,7 @@ async function checkDesignMatrix(browser: Browser): Promise<void> {
           await matrixPages(env, page, scheme, width);
           await matrixTeamAndAccount(env, page, scheme, width);
         }
+        await matrixRecoveryCodes(env, page, scheme);
         await matrixGeometry(env, page, scheme);
       } finally {
         await context.close();

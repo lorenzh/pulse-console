@@ -184,7 +184,7 @@ function hostBindingsOf(view: AdminCheckView): HostBinding[] {
 
 function copyBlock(elementId: string, line: string): string {
   return `<pre id="${elementId}">${escapeHtml(line)}</pre>
-<button type="button" data-copy="${elementId}" hidden>Copy</button>
+<button type="button" class="secondary small" data-copy="${elementId}" hidden>Copy</button>
 `;
 }
 

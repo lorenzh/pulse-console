@@ -286,7 +286,7 @@ describe("POST /tokens/new", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.body).toContain(`<pre id="token-secret" data-secret>${FAKE_SECRET}</pre>`);
     expect(res.body).toContain(
-      '<button type="button" data-copy="token-secret" hidden>Copy</button>',
+      '<button type="button" class="secondary small" data-copy="token-secret" hidden>Copy</button>',
     );
     expect(res.body).toContain(
       "Copy it now. pulse-api keeps only a hash: this is the only time it is shown.",
@@ -351,19 +351,51 @@ describe("POST /tokens/new", () => {
     });
   }
 
+  test("the create form shows four option cards, one shared note and no default", async () => {
+    const api = tokenApi([self]);
+    const c = await tokensConsole(api);
+    const form = await getPage(c, "/tokens/new", c.cookies.admin);
+    expect(form.body.split('<label class="choice option-card">').length - 1).toBe(4);
+    for (const text of [
+      '<span class="choice-title">Read</span><small class="hint">Reads the checks and their configuration. Changes nothing.</small>',
+      '<span class="choice-title">Manage checks</span><small class="hint">Reads checks and creates, changes and deletes them.</small>',
+      '<span class="choice-title">Post incidents</span><small class="hint">Reads checks and posts incidents.</small>',
+      '<span class="choice-title">Full access</span><small class="hint">Reads and changes checks and posts incidents.</small>',
+    ]) {
+      expect(form.body).toContain(text);
+    }
+    expect(form.body).toContain(
+      '<fieldset id="field-preset" aria-describedby="preset-note"><legend>Access</legend>\n<p class="hint" id="preset-note">',
+    );
+    expect(form.body.split('id="preset-note"').length - 1).toBe(1);
+    expect(form.body).not.toContain("checked");
+    expect(form.body).toContain('<input id="field-name" class="input-medium" name="name"');
+    const res = await postNew(c, { name: "x" });
+    expect(res.status).toBe(422);
+    expect(res.body).toContain(
+      '<fieldset id="field-preset" aria-describedby="preset-note field-preset-error">',
+    );
+    expect(writes(api)).toEqual([]);
+  });
+
   test("grant: a console token [read, admin] disables the scope presets and refuses full", async () => {
     const weak = selfToken({ scopes: ["read", "admin"] });
     const api = tokenApi([weak], weak);
     const c = await tokensConsole(api);
     const form = await getPage(c, "/tokens/new", c.cookies.admin);
-    expect(form.body).toContain('value="read"> Read');
+    expect(form.body).toContain(
+      '<label class="choice option-card"><input type="radio" name="preset" value="read"><span class="choice-text"><span class="choice-title">Read</span><small class="hint">Reads the checks and their configuration. Changes nothing.</small></span></label>',
+    );
+    expect(form.body).toContain(
+      '<label class="choice option-card"><input type="radio" name="preset" value="checks" disabled><span class="choice-text"><span class="choice-title">Manage checks</span><small class="hint">Reads checks and creates, changes and deletes them.</small><small class="hint">The console token lacks checks.</small></span></label>',
+    );
     expect(form.body).toContain('value="checks" disabled>');
     expect(form.body).toContain('value="incidents" disabled>');
     expect(form.body).toContain('value="full" disabled>');
     expect(form.body).toContain("The console token lacks checks.");
     expect(form.body).toContain("The console token lacks incidents.");
     expect(form.body).toContain(
-      "Can also create, rotate and revoke tokens with the same or fewer scopes, and read the audit log.",
+      '<p class="hint" id="preset-note">Manage checks, Post incidents and Full access can also create, rotate and revoke tokens with the same or fewer scopes, and read the audit log.</p>',
     );
     const res = await postNew(c, { name: "x", preset: "full" });
     expect(res.status).toBe(422);

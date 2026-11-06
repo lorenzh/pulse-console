@@ -50,15 +50,17 @@ when: after that nobody can manage pulse-api tokens.
 Create takes a name (trimmed, 1 to 100 characters, no control characters) and one preset, with no
 default:
 
-| Preset         | Scopes sent                                |
-| -------------- | ------------------------------------------ |
-| Read           | `["read"]`                                 |
-| Manage checks  | `["read", "checks", "admin"]`              |
-| Post incidents | `["read", "incidents", "admin"]`           |
-| Full access    | `["read", "checks", "incidents", "admin"]` |
+| Preset         | Scopes sent                                | Description on the card                                    |
+| -------------- | ------------------------------------------ | ---------------------------------------------------------- |
+| Read           | `["read"]`                                 | Reads the checks and their configuration. Changes nothing. |
+| Manage checks  | `["read", "checks", "admin"]`              | Reads checks and creates, changes and deletes them.        |
+| Post incidents | `["read", "incidents", "admin"]`           | Reads checks and posts incidents.                          |
+| Full access    | `["read", "checks", "incidents", "admin"]` | Reads and changes checks and posts incidents.              |
 
-The three admin presets also allow creating, rotating and revoking tokens with the same or fewer
-scopes, and reading the audit log. A preset with a scope the console token lacks is disabled with
+Each preset is an option card: the radio, the label and the description. One note sits directly
+after the legend, and the fieldset names it in `aria-describedby` (with the error id on a preset
+error): `Manage checks, Post incidents and Full access can also create, rotate and revoke tokens
+with the same or fewer scopes, and read the audit log.` A preset with a scope the console token lacks is disabled with
 `The console token lacks <scope>.`, and a forged POST gets that field error. The api body is
 `{"name": <trimmed name>, "scopes": <preset scopes>}`; there is no expiry on create.
 
