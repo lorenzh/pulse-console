@@ -154,7 +154,12 @@ describe("app routes", () => {
     const css = await res.text();
     for (const rule of [
       ".type-choice li.panel { padding: 14px 16px; overflow-wrap: anywhere; }",
-      "ul.counts { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 4px; }",
+      ".state-tiles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 12px; }",
+      ".state-tile { display: block; padding: 16px; color: var(--text); text-decoration: none; }",
+      ".state-tile:hover { border-color: var(--accent); }",
+      "a.state-tile, a.state-tile:visited { color: var(--text); }",
+      "font-family: var(--font-sans); font-size: 0.875rem; }",
+      ".tile-count { display: block; font-family: var(--font-mono); font-size: 1.75rem; font-weight: 600; }",
       ".check-state-maintenance .dot {",
       ".tag-info { color: var(--accent2); background: var(--bg); }",
       "td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }",
@@ -241,7 +246,8 @@ describe("app routes", () => {
     expect(css).not.toContain(".table-scroll table.checks td { overflow-wrap: normal");
     expect(css).not.toContain("break-word");
     expect(css).not.toContain(".sidebar { position: sticky; top: 0; height: 100vh;");
-    expect(css).not.toContain("font-size: 1.75rem");
+    expect(css).not.toContain("h1 { font-size: 1.75rem");
+    expect(css).not.toContain("ul.counts");
     expect(css).not.toContain(".sidebar nav .icon { display: none; }");
     expect(css).not.toContain("flex-direction: column; justify-content: center;");
     expect(css.startsWith("[hidden] { display: none !important; }\n")).toBe(true);
@@ -288,6 +294,7 @@ describe("app routes", () => {
       ".nav-item:visited": "var(--lead)",
       '.nav-item[aria-current="page"]:visited': "var(--text)",
       ".breadcrumbs a:visited": "var(--muted)",
+      "a.state-tile:visited": "var(--text)",
     };
     const seen = new Map<string, string>();
     const tokens = css.match(/[{}]|[^{}]+/g) ?? [];

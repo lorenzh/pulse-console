@@ -167,8 +167,12 @@ main.shell-main > * { min-width: 0; }
 .check-state-unknown .dot, .check-state-shadowed .dot { border: 1px solid var(--field-line); background: transparent; }
 .check-state.dense { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); }
 .check-state.dense.check-state-down { color: var(--error); }
-ul.counts { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-ul.counts .check-state { margin-right: 8px; }
+.state-tiles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 12px; }
+.state-tile { display: block; padding: 16px; color: var(--text); text-decoration: none; }
+.state-tile:hover { border-color: var(--accent); }
+a.state-tile, a.state-tile:visited { color: var(--text); }
+.tile-label { display: flex; align-items: center; gap: 8px; font-family: var(--font-sans); font-size: 0.875rem; }
+.tile-count { display: block; font-family: var(--font-mono); font-size: 1.75rem; font-weight: 600; }
 .type-choice { list-style: none; padding: 0; display: grid; gap: 8px; }
 .type-choice li.panel { padding: 14px 16px; overflow-wrap: anywhere; }
 .tag { display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border: 1px solid currentColor; border-radius: var(--radius-pill); background: transparent; font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; white-space: nowrap; }

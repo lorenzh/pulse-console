@@ -1106,3 +1106,46 @@ export async function assertCompactAccount(
   }
   check(got.isRoleVisible && got.roleLines === 1, `${label}: role has ${got.roleLines} lines`);
 }
+
+const OVERVIEW_TILES: readonly (readonly [string, string, string])[] = [
+  ["Down", "2", "/checks?state=down"],
+  ["Degraded", "1", "/checks?state=degraded"],
+  ["Unknown", "0", "/checks?state=unknown"],
+  ["Maintenance", "0", "/checks?state=maintenance"],
+  ["Up", "3", "/checks?state=up"],
+  ["Total", "6", "/checks"],
+];
+
+/**
+ * Browser 9: the six Overview tiles for the states down, down, degraded, up, up, up, their
+ * literal hrefs, the list style and the label font. Clicking Down filters the Checks list.
+ */
+export async function assertOverviewTiles(page: Page, base: string, label: string) {
+  await page.goto(`${base}/`);
+  await page.evaluate(() => document.fonts.ready);
+  const tiles = await page
+    .locator("a.state-tile")
+    .evaluateAll((links) =>
+      links.map((a) => [
+        a.querySelector(".tile-label")?.textContent?.trim() ?? "",
+        a.querySelector(".tile-count")?.textContent?.trim() ?? "",
+        a.getAttribute("href") ?? "",
+      ]),
+    );
+  check(
+    JSON.stringify(tiles) === JSON.stringify(OVERVIEW_TILES),
+    `${label}: Overview tiles ${JSON.stringify(tiles)}, want ${JSON.stringify(OVERVIEW_TILES)}`,
+  );
+  const style = await page.evaluate(() => ({
+    list: getComputedStyle(document.querySelector("ul.state-tiles") ?? document.body).listStyleType,
+    font: getComputedStyle(document.querySelector(".tile-label") ?? document.body).fontFamily,
+  }));
+  check(style.list === "none", `${label}: ul.state-tiles list-style-type ${style.list}`);
+  check(style.font.startsWith('"Space Grotesk"'), `${label}: .tile-label font ${style.font}`);
+  await Promise.all([
+    page.waitForURL(`${base}/checks?state=down`),
+    page.locator('a.state-tile[href="/checks?state=down"]').click(),
+  ]);
+  const value = await page.locator("select#filter-state").inputValue();
+  check(value === "down", `${label}: after Down, select#filter-state is ${value}`);
+}

@@ -53,6 +53,7 @@ import {
   assertNoSidewaysScroll,
   assertNotFound,
   assertOverviewColors,
+  assertOverviewTiles,
   assertPresetCards,
   assertPrimary,
   assertRadio,
@@ -108,6 +109,7 @@ const VISITED_RULES: Readonly<Record<string, string>> = {
   ".nav-item:visited": "var(--lead)",
   '.nav-item[aria-current="page"]:visited': "var(--text)",
   ".breadcrumbs a:visited": "var(--muted)",
+  "a.state-tile:visited": "var(--text)",
 };
 
 type Env = {
@@ -2339,6 +2341,23 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   page.off("response", onFont);
   await axeOn(page, `${base}/`, `${at} Overview`);
   ok(`matrix ${at}: overview body, current and other nav colors, fonts used, no sideways scroll`);
+
+  env.api.reply(
+    "/checks",
+    jsonReply(
+      ["down", "down", "degraded", "up", "up", "up"].map((state, i) =>
+        checkWithState(`tile-${i}`, state),
+      ),
+    ),
+  );
+  try {
+    await assertOverviewTiles(page, base, `${at} /`);
+  } finally {
+    replyChecks(env.api, MATRIX_CHECKS);
+  }
+  ok(
+    `matrix ${at}: Overview tiles Down 2, Degraded 1, Unknown 0, Maintenance 0, Up 3, Total 6 with their /checks?state= links; Down selects down`,
+  );
 
   await page.goto(`${base}/checks`);
   await page.evaluate(() => document.fonts.ready);
