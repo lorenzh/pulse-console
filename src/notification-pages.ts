@@ -327,8 +327,7 @@ function emailFields(base: Omit<FieldView, "name" | "label">): string {
       textInput({ ...base, name: "smtp_client_name", label: "SMTP client name" }) +
       textInput({ ...base, name: "from", label: "From" }) +
       textareaInput({ ...base, name: "to", label: "To", hint: "One address per line." }) +
-      textInput({ ...base, name: "subject_prefix", label: "Subject prefix" }) +
-      messageFields(base),
+      textInput({ ...base, name: "subject_prefix", label: "Subject prefix" }),
   );
 }
 
@@ -354,7 +353,7 @@ ${submitButton({ label: "Save", busyLabel: "Saving…" })}
 ${textInput({ ...base, name: "id", label: "Id", isReadOnly: model.mode === "edit", hint: "Lower-case letters, digits, - and _; at most 64 characters." })}${selectInput({ ...base, name: "type", label: "Type", hint: "Only the fields of this type are saved." }, types)}${routingFields(base)}${fieldset(
   "Webhook, Slack and Teams",
   `${refFields(base, "url_env", "url_file", "URL")}${paragraph("Give exactly one of the two.", ' class="hint"')}`,
-)}${fieldset("Webhook", refFields(base, "secret_env", "secret_file", "Signing secret"))}${fieldset("Slack and Teams", messageFields(base))}${emailFields(base)}${submitButton({ label: "Save", busyLabel: "Saving…" })}
+)}${fieldset("Webhook", refFields(base, "secret_env", "secret_file", "Signing secret"))}${fieldset("Slack, Teams and email", messageFields(base))}${emailFields(base)}${submitButton({ label: "Save", busyLabel: "Saving…" })}
 </form>
 <p>${link(NOTIFICATIONS_PATH, "Back to notifications")}</p>
 `;

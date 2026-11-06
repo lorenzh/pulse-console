@@ -26,10 +26,14 @@ import {
   checkWithState,
   emptyConfig,
   jsonReply,
+  NOTIFY_REVISION,
+  notifyChannelsView,
+  notifyReport,
   STATUS_REVISION,
   startFakeApi,
   statusSettingsView,
   WIRE_HEADERS,
+  webhookChannel,
 } from "../test/fake-api.ts";
 import {
   type ConfirmTargetHolder,
@@ -381,7 +385,7 @@ async function closedOrigin(): Promise<string> {
 
 async function overviewText(page: Page, base: string): Promise<string> {
   await page.goto(`${base}/`);
-  return (await page.locator("main").textContent()) ?? "";
+  return (await page.locator("body").textContent()) ?? "";
 }
 
 /** Each failure kind through `/`, `readOverview` and the real `fetchJson`, then recovery. */
@@ -699,6 +703,7 @@ async function checkFocus(env: Env, browser: Browser): Promise<void> {
     "Tokens",
     "Probes",
     "Status page",
+    "Notifications",
     "Team",
     "Account security",
     "Sign out",
@@ -751,7 +756,7 @@ async function checkMobileNavIcons(env: Env, browser: Browser): Promise<void> {
           : `${r.width}x${r.height} icon ${r.left}-${r.right},${r.top}-${r.bottom} label ${label.left},${label.top}-${label.bottom}`;
       }),
     );
-    assert(icons.length === 6, `mobile nav ${colorScheme}: ${icons.length} items`);
+    assert(icons.length === 7, `mobile nav ${colorScheme}: ${icons.length} items`);
     assert(
       icons.every((x) => x === "ok"),
       `mobile nav ${colorScheme}: icons ${icons.join(",")}`,
@@ -786,7 +791,15 @@ async function checkMobileNavFocusAt(env: Env, browser: Browser, width: number):
   await assertNavEdges(page, `light ${width}px /`);
   await assertCompactAccount(page, width, env.ownerEmail, `light ${width}px /`);
   await page.keyboard.press("Tab");
-  for (const text of ["Overview", "Checks", "Tokens", "Probes", "Status page", "Team"]) {
+  for (const text of [
+    "Overview",
+    "Checks",
+    "Tokens",
+    "Probes",
+    "Status page",
+    "Notifications",
+    "Team",
+  ]) {
     await page.keyboard.press("Tab");
     const got = await page.evaluate(() => {
       const el = document.activeElement;
@@ -1530,7 +1543,7 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     await assertFits(page, 390, `${label} detail`);
     const pre = await page.locator("pre").first().textContent();
     assert(pre === HOST_LINE, `${label}: detail host line is the literal`);
-    const detailText = (await page.locator("main").textContent()) ?? "";
+    const detailText = (await page.locator("body").textContent()) ?? "";
     assert(
       detailText.includes("latency 1501ms over objective 500ms") &&
         !detailText.includes("1501.4197810000041"),
@@ -2571,6 +2584,89 @@ async function checkStatusPageKeyboard(browser: Browser, hasScript: boolean): Pr
   }
 }
 
+function notificationsApi(env: { api: ReturnType<typeof startFakeApi> }): void {
+  const report = notifyReport({
+    fileChannels: [{ source: "file", id: "ops", type: "slack", refs: ["PULSE_NOTIFY_SECRET_OPS"] }],
+    fileChannelsTotal: 1,
+    shadowedIds: ["old"],
+    rejected: [{ channelId: "b", reason: "channels[1]: must be at most 16384 bytes as JSON" }],
+  });
+  env.api.replyTo(
+    "GET",
+    "/admin/notify/channels",
+    jsonReply(
+      notifyChannelsView({
+        channels: [webhookChannel("a"), webhookChannel("b")],
+        shadowed: [webhookChannel("old")],
+        report,
+      }),
+    ),
+  );
+  env.api.replyTo("POST", "/admin/notify/channels", {
+    status: 201,
+    body: "{}",
+    headers: { ...WIRE_HEADERS, etag: `"${NOTIFY_REVISION}"` },
+  });
+  const failed = ["opened", "update"].map((event, i) => ({
+    channelId: "a",
+    key: `${i}:${event}`,
+    event,
+    isManual: i === 1,
+    failedAt: 1_700_000_000_000,
+    hasPayload: i === 0,
+  }));
+  env.api.replyTo(
+    "GET",
+    "/admin/notify/failed",
+    jsonReply({ state: "fresh", receivedAt: 1000, failed, failedTotal: 2 }),
+  );
+}
+
+/** R3: the notification pages pass axe, and a channel is created by keyboard only. */
+async function checkNotificationsWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const env = await startEnv(0);
+  notificationsApi(env);
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+  });
+  const page = await newPage(context, violations);
+  try {
+    await signIn(page, env);
+    for (const path of ["/notifications", "/notifications/failed", "/notifications/new"]) {
+      await page.goto(`${env.console.base}${path}`);
+      if (hasScript) await axeOn(page, page.url(), path);
+    }
+    await page.locator("#field-id").focus();
+    await page.keyboard.type("hook");
+    await page.locator("#field-url_env").focus();
+    await page.keyboard.type("HOOK");
+    await Promise.all([page.waitForEvent("load"), page.keyboard.press("Enter")]);
+    const posts = env.api.seen.filter((s) => s.method === "POST");
+    const summary = (await page.locator("body").textContent()) ?? "";
+    assert(
+      posts.length === 1,
+      `${label}: one POST, got ${posts.length}: ${page.url()} ${summary.slice(0, 300)}`,
+    );
+    const sent = JSON.stringify(JSON.parse(posts[0]?.body ?? "{}"));
+    assert(
+      sent === '{"id":"hook","type":"webhook","urlEnv":"PULSE_NOTIFY_SECRET_HOOK"}',
+      `${label}: created ${sent}`,
+    );
+    assert(page.url().endsWith("/notifications?saved=1"), `${label}: saved page ${page.url()}`);
+    assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
+    ok(
+      `Notifications, ${label}: list, failed and editor${hasScript ? " axe 0" : ""}; keyboard create saved`,
+    );
+  } finally {
+    await context.close();
+    await env.console.close();
+    env.api.stop();
+  }
+}
+
 const HOSTILE_NAME = "<img src=x onerror=alert(1)>";
 const UNBROKEN_NAME = `Unbroken${"n".repeat(92)}`;
 const UNBROKEN_ID = `unbroken${"x".repeat(56)}`;
@@ -3040,6 +3136,8 @@ async function runChecks(): Promise<void> {
     await checkProbesWith(browser, false);
     await checkStatusPageKeyboard(browser, true);
     await checkStatusPageKeyboard(browser, false);
+    await checkNotificationsWith(browser, true);
+    await checkNotificationsWith(browser, false);
     // A console of its own: each check signs in with a fixture recovery code.
     const shellEnv = await startEnv(0);
     try {

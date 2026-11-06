@@ -303,6 +303,19 @@ describe("editor", () => {
     expect(html).toContain("a file in PULSE_NOTIFY_SECRET_DIR on pulse-notify");
   });
 
+  test("every form field name appears once, so a browser submit never repeats one", async () => {
+    const c = await teamConsole(fakeApi());
+    const page = (await getPage(c, "/notifications/new", c.cookies.owner)).body;
+    const start = page.indexOf('action="/notifications/new"');
+    const html = page.slice(start, page.indexOf("</form>", start));
+    const names = [...html.matchAll(/<(?:input|select|textarea)[^>]* name="([^"]*)"/g)].map(
+      (m) => m[1],
+    );
+    // csrf, form_token and the 28 channel form fields.
+    expect(names.length).toBe(30);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
   test("create sends the definition with If-Match, a forged url is not forwarded", async () => {
     const api = fakeApi();
     const c = await teamConsole(api);
