@@ -8,8 +8,8 @@ const labels = (role: ConsoleRole, registry = NAVIGATION) =>
   visibleNavigation(role, registry).map((e) => e.label);
 
 describe("navigation registry", () => {
-  test("has exactly 9 entries, 4 of them unavailable; Tokens and Probes are available", () => {
-    expect(NAVIGATION).toHaveLength(9);
+  test("has exactly 10 entries, 4 of them unavailable; Tokens, Probes and Status page are available", () => {
+    expect(NAVIGATION).toHaveLength(10);
     expect(NAVIGATION.filter((e) => !e.isAvailable)).toHaveLength(4);
     expect(NAVIGATION.find((e) => e.id === "tokens")).toMatchObject({
       isAvailable: true,
@@ -19,13 +19,19 @@ describe("navigation registry", () => {
       isAvailable: true,
       minRole: "admin",
     });
+    expect(NAVIGATION.find((e) => e.id === "status-page")).toMatchObject({
+      label: "Status page",
+      path: "/status-page",
+      isAvailable: true,
+      minRole: "owner",
+    });
   });
 
   test.each([
     ["viewer", ["Overview", "Checks"]],
     ["member", ["Overview", "Checks"]],
     ["admin", ["Overview", "Checks", "Tokens", "Probes", "Team"]],
-    ["owner", ["Overview", "Checks", "Tokens", "Probes", "Team"]],
+    ["owner", ["Overview", "Checks", "Tokens", "Probes", "Status page", "Team"]],
   ] as const)("today %s sees its available entries", (role, expected) => {
     expect(labels(role)).toEqual([...expected]);
   });
@@ -56,6 +62,7 @@ describe("navigation registry", () => {
         "Maintenance",
         "Tokens",
         "Probes",
+        "Status page",
         "Team",
         "Activity",
         "System",
@@ -81,6 +88,7 @@ describe("navigation registry", () => {
       '<a class="nav-item" href="/checks"',
       '<a class="nav-item" href="/tokens"',
       '<a class="nav-item" href="/probes"',
+      '<a class="nav-item" href="/status-page"',
       '<a class="nav-item" href="/team"',
       '<a href="/account/security"',
     ]);
@@ -103,6 +111,7 @@ describe("navigationGroups", () => {
     expect(groups.instance.map((e) => e.label)).toEqual([
       "Tokens",
       "Probes",
+      "Status page",
       "Team",
       "Activity",
       "System",

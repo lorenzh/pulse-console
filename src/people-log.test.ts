@@ -320,3 +320,57 @@ test("check events keep the check id as target name and no target id", () => {
     },
   ]);
 });
+
+test("status and notify events name their target without any setting value", () => {
+  const db = fresh();
+  const actor = { kind: "user", person: OWNER } as const;
+  appendPeopleEvent(db, {
+    at: 20,
+    actor,
+    action: "status-settings.replace",
+    target: { kind: "status-settings" },
+  });
+  appendPeopleEvent(db, {
+    at: 21,
+    actor,
+    action: "notify-channel.create",
+    target: { kind: "notify-channel", id: "ops" },
+  });
+  appendPeopleEvent(db, {
+    at: 22,
+    actor,
+    action: "notify-resend.create",
+    target: { kind: "notify-resend", channelId: "ops" },
+  });
+  const got = db
+    .query(
+      "SELECT action, target_kind, target_id, target_email, target_name, value FROM people_events ORDER BY id",
+    )
+    .all();
+  expect(got).toEqual([
+    {
+      action: "status-settings.replace",
+      target_kind: "status-settings",
+      target_id: null,
+      target_email: null,
+      target_name: null,
+      value: null,
+    },
+    {
+      action: "notify-channel.create",
+      target_kind: "notify-channel",
+      target_id: null,
+      target_email: null,
+      target_name: "ops",
+      value: null,
+    },
+    {
+      action: "notify-resend.create",
+      target_kind: "notify-resend",
+      target_id: null,
+      target_email: null,
+      target_name: "ops",
+      value: null,
+    },
+  ]);
+});

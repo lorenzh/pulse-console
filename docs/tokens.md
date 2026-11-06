@@ -50,18 +50,21 @@ when: after that nobody can manage pulse-api tokens.
 Create takes a name (trimmed, 1 to 100 characters, no control characters) and one preset, with no
 default:
 
-| Preset         | Scopes sent                                | Description on the card                                    |
-| -------------- | ------------------------------------------ | ---------------------------------------------------------- |
-| Read           | `["read"]`                                 | Reads the checks and their configuration. Changes nothing. |
-| Manage checks  | `["read", "checks", "admin"]`              | Reads checks and creates, changes and deletes them.        |
-| Post incidents | `["read", "incidents", "admin"]`           | Reads checks and posts incidents.                          |
-| Full access    | `["read", "checks", "incidents", "admin"]` | Reads and changes checks and posts incidents.              |
+| Preset         | Scopes sent                                | Description on the card                                                       |
+| -------------- | ------------------------------------------ | ----------------------------------------------------------------------------- |
+| Read           | `["read"]`                                 | Reads the checks and their configuration. Changes nothing.                    |
+| Manage checks  | `["read", "checks", "admin"]`              | Reads checks and creates, changes and deletes them.                           |
+| Post incidents | `["read", "incidents", "admin"]`           | Reads checks and posts incidents.                                             |
+| Full access    | `["read", "checks", "incidents", "admin"]` | Reads and changes checks and posts incidents.                                 |
+| Status service | `["status"]`                               | For pulse-status: reads the status page settings and reports what it applied. |
+| Notify service | `["notify"]`                               | For pulse-notify: reads the notify channels, reports them and runs resends.   |
 
 Each preset is an option card: the radio, the label and the description. One note sits directly
 after the legend, and the fieldset names it in `aria-describedby` (with the error id on a preset
 error): `Manage checks, Post incidents and Full access can also create, rotate and revoke tokens
 with the same or fewer scopes, and read the audit log.` A preset with a scope the console token lacks is disabled with
-`The console token lacks <scope>.`, and a forged POST gets that field error. The api body is
+`The console token lacks <scope>.` (a `probe` token needs `checks`; a `status` or `notify` token
+needs `admin`), and a forged POST gets that field error. The api body is
 `{"name": <trimmed name>, "scopes": <preset scopes>}`; there is no expiry on create.
 
 ## Show once
@@ -191,3 +194,10 @@ A rotation shows a new env command for the same `<base>.env`, the overlap countd
 lines that recreate the container (`... up -d --force-recreate`, or `docker rm -f '<base>'` and
 the docker run line again). A plain `docker restart` keeps the old token, because the env file is
 read when the container is created.
+
+## Service tokens and rollout
+
+The Status service and Notify service presets make the tokens that pulse-status and pulse-notify
+use to read their settings from pulse-api. The token list shows such a token with the preset
+label. Update the console (contract `2.4.0`) before creating a service token: an older console
+cannot read a token list that holds the new scopes and shows "pulse-api sent an invalid answer."

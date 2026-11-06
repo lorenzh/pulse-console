@@ -44,6 +44,27 @@ describe("successful reads", () => {
     expect(warnings).toEqual([]);
   });
 
+  test("the list accepts status and notify service tokens", async () => {
+    const status = adminToken({
+      id: "tok_57a700000000000000000004",
+      name: "status",
+      scopes: ["status"],
+    });
+    const notify = adminToken({
+      id: "tok_9071f0000000000000000005",
+      name: "notify",
+      scopes: ["notify"],
+    });
+    api.reply("/admin/tokens", jsonReply({ tokens: [selfToken(), status, notify] }));
+    const list = await readTokenList(api.url, deps);
+    expect(list.kind === "ok" && list.value.map((t) => t.scopes)).toEqual([
+      ["read", "checks", "incidents", "admin"],
+      ["status"],
+      ["notify"],
+    ]);
+    expect(warnings).toEqual([]);
+  });
+
   test("admin reads carry the bearer token; /locations carries none", async () => {
     await readTokenPage(api.url, deps, true);
     const auth = Object.fromEntries(api.seen.map((s) => [s.path, s.authorization]));

@@ -21,7 +21,12 @@ export type PeopleAction =
   | "check.delete"
   | "token.create"
   | "token.rotate"
-  | "token.revoke";
+  | "token.revoke"
+  | "status-settings.replace"
+  | "notify-channel.create"
+  | "notify-channel.replace"
+  | "notify-channel.delete"
+  | "notify-resend.create";
 
 /** Email and name as they were at the time of the change. */
 export type PeoplePerson = { id: number; email: string; name: string };
@@ -38,7 +43,13 @@ export type PeopleEvent = {
     /** A pulse-api check: `target_name` is the check id, `target_id` stays NULL. */
     | { kind: "check"; id: string }
     /** A pulse-api token: `target_name` is its id, or `unknown` when the answer had none. */
-    | { kind: "token"; id: string | undefined };
+    | { kind: "token"; id: string | undefined }
+    /** The status page settings of pulse-api: one document, no id. */
+    | { kind: "status-settings" }
+    /** A database notify channel: `target_name` is the channel id. */
+    | { kind: "notify-channel"; id: string }
+    /** A resend: `target_name` is the channel id of the failed delivery. */
+    | { kind: "notify-resend"; channelId: string };
   fromRole?: ConsoleRole | undefined;
   toRole?: ConsoleRole | undefined;
   value?: string | undefined;
@@ -82,6 +93,12 @@ function targetColumns(
       return ["check", null, null, target.id];
     case "token":
       return ["token", null, null, target.id ?? "unknown"];
+    case "status-settings":
+      return ["status-settings", null, null, null];
+    case "notify-channel":
+      return ["notify-channel", null, null, target.id];
+    case "notify-resend":
+      return ["notify-resend", null, null, target.channelId];
     default: {
       const unknown: never = target;
       return unknown;

@@ -5,7 +5,7 @@
     "": {
       "name": "@lorenzh/pulse-console",
       "dependencies": {
-        "@lorenzh/pulse-contract": "github:lorenzh/pulse-contract#66818a24b81f5d0d86eee939dad64fa126617ba2",
+        "@lorenzh/pulse-contract": "github:lorenzh/pulse-contract#c5ce6685ce8b563a243823bca451032291b81adb",
         "@lorenzh/pulse-kit": "github:lorenzh/pulse-kit#536133f3e8b708179fa01feeb02395a0e1961e07",
       },
       "devDependencies": {
@@ -79,7 +79,7 @@
 
     "@lorenzh/pulse-config": ["@lorenzh/pulse-config@github:lorenzh/pulse-config#04108fa", { "dependencies": { "@types/bun": "1.4.0", "@typescript-eslint/eslint-plugin": "8.72.1", "@typescript-eslint/parser": "8.72.1", "eslint": "10.13.0", "eslint-plugin-sonarjs": "4.2.2", "typescript": "6.0.3" }, "bin": { "pulse-eslint": "./bin/pulse-eslint.js", "pulse-workflows": "./bin/pulse-workflows.js" } }, "lorenzh-pulse-config-04108fa", "sha512-spdP32t+kLr9477W1ozgckPmVGYXg+bCwBUELol983lhW6S9m+SsGsDE2yrmGNOGRwcwrGS0l21tvAAZdmu9UQ=="],
 
-    "@lorenzh/pulse-contract": ["@lorenzh/pulse-contract@github:lorenzh/pulse-contract#66818a2", { "dependencies": { "zod": "4.6.7" } }, "lorenzh-pulse-contract-66818a2", "sha512-tztTMmxsjL1kfAiSXB2we8f0zEUGuW5bZLzXewZ/JV4JAie1e6kZUn6f0fkBqWt4rFTkhmi1bs32Ju3wQVfJvQ=="],
+    "@lorenzh/pulse-contract": ["@lorenzh/pulse-contract@github:lorenzh/pulse-contract#c5ce668", { "dependencies": { "zod": "4.6.7" } }, "lorenzh-pulse-contract-c5ce668", "sha512-ToQVqyDbJmOj8Up9VENxoOJTLoYcbjGqJipHxt9mvZkBLRTwfrll1l1U1h3TE+JeXzNuk4E5V6QsqH1t7mvljQ=="],
 
     "@lorenzh/pulse-kit": ["@lorenzh/pulse-kit@github:lorenzh/pulse-kit#536133f", {}, "lorenzh-pulse-kit-536133f", "sha512-X+xuaL/LoCt8K8vVE0rfEuHykj9URJ8/FJUrYNLFiAQZs/zB+wlJ/Y1WbvjcqXS2nvvOd7C3Oq5QO8qaTzJgCw=="],
 

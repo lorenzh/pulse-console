@@ -19,7 +19,7 @@ Y allowed, N denied. Every row with a Y is monotonic in viewer < member < admin 
 | 7   | `maintenance.create` | Plan maintenance                                          | N      | Y      | Y     | Y     |
 | 8   | `maintenance.edit`   | Edit a maintenance window                                 | N      | Y      | Y     | Y     |
 | 9   | `maintenance.delete` | Delete a maintenance window                               | N      | N      | Y     | Y     |
-| 10  | `settings.edit`      | Edit status and notify settings (not built)               | N      | N      | N     | Y     |
+| 10  | `settings.edit`      | Edit status settings (`/status-page`); notify comes later | N      | N      | N     | Y     |
 | 11  | `token.write`        | Create, rotate, revoke tokens                             | N      | N      | Y     | Y     |
 | 12  | `probe.write`        | Add and rotate probe locations                            | N      | N      | Y     | Y     |
 | 13  | `activity.view`      | Activity log, System page                                 | N      | N      | Y     | Y     |

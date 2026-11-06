@@ -98,6 +98,7 @@ describe("permission matrix", () => {
       ["Maintenance", "viewer"],
       ["Tokens", "admin"],
       ["Probes", "admin"],
+      ["Status page", "owner"],
       ["Team", "admin"],
       ["Activity", "admin"],
       ["System", "admin"],

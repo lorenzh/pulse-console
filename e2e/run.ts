@@ -22,7 +22,15 @@ import {
   webResults,
   webState,
 } from "../test/check-fixtures.ts";
-import { checkWithState, emptyConfig, jsonReply, startFakeApi } from "../test/fake-api.ts";
+import {
+  checkWithState,
+  emptyConfig,
+  jsonReply,
+  STATUS_REVISION,
+  startFakeApi,
+  statusSettingsView,
+  WIRE_HEADERS,
+} from "../test/fake-api.ts";
 import {
   type ConfirmTargetHolder,
   createFixtureRoutes,
@@ -690,6 +698,7 @@ async function checkFocus(env: Env, browser: Browser): Promise<void> {
     "Checks",
     "Tokens",
     "Probes",
+    "Status page",
     "Team",
     "Account security",
     "Sign out",
@@ -777,7 +786,7 @@ async function checkMobileNavFocusAt(env: Env, browser: Browser, width: number):
   await assertNavEdges(page, `light ${width}px /`);
   await assertCompactAccount(page, width, env.ownerEmail, `light ${width}px /`);
   await page.keyboard.press("Tab");
-  for (const text of ["Overview", "Checks", "Tokens", "Probes", "Team"]) {
+  for (const text of ["Overview", "Checks", "Tokens", "Probes", "Status page", "Team"]) {
     await page.keyboard.press("Tab");
     const got = await page.evaluate(() => {
       const el = document.activeElement;
@@ -2481,6 +2490,86 @@ async function checkProbesWith(browser: Browser, hasScript: boolean): Promise<vo
   }
 }
 
+/** Presses Tab until the focused button has this `value`. */
+async function tabToValue(page: Page, value: string): Promise<void> {
+  for (let i = 0; i < 200; i += 1) {
+    await page.keyboard.press("Tab");
+    const got = await page.evaluate(() =>
+      document.activeElement instanceof HTMLButtonElement ? document.activeElement.value : "",
+    );
+    if (got === value) return;
+  }
+  throw new CheckError(`Tab never reached the button ${value}`);
+}
+
+/** Presses the button `value` by keyboard and waits for the next page. */
+async function pressByKeyboard(page: Page, value: string): Promise<void> {
+  await page.locator("body").focus();
+  await tabToValue(page, value);
+  await Promise.all([page.waitForLoadState("load"), page.keyboard.press("Enter")]);
+  await page.waitForLoadState("load");
+}
+
+async function hiddenOrderOf(page: Page): Promise<string> {
+  return (await page.locator('input[name="order"]').getAttribute("value")) ?? "";
+}
+
+/** R3: keyboard-only Reset order, Move down and Move up of 3 components, then Save. */
+async function checkStatusPageKeyboard(browser: Browser, hasScript: boolean): Promise<void> {
+  const env = await startEnv(0);
+  env.api.replyTo(
+    "GET",
+    "/admin/status/settings",
+    jsonReply(statusSettingsView({ componentOrder: ["cdn", "db", "web"] })),
+  );
+  env.api.replyTo("PUT", "/admin/status/settings", {
+    status: 200,
+    body: "{}",
+    headers: { ...WIRE_HEADERS, etag: `"${STATUS_REVISION}"` },
+  });
+  const components = ["web", "db", "cdn"].map((id) => ({
+    id,
+    name: id.toUpperCase(),
+    checkIds: ["web"],
+  }));
+  env.api.reply("/admin/config", jsonReply({ ...emptyConfig, components }));
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+  });
+  const page = await newPage(context, violations);
+  try {
+    await signIn(page, env);
+    await page.goto(`${env.console.base}/status-page`);
+    assert((await hiddenOrderOf(page)) === "cdn,db,web", `${label}: stored order shown`);
+    await pressByKeyboard(page, "reset-order");
+    assert(
+      (await hiddenOrderOf(page)) === "web,db,cdn",
+      `${label}: Reset order lists the api order`,
+    );
+    await pressByKeyboard(page, "down:0");
+    assert((await hiddenOrderOf(page)) === "db,web,cdn", `${label}: Move down`);
+    await pressByKeyboard(page, "up:2");
+    assert((await hiddenOrderOf(page)) === "db,cdn,web", `${label}: Move up`);
+    if (hasScript) await axeOn(page, page.url(), "/status-page");
+    await pressByKeyboard(page, "save");
+    const puts = env.api.seen.filter((s) => s.method === "PUT");
+    assert(puts.length === 1, `${label}: one PUT, got ${puts.length}`);
+    const sent = JSON.stringify(JSON.parse(puts[0]?.body ?? "{}"));
+    assert(sent === '{"componentOrder":["db","cdn","web"]}', `${label}: saved ${sent}`);
+    assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
+    ok(
+      `Status page, ${label}: keyboard-only Reset order, Move down and Move up saved ["db","cdn","web"]${hasScript ? ", axe 0" : ""}`,
+    );
+  } finally {
+    await context.close();
+    await env.console.close();
+    env.api.stop();
+  }
+}
+
 const HOSTILE_NAME = "<img src=x onerror=alert(1)>";
 const UNBROKEN_NAME = `Unbroken${"n".repeat(92)}`;
 const UNBROKEN_ID = `unbroken${"x".repeat(56)}`;
@@ -2948,6 +3037,8 @@ async function runChecks(): Promise<void> {
     await checkTokensWith(browser, false);
     await checkProbesWith(browser, true);
     await checkProbesWith(browser, false);
+    await checkStatusPageKeyboard(browser, true);
+    await checkStatusPageKeyboard(browser, false);
     // A console of its own: each check signs in with a fixture recovery code.
     const shellEnv = await startEnv(0);
     try {

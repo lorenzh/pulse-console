@@ -351,16 +351,18 @@ describe("POST /tokens/new", () => {
     });
   }
 
-  test("the create form shows four option cards, one shared note and no default", async () => {
+  test("the create form shows six option cards, one shared note and no default", async () => {
     const api = tokenApi([self]);
     const c = await tokensConsole(api);
     const form = await getPage(c, "/tokens/new", c.cookies.admin);
-    expect(form.body.split('<label class="choice option-card">').length - 1).toBe(4);
+    expect(form.body.split('<label class="choice option-card">').length - 1).toBe(6);
     for (const text of [
       '<span class="choice-title">Read</span><small class="hint">Reads the checks and their configuration. Changes nothing.</small>',
       '<span class="choice-title">Manage checks</span><small class="hint">Reads checks and creates, changes and deletes them.</small>',
       '<span class="choice-title">Post incidents</span><small class="hint">Reads checks and posts incidents.</small>',
       '<span class="choice-title">Full access</span><small class="hint">Reads and changes checks and posts incidents.</small>',
+      '<span class="choice-title">Status service</span><small class="hint">For pulse-status: reads the status page settings and reports what it applied.</small>',
+      '<span class="choice-title">Notify service</span><small class="hint">For pulse-notify: reads the notify channels, reports them and runs resends.</small>',
     ]) {
       expect(form.body).toContain(text);
     }

@@ -66,6 +66,26 @@ export const emptyConfig = {
   maintenance: [],
 };
 
+export const STATUS_REVISION = `sha256-${"5".repeat(64)}`;
+
+/** A literal `GET /admin/status/settings` view; `service` defaults to a fresh, applied report. */
+export function statusSettingsView(
+  settings: Record<string, unknown> = {},
+  service: Record<string, unknown> = {
+    state: "fresh",
+    receivedAt: 1000,
+    report: {
+      at: 1000,
+      startedAt: 500,
+      appliedRevision: STATUS_REVISION,
+      rejected: null,
+      locked: [],
+    },
+  },
+): Record<string, unknown> {
+  return { revision: STATUS_REVISION, settings, service };
+}
+
 /** A `200` JSON reply with the wire header. */
 export function jsonReply(body: unknown): FakeReply {
   return { status: 200, body: JSON.stringify(body), headers: WIRE_HEADERS };
