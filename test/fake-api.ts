@@ -66,6 +66,79 @@ export const emptyConfig = {
   maintenance: [],
 };
 
+export const STATUS_REVISION = `sha256-${"5".repeat(64)}`;
+
+/** A literal `GET /admin/status/settings` view; `service` defaults to a fresh, applied report. */
+export function statusSettingsView(
+  settings: Record<string, unknown> = {},
+  service: Record<string, unknown> = {
+    state: "fresh",
+    receivedAt: 1000,
+    report: {
+      at: 1000,
+      startedAt: 500,
+      appliedRevision: STATUS_REVISION,
+      rejected: null,
+      locked: [],
+    },
+  },
+): Record<string, unknown> {
+  return { revision: STATUS_REVISION, settings, service };
+}
+
+export const NOTIFY_REVISION = `sha256-${"7".repeat(64)}`;
+
+/** A literal database webhook channel view. */
+export function webhookChannel(
+  id: string,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id,
+    type: "webhook",
+    urlEnv: "PULSE_NOTIFY_SECRET_HOOK",
+    createdAt: 1000,
+    updatedAt: 2000,
+    source: "database",
+    ...extra,
+  };
+}
+
+/** A literal notify report; every list is empty and the applied revision is current. */
+export function notifyReport(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    at: 1000,
+    startedAt: 500,
+    appliedRevision: NOTIFY_REVISION,
+    fileChannels: [],
+    fileChannelsTotal: 0,
+    shadowedIds: [],
+    rejected: [],
+    failed: [],
+    failedTotal: 0,
+    ...extra,
+  };
+}
+
+/** A literal `GET /admin/notify/channels` view with a fresh report. */
+export function notifyChannelsView(
+  options: {
+    channels?: unknown[];
+    shadowed?: unknown[];
+    report?: Record<string, unknown> | null;
+    state?: "fresh" | "stale" | "never";
+  } = {},
+): Record<string, unknown> {
+  const state = options.state ?? "fresh";
+  const report = state === "never" ? null : (options.report ?? notifyReport());
+  return {
+    revision: NOTIFY_REVISION,
+    channels: options.channels ?? [],
+    shadowed: options.shadowed ?? [],
+    service: { state, receivedAt: report === null ? null : 1000, report },
+  };
+}
+
 /** A `200` JSON reply with the wire header. */
 export function jsonReply(body: unknown): FakeReply {
   return { status: 200, body: JSON.stringify(body), headers: WIRE_HEADERS };

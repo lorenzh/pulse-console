@@ -61,6 +61,7 @@ import {
 import { postInvite, postReset, sendInviteForm, sendResetForm } from "./link-routes.ts";
 import type { PathLabel } from "./metrics.ts";
 import type { NavId } from "./navigation.ts";
+import { notificationRoutes } from "./notification-routes.ts";
 import { overviewView } from "./overview.ts";
 import { readOverview } from "./overview-read.ts";
 import {
@@ -89,6 +90,7 @@ import {
   formExpiredResendNotice,
   notFoundState,
 } from "./states.ts";
+import { statusPageRoutes } from "./status-page-routes.ts";
 import { CONSOLE_CSS } from "./styles.ts";
 import { teamRoutes } from "./team-routes.ts";
 import { tokenRoutes } from "./token-routes.ts";
@@ -1153,6 +1155,8 @@ function protectedRoutesOf(deps: ConsoleServerDeps): Map<string, ProtectedRoute>
   for (const route of checkRoutes(deps)) routes.set(route.path, route);
   for (const route of tokenRoutes(deps)) routes.set(route.path, route);
   for (const route of probeRoutes(deps)) routes.set(route.path, route);
+  for (const route of statusPageRoutes(deps)) routes.set(route.path, route);
+  for (const route of notificationRoutes(deps)) routes.set(route.path, route);
   for (const [key, route] of deps.testRoutes ?? []) {
     const isProduction = key in ROUTES || OPS_PATHS.includes(key);
     if (!key.startsWith(TEST_PREFIX) || isProduction || route.path !== key) {

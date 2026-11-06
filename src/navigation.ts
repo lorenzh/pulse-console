@@ -7,6 +7,8 @@ export type NavId =
   | "maintenance"
   | "tokens"
   | "probes"
+  | "status-page"
+  | "notifications"
   | "team"
   | "activity"
   | "system";
@@ -40,6 +42,20 @@ export const NAVIGATION: readonly NavEntry[] = [
   },
   { id: "tokens", label: "Tokens", path: "/tokens", minRole: "admin", isAvailable: true },
   { id: "probes", label: "Probes", path: "/probes", minRole: "admin", isAvailable: true },
+  {
+    id: "status-page",
+    label: "Status page",
+    path: "/status-page",
+    minRole: "owner",
+    isAvailable: true,
+  },
+  {
+    id: "notifications",
+    label: "Notifications",
+    path: "/notifications",
+    minRole: "owner",
+    isAvailable: true,
+  },
   { id: "team", label: "Team", path: "/team", minRole: "admin", isAvailable: true },
   { id: "activity", label: "Activity", path: "/activity", minRole: "admin", isAvailable: false },
   { id: "system", label: "System", path: "/system", minRole: "admin", isAvailable: false },
@@ -59,7 +75,7 @@ export function navigationGroups(entries: readonly NavEntry[]): {
   instance: NavEntry[];
 } {
   return {
-    main: entries.filter((e) => e.minRole !== "admin"),
-    instance: entries.filter((e) => e.minRole === "admin"),
+    main: entries.filter((e) => !hasRole(e.minRole, "admin")),
+    instance: entries.filter((e) => hasRole(e.minRole, "admin")),
   };
 }

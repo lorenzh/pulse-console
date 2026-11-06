@@ -9,6 +9,8 @@ export const TOKEN_PRESETS = [
   { id: "checks", label: "Manage checks", scopes: ["read", "checks", "admin"] },
   { id: "incidents", label: "Post incidents", scopes: ["read", "incidents", "admin"] },
   { id: "full", label: "Full access", scopes: ["read", "checks", "incidents", "admin"] },
+  { id: "status", label: "Status service", scopes: ["status"] },
+  { id: "notify", label: "Notify service", scopes: ["notify"] },
 ] as const satisfies ReadonlyArray<{ id: string; label: string; scopes: readonly TokenScope[] }>;
 
 export type TokenPreset = (typeof TOKEN_PRESETS)[number];
@@ -20,6 +22,8 @@ export const PRESET_DESCRIPTIONS: Record<TokenPresetId, string> = {
   checks: "Reads checks and creates, changes and deletes them.",
   incidents: "Reads checks and posts incidents.",
   full: "Reads and changes checks and posts incidents.",
+  status: "For pulse-status: reads the status page settings and reports what it applied.",
+  notify: "For pulse-notify: reads the notify channels, reports them and runs resends.",
 };
 
 /** Shown once above the presets: every preset but Read holds `admin`. */
@@ -91,16 +95,36 @@ export function lastActiveAdmin(
   return admins.length === 1 ? admins[0] : undefined;
 }
 
+// Probe needs checks (api `token-scopes.ts`); status and notify need admin (#570).
+function grantingScope(scope: TokenScope): TokenScope {
+  switch (scope) {
+    case "probe":
+      return "checks";
+    case "status":
+    case "notify":
+      return "admin";
+    case "read":
+    case "checks":
+    case "incidents":
+    case "admin":
+      return scope;
+    default: {
+      const never: never = scope;
+      return never;
+    }
+  }
+}
+
 /**
  * The first scope of `wanted` that the console token cannot grant (api `token-scopes.ts:38-40`):
- * `probe` needs `checks`. `undefined` when every scope can be granted.
+ * `probe` needs `checks`, `status` and `notify` need `admin`. `undefined` when every scope can be granted.
  */
 export function missingScope(
   wanted: readonly TokenScope[],
   held: readonly TokenScope[],
 ): TokenScope | undefined {
   for (const scope of wanted) {
-    const needed = scope === "probe" ? "checks" : scope;
+    const needed = grantingScope(scope);
     if (!held.includes(needed)) return needed;
   }
   return undefined;
