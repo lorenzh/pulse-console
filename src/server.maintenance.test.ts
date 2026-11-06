@@ -721,3 +721,160 @@ describe("maintenance secrets", () => {
     }
   });
 });
+
+describe("maintenance outcomes not covered above", () => {
+  async function deleteAfter(c: TeamConsole, a: IncidentApi, change: () => void): Promise<Reply> {
+    const path = "/maintenance/delete?id=db-upgrade";
+    const opened = await getPage(c, path, c.cookies.admin);
+    const token = formTokenOf(opened.body, path);
+    change();
+    a.seen.length = 0;
+    return post(
+      c,
+      path,
+      [
+        ["csrf", c.csrfs.admin],
+        ["form_token", token],
+        ["revision", REVISION0],
+        ["target", "db-upgrade"],
+      ],
+      "admin",
+    );
+  }
+
+  test.each([
+    ["404", 404],
+    ["409", 409],
+    ["412", 412],
+  ] as const)("a delete answered %s makes 0 reads, 1 write and no redirect", async (_n, status) => {
+    const a = api();
+    const c = await team(a);
+    const reply = await deleteAfter(c, a, () =>
+      a.override(
+        "DELETE",
+        "/admin/maintenance/",
+        () => new Response(JSON.stringify({ error: "refused" }), { status, headers: WIRE_HEADERS }),
+      ),
+    );
+    expect(reply.status).not.toBe(303);
+    expect(reply.status).toBeGreaterThanOrEqual(400);
+    expect(calls(a)).toEqual(["DELETE /admin/maintenance/db-upgrade"]);
+    expect(a.windows.some((w) => w.id === "db-upgrade")).toBe(true);
+    expect(peopleRows(c)).toEqual([]);
+  });
+
+  test("a delete whose revision moved is the fake's 412 after 1 write", async () => {
+    const a = api();
+    const c = await team(a);
+    const reply = await deleteAfter(c, a, () => a.bumpRevision());
+    expect(reply.status).toBe(412);
+    expect([a.reads(), a.writes()]).toEqual([0, 1]);
+    expect(a.windows.some((w) => w.id === "db-upgrade")).toBe(true);
+  });
+
+  test("an unknown edit GET answers 404 without a form after 2 reads", async () => {
+    const a = api();
+    const c = await team(a);
+    a.seen.length = 0;
+    const reply = await getPage(c, "/maintenance/edit?id=none-here", c.cookies.member);
+    expect(reply.status).toBe(404);
+    expect([a.reads(), a.writes()]).toEqual([2, 0]);
+  });
+
+  test("a role lowered during the create read gives 403 after 1 read and 0 writes", async () => {
+    const a = api();
+    const c = await team(a);
+    const opened = await getPage(c, "/maintenance/new", c.cookies.member);
+    const token = formTokenOf(opened.body, "/maintenance/new");
+    a.beforeAnswer("GET", "/admin/config", () => {
+      c.db.query("UPDATE users SET role = 'viewer' WHERE id = ?").run(c.ids.member);
+    });
+    a.seen.length = 0;
+    const reply = await post(
+      c,
+      "/maintenance/new",
+      [["csrf", c.csrfs.member], ["form_token", token], ...CREATE],
+      "member",
+    );
+    expect(reply.status).toBe(403);
+    expect(calls(a)).toEqual(["GET /admin/config"]);
+  });
+
+  test.each([
+    [
+      "create",
+      "/maintenance/new",
+      "/maintenance/new",
+      "admin",
+      ["GET /admin/config", "POST /admin/maintenance"],
+    ],
+    [
+      "edit",
+      EDIT,
+      EDIT,
+      "admin",
+      ["GET /admin/maintenance", "GET /admin/config", "PUT /admin/maintenance/db-upgrade"],
+    ],
+    [
+      "delete",
+      "/maintenance/delete?id=db-upgrade",
+      "/maintenance/delete?id=db-upgrade",
+      "admin",
+      ["DELETE /admin/maintenance/db-upgrade"],
+    ],
+  ] as const)(
+    "%s with no answer within 5000 ms: 504, unknown row, no retry",
+    async (kind, page, action, role, expected) => {
+      const a = api();
+      const pending = new Set<() => void>();
+      const c = await startTeamConsole({
+        apiUrl: a.url,
+        adminToken: TOKEN,
+        schedule: (fn) => {
+          pending.add(fn);
+          return () => pending.delete(fn);
+        },
+      });
+      cleanups.push(() => c.close());
+      c.db.query("UPDATE sessions SET created_at = ?, last_seen_at = ?").run(NOW, NOW);
+      c.setNow(NOW);
+      let release = (): void => undefined;
+      a.holdWrites(
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+      );
+      cleanups.push(() => release());
+      const opened = await getPage(c, page, c.cookies[role]);
+      const token = formTokenOf(opened.body, action);
+      pending.clear();
+      a.seen.length = 0;
+      const entriesOf: Record<typeof kind, Entries> = {
+        create: CREATE,
+        edit: editEntries("2026-11-06T10:00", "2026-11-06T12:00"),
+        delete: [
+          ["revision", REVISION0],
+          ["target", "db-upgrade"],
+        ],
+      };
+      const entries = entriesOf[kind];
+      const res = post(
+        c,
+        action,
+        [["csrf", c.csrfs[role]], ["form_token", token], ...entries],
+        role,
+      );
+      while (a.writes() !== 1 || pending.size === 0) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      for (const fn of [...pending]) fn();
+      const answer = await res;
+      expect(answer.status).toBe(504);
+      expect(answer.body).toContain(
+        "The result is unknown. Open Maintenance to see whether the window was saved.",
+      );
+      expect(calls(a)).toEqual([...expected]);
+      expect(peopleRows(c).map((r) => r.value)).toEqual(["unknown"]);
+    },
+  );
+});
