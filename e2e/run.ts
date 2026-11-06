@@ -618,11 +618,15 @@ async function checkMobileNavIcons(env: Env, browser: Browser): Promise<void> {
         const icon = item.querySelector(".icon");
         if (icon === null) return "missing";
         const r = icon.getBoundingClientRect();
-        const label = item.getBoundingClientRect();
+        const text = item.querySelector("span");
+        if (text === null) return "no label";
+        const label = text.getBoundingClientRect();
         const shown = getComputedStyle(icon).display !== "none";
-        return shown && r.width === 16 && r.height === 16 && r.left < label.right
+        const center = (r.top + r.bottom) / 2;
+        const sameLine = center >= label.top && center <= label.bottom;
+        return shown && r.width === 16 && r.height === 16 && sameLine && r.right <= label.left
           ? "ok"
-          : `${r.width}x${r.height}`;
+          : `${r.width}x${r.height} icon ${r.left}-${r.right},${r.top}-${r.bottom} label ${label.left},${label.top}-${label.bottom}`;
       }),
     );
     assert(icons.length === 5, `mobile nav ${colorScheme}: ${icons.length} items`);
@@ -632,7 +636,9 @@ async function checkMobileNavIcons(env: Env, browser: Browser): Promise<void> {
     );
     await context.close();
   }
-  ok("mobile nav: every item shows its 16px icon at 390 px in light and dark");
+  ok(
+    "mobile nav: every item shows its 16px icon left of its label on the same line at 390 px in light and dark",
+  );
 }
 
 async function checkMobileNavFocus(env: Env, browser: Browser): Promise<void> {

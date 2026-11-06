@@ -170,11 +170,10 @@ describe("app routes", () => {
       "@media (max-width: 900px) {\n  dl.settings, .settings { grid-template-columns: minmax(0, 1fr); }\n  .grid-2, .grid-4, .form-grid { grid-template-columns: minmax(0, 1fr); }",
       "@media (max-width: 719px) {\n  .shell { grid-template-columns: minmax(0, 1fr); }",
       "main.shell-main { padding: 20px 16px 40px; }",
-      ".sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px; gap: 0; background:",
+      ".sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px; scroll-snap-type: x mandatory; gap: 0; background:",
       ".sidebar nav ul { flex-direction: row; flex-wrap: nowrap; flex: none;",
-      ".sidebar nav .nav-item { padding: 0 3px; gap: 3px; font-size: 13px; }",
+      ".sidebar nav .nav-item { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; white-space: nowrap; flex: 0 0 auto; padding: 0 8px; }\n  .sidebar nav .nav-item:focus { scroll-snap-align: center; }",
       "background-attachment: local, local, scroll, scroll; }\n  .sidebar nav ul",
-      "@media (max-width: 419px) {\n  .sidebar nav .nav-item { flex-direction: column; justify-content: center; gap: 2px; padding: 0 4px; font-size: 12px; }",
       ".account { flex: 1 0 auto; max-width: 100%;",
       ".account-email { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }",
       ".shell { display: grid; grid-template-columns: 236px minmax(0, 1fr);",
@@ -182,6 +181,7 @@ describe("app routes", () => {
       expect(css).toContain(part);
     }
     expect(css).not.toContain(".sidebar nav .icon { display: none; }");
+    expect(css).not.toContain("flex-direction: column; justify-content: center;");
     expect(css.startsWith("[hidden] { display: none !important; }\n")).toBe(true);
     expect(css.split("@font-face").length - 1).toBe(7);
     expect(css.split("font-display: swap").length - 1).toBe(7);
