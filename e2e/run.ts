@@ -31,6 +31,7 @@ import {
 import {
   type IncidentApi,
   incidentConfig,
+  type SeedWindow,
   seedAutomatic,
   seedManual,
   seedResults,
@@ -696,6 +697,8 @@ async function checkFocus(env: Env, browser: Browser): Promise<void> {
     "Skip to content",
     "Overview",
     "Checks",
+    "Incidents",
+    "Maintenance",
     "Tokens",
     "Probes",
     "Team",
@@ -750,7 +753,7 @@ async function checkMobileNavIcons(env: Env, browser: Browser): Promise<void> {
           : `${r.width}x${r.height} icon ${r.left}-${r.right},${r.top}-${r.bottom} label ${label.left},${label.top}-${label.bottom}`;
       }),
     );
-    assert(icons.length === 5, `mobile nav ${colorScheme}: ${icons.length} items`);
+    assert(icons.length === 7, `mobile nav ${colorScheme}: ${icons.length} items`);
     assert(
       icons.every((x) => x === "ok"),
       `mobile nav ${colorScheme}: icons ${icons.join(",")}`,
@@ -785,7 +788,15 @@ async function checkMobileNavFocusAt(env: Env, browser: Browser, width: number):
   await assertNavEdges(page, `light ${width}px /`);
   await assertCompactAccount(page, width, env.ownerEmail, `light ${width}px /`);
   await page.keyboard.press("Tab");
-  for (const text of ["Overview", "Checks", "Tokens", "Probes", "Team"]) {
+  for (const text of [
+    "Overview",
+    "Checks",
+    "Incidents",
+    "Maintenance",
+    "Tokens",
+    "Probes",
+    "Team",
+  ]) {
     await page.keyboard.press("Tab");
     const got = await page.evaluate(() => {
       const el = document.activeElement;
@@ -2524,6 +2535,121 @@ async function incidentResolveDelete(page: Page, base: string, api: IncidentApi,
   ok(`incidents, ${label}: resolve and typed delete of untitled #12 work`);
 }
 
+/** The database window that the maintenance edits submit; its epochs carry milliseconds. */
+function maintenanceSeeds(): SeedWindow[] {
+  return [
+    {
+      id: "db-upgrade",
+      index: null,
+      source: "database",
+      checkIds: ["web"],
+      start: 1793959200123,
+      end: 1793966400456,
+      note: "Database upgrade",
+    },
+  ];
+}
+
+const MAINTENANCE_PAGES = [
+  "/maintenance",
+  "/maintenance/new",
+  "/maintenance/edit?id=db-upgrade",
+  "/maintenance/delete?id=db-upgrade",
+];
+
+/** Submits the edit form natively and returns the recorded PUT body's start and end. */
+async function submitMaintenanceEdit(
+  page: Page,
+  base: string,
+  api: IncidentApi,
+  start: string | undefined,
+): Promise<{ start?: unknown; end?: unknown; note?: unknown }> {
+  const before = api.count("PUT", "/admin/maintenance/db-upgrade");
+  await page.goto(`${base}/maintenance/edit?id=db-upgrade`);
+  await page.locator('[name="note"]').fill("Edited");
+  if (start !== undefined) await page.locator('[name="start"]').fill(start);
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.request().method() === "POST" && r.url().includes("/maintenance/edit?id=db-upgrade"),
+    ),
+    page.getByRole("button", { name: "Save window", exact: true }).click(),
+  ]);
+  await page.waitForURL(/\/maintenance\?saved=1/);
+  assert(response.status() === 303, `maintenance edit: status ${response.status()}, expected 303`);
+  assert(
+    api.count("PUT", "/admin/maintenance/db-upgrade") === before + 1,
+    "maintenance edit: expected exactly one PUT",
+  );
+  return lastBody(api, "PUT", "/admin/maintenance/db-upgrade") as {
+    start?: unknown;
+    end?: unknown;
+    note?: unknown;
+  };
+}
+
+async function maintenanceLayout(page: Page, base: string, label: string): Promise<void> {
+  for (const [width, height] of [
+    [390, 844],
+    [1280, 800],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    for (const path of MAINTENANCE_PAGES) {
+      await page.goto(base + path);
+      await assertFits(page, width, `${label} ${width}px ${path}`);
+      await axeOn(page, base + path, `${label} ${width}px ${path}`);
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  ok(`maintenance, ${label}: 4 pages fit 390 and 1280 px, 0 axe violations`);
+}
+
+/** Acceptance evidence 10: real Chromium edits keep or replace the stored epochs. */
+async function checkMaintenanceWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const api = startIncidentApi({
+    token: ADMIN_TOKEN,
+    config: incidentConfig,
+    maintenance: maintenanceSeeds(),
+    now: () => Date.now(),
+  });
+  const server = await startSignedInConsole({
+    apiUrl: api.url,
+    ownerEmail: DEMO_EMAIL,
+    adminToken: ADMIN_TOKEN,
+  });
+  const env = { ownerEmail: DEMO_EMAIL, console: server } as unknown as Env;
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+  });
+  const page = await newPage(context, violations);
+  page.on("pageerror", (error) => violations.push(`page error: ${error.message}`));
+  try {
+    await signIn(page, env);
+    // axe injects a script, so the layout and axe pass runs with JavaScript on only.
+    if (hasScript) await maintenanceLayout(page, server.base, label);
+    const kept = await submitMaintenanceEdit(page, server.base, api, undefined);
+    assert(
+      kept.start === 1793959200123 && kept.end === 1793966400456 && kept.note === "Edited",
+      `maintenance ${label}: kept PUT ${JSON.stringify(kept)}`,
+    );
+    const moved = await submitMaintenanceEdit(page, server.base, api, "2026-11-06T10:00:01");
+    assert(
+      moved.start === 1793959201000 && moved.end === 1793966400456,
+      `maintenance ${label}: moved PUT ${JSON.stringify(moved)}`,
+    );
+    assert(violations.length === 0, `maintenance ${label}: ${violations.join(" | ")}`);
+    ok(
+      `maintenance, ${label}: note-only edit PUT start 1793959200123 end 1793966400456; start 10:00:01 PUT 1793959201000, 0 CSP violations`,
+    );
+  } finally {
+    await context.close();
+    await server.close();
+    api.stop();
+  }
+}
+
 async function checkIncidentsWith(browser: Browser, hasScript: boolean): Promise<void> {
   const api = startIncidentApi({
     token: ADMIN_TOKEN,
@@ -3080,6 +3206,8 @@ async function runChecks(): Promise<void> {
     await checkProbesWith(browser, false);
     await checkIncidentsWith(browser, true);
     await checkIncidentsWith(browser, false);
+    await checkMaintenanceWith(browser, true);
+    await checkMaintenanceWith(browser, false);
     // A console of its own: each check signs in with a fixture recovery code.
     const shellEnv = await startEnv(0);
     try {
