@@ -617,3 +617,133 @@ describe("/incidents/delete", () => {
     expect([a.reads(), a.writes()]).toEqual([1, 0]);
   });
 });
+
+type CountRow = {
+  name: string;
+  method: "GET" | "POST";
+  path: string;
+  role?: ConsoleRole;
+  entries?: Entries;
+  calls: string[];
+};
+
+const COUNT_ROWS: CountRow[] = [
+  {
+    name: "GET /incidents/manual",
+    method: "GET",
+    path: "/incidents/manual?id=1",
+    calls: ["GET /manual-incidents/1", "GET /admin/config"],
+  },
+  {
+    name: "GET /incidents/automatic",
+    method: "GET",
+    path: "/incidents/automatic?id=7",
+    calls: ["GET /incidents", "GET /admin/config", "GET /checks/web/results"],
+  },
+  {
+    name: "GET /incidents/new",
+    method: "GET",
+    path: "/incidents/new",
+    calls: ["GET /admin/config"],
+  },
+  {
+    name: "GET /incidents/new with from",
+    method: "GET",
+    path: "/incidents/new?from=7",
+    calls: ["GET /incidents", "GET /admin/config"],
+  },
+  {
+    name: "POST /incidents/new preview",
+    method: "POST",
+    path: "/incidents/new",
+    entries: PUBLISH.map(([k, v]) => [k, k === "action" ? "preview" : v] as const),
+    calls: ["GET /admin/config"],
+  },
+  {
+    name: "POST /incidents/new publish",
+    method: "POST",
+    path: "/incidents/new",
+    entries: PUBLISH,
+    calls: ["GET /admin/config", "POST /manual-incidents"],
+  },
+  {
+    name: "GET /incidents/resolve",
+    method: "GET",
+    path: "/incidents/resolve?id=1",
+    calls: ["GET /manual-incidents/1", "GET /admin/config"],
+  },
+  {
+    name: "GET /incidents/delete",
+    method: "GET",
+    path: "/incidents/delete?id=1",
+    role: "admin",
+    calls: ["GET /manual-incidents/1"],
+  },
+  {
+    name: "POST /incidents/update preview",
+    method: "POST",
+    path: "/incidents/manual?id=1",
+    entries: [
+      ["incident", "1"],
+      ["status", "monitoring"],
+      ["message", "x"],
+      ["action", "preview"],
+    ],
+    calls: ["GET /manual-incidents/1", "GET /admin/config"],
+  },
+  {
+    name: "POST /incidents/resolve preview",
+    method: "POST",
+    path: "/incidents/resolve?id=1",
+    entries: [
+      ["incident", "1"],
+      ["message", "x"],
+      ["action", "preview"],
+    ],
+    calls: ["GET /manual-incidents/1", "GET /admin/config"],
+  },
+  {
+    name: "POST /incidents/resolve publish",
+    method: "POST",
+    path: "/incidents/resolve?id=1",
+    entries: [
+      ["incident", "1"],
+      ["message", "x"],
+      ["action", "publish"],
+    ],
+    calls: ["GET /manual-incidents/1", "GET /admin/config", "POST /manual-incidents/1/resolve"],
+  },
+  {
+    name: "POST /incidents/delete",
+    method: "POST",
+    path: "/incidents/delete?id=1",
+    role: "admin",
+    entries: deletion(1, "Checkout slow").entries,
+    calls: ["GET /manual-incidents/1", "DELETE /manual-incidents/1"],
+  },
+];
+
+describe("request counting", () => {
+  for (const row of COUNT_ROWS) {
+    test(`${row.name} sends exactly its reads and writes in order`, async () => {
+      const a = api();
+      const c = await team(a);
+      const role = row.role ?? "member";
+      if (row.method === "GET") {
+        a.seen.length = 0;
+        expect((await getPage(c, row.path, c.cookies[role])).status).toBe(200);
+      } else {
+        const isUpdate = row.path.startsWith("/incidents/manual");
+        const action = isUpdate ? "/incidents/update" : row.path;
+        const res = await submit(c, a, {
+          page: row.path,
+          action,
+          entries: row.entries ?? [],
+          role,
+        });
+        expect([200, 303]).toContain(res.status);
+      }
+      expect(a.seen.map((s) => `${s.method} ${s.path}`)).toEqual(row.calls);
+    });
+  }
+});
