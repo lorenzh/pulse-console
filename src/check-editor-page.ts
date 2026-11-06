@@ -12,7 +12,15 @@ import {
 } from "./check-form.ts";
 import { idQuery, TYPE_LABELS } from "./check-pages.ts";
 import type { FormFields } from "./forms.ts";
-import { csrfField, formErrorSummary, formTokenField, paragraph, submitButton } from "./html.ts";
+import {
+  csrfField,
+  type FieldWidth,
+  formErrorSummary,
+  formTokenField,
+  paragraph,
+  submitButton,
+  widthClass,
+} from "./html.ts";
 import { type HostBinding, hostBindingLine } from "./shell-line.ts";
 
 export const PROBE_QUORUM_TEXT =
@@ -209,6 +217,8 @@ type InputSpec = {
   type?: "text" | "url" | "password";
   autocomplete?: string;
   hint?: string;
+  /** Defaults to `narrow` for a numeric input. */
+  width?: FieldWidth;
 };
 
 function input(ctx: Ctx, spec: InputSpec): string {
@@ -224,7 +234,7 @@ function input(ctx: Ctx, spec: InputSpec): string {
   const hint =
     spec.hint === undefined ? "" : `\n<span class="hint">${escapeHtml(spec.hint)}</span>`;
   return `<label for="field-${spec.name}">${escapeHtml(spec.label)}
-<input id="field-${spec.name}" name="${spec.name}" type="${type}"${attrs}${err.attrs}>${hint}${notKept(ctx, spec.name)}${err.text}
+<input id="field-${spec.name}"${widthClass(spec.width ?? (spec.isNumeric === true ? "narrow" : undefined))} name="${spec.name}" type="${type}"${attrs}${err.attrs}>${hint}${notKept(ctx, spec.name)}${err.text}
 </label>
 `;
 }
@@ -233,14 +243,20 @@ function msInput(ctx: Ctx, label: string, name: string, isRequired = false): str
   return input(ctx, { label: `${label} (ms)`, name, isNumeric: true, isRequired });
 }
 
-function select(ctx: Ctx, label: string, name: string, options: readonly string[]): string {
+function select(
+  ctx: Ctx,
+  label: string,
+  name: string,
+  options: readonly string[],
+  width?: FieldWidth,
+): string {
   const err = errorParts(ctx, name);
   const current = ctx.value(name);
   const items = options
     .map((o) => `<option${o === current ? " selected" : ""}>${escapeHtml(o)}</option>`)
     .join("");
   return `<label for="field-${name}">${escapeHtml(label)}
-<select id="field-${name}" name="${name}"${err.attrs}>${items}</select>${err.text}
+<select id="field-${name}"${widthClass(width)} name="${name}"${err.attrs}>${items}</select>${err.text}
 </label>
 `;
 }
@@ -286,14 +302,19 @@ function commonFields(ctx: Ctx): string {
           label: "Id",
           name: "id",
           isRequired: true,
+          width: "medium",
           hint: "Letters, digits, dot, underscore and hyphen. It cannot change later.",
         })
       : `<p>Id: <code>${escapeHtml(stored.id)}</code></p>\n`;
-  return `${id}${input(ctx, { label: "Name", name: "name", isRequired: true })}${input(ctx, {
-    label: "Availability target (%)",
-    name: "availability_target",
-    hint: "From 90 to below 100, for example 99.9. Empty means no target.",
-  })}`;
+  return `${id}${input(ctx, { label: "Name", name: "name", isRequired: true, width: "medium" })}${input(
+    ctx,
+    {
+      label: "Availability target (%)",
+      name: "availability_target",
+      width: "narrow",
+      hint: "From 90 to below 100, for example 99.9. Empty means no target.",
+    },
+  )}`;
 }
 
 function storedHeaderRow(ctx: Ctx, i: number, name: string): string {
@@ -310,7 +331,7 @@ ${radios(ctx, `What to do with ${name}`, `header_${i}_intent`, [KEEP, REPLACE, R
 function freeHeaderRow(ctx: Ctx, i: number): string {
   return `<fieldset class="editor-row">
 <legend>Header row ${i + 1}</legend>
-${input(ctx, { label: "Name", name: `header_${i}_name` })}${radios(
+${input(ctx, { label: "Name", name: `header_${i}_name`, width: "medium" })}${radios(
   ctx,
   "Kind",
   `header_${i}_kind`,
@@ -379,7 +400,7 @@ function hostBindingBlock(ctx: Ctx): string {
   return `<section>
 <h2>Probe host binding</h2>
 ${paragraph(`Merge this into the value that each probe already has, and set ${names} in the probe environment.`)}<pre id="editor-host-binding-line">${escapeHtml(hostBindingLine(bindings))}</pre>
-<button type="button" data-copy="editor-host-binding-line" hidden>Copy</button>
+<button type="button" class="secondary small" data-copy="editor-host-binding-line" hidden>Copy</button>
 </section>
 `;
 }
@@ -415,7 +436,7 @@ function retryFields(ctx: Ctx): string {
 
 function httpFields(ctx: Ctx): string {
   const asserts = Array.from({ length: ASSERT_ROWS }, (_, i) => assertRow(ctx, i)).join("");
-  return `${input(ctx, { label: "URL", name: "url", type: "url", isRequired: true })}${select(ctx, "Method", "method", HTTP_METHODS)}${msInput(ctx, "Interval", "interval_ms", true)}${retryFields(ctx)}${msInput(ctx, "Latency objective", "latency_objective_ms")}${input(
+  return `${input(ctx, { label: "URL", name: "url", type: "url", isRequired: true })}${select(ctx, "Method", "method", HTTP_METHODS, "narrow")}${msInput(ctx, "Interval", "interval_ms", true)}${retryFields(ctx)}${msInput(ctx, "Latency objective", "latency_objective_ms")}${input(
     ctx,
     {
       label: "Expected status",
@@ -456,7 +477,7 @@ function typeFields(ctx: Ctx): string {
     case "tcp":
       return `${input(ctx, { label: "Host", name: "host", isRequired: true })}${input(ctx, { label: "Port", name: "port", isNumeric: true, isRequired: true })}${msInput(ctx, "Interval", "interval_ms", true)}${retryFields(ctx)}`;
     case "dns":
-      return `${input(ctx, { label: "DNS name", name: "dns_name", isRequired: true })}${select(ctx, "Record type", "record_type", DNS_RECORD_TYPES)}${textarea(ctx, "Expected values (one per line)", "expected")}${input(ctx, { label: "Resolver (IPv4 or IPv6)", name: "resolver" })}${msInput(ctx, "Interval", "interval_ms", true)}${retryFields(ctx)}`;
+      return `${input(ctx, { label: "DNS name", name: "dns_name", isRequired: true })}${select(ctx, "Record type", "record_type", DNS_RECORD_TYPES, "narrow")}${textarea(ctx, "Expected values (one per line)", "expected")}${input(ctx, { label: "Resolver (IPv4 or IPv6)", name: "resolver" })}${msInput(ctx, "Interval", "interval_ms", true)}${retryFields(ctx)}`;
     case "domain":
       return `${input(ctx, { label: "Domain", name: "domain", isRequired: true })}${input(ctx, { label: "Warn days before expiry (0 to 3650)", name: "warn_days", isNumeric: true })}${input(ctx, { label: "Interval (ms)", name: "interval_ms", isNumeric: true, isRequired: true, hint: "At least 3600000 (one hour)." })}${retryFields(ctx)}`;
     case "heartbeat":
@@ -505,7 +526,7 @@ ${csrfField(model.csrf)}
 ${formTokenField(model.formToken)}
 ${typeField}<input type="hidden" name="revision" value="${escapeHtml(model.revision)}">
 <p>Type: ${TYPE_LABELS[model.type]}</p>
-${formWideError(ctx)}${commonFields(ctx)}${typeFields(ctx)}${paragraph(quorum, ' class="quorum-rule"')}${submitButton({ label: isEdit ? "Save check" : "Create check", busyLabel: "Saving…" })}
+${formWideError(ctx)}${commonFields(ctx)}${typeFields(ctx)}${paragraph(quorum, ' class="quorum-rule"')}<div class="actions">${submitButton({ label: isEdit ? "Save check" : "Create check", busyLabel: "Saving…" })}</div>
 </form>
 `;
 }

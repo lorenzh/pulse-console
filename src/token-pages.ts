@@ -20,6 +20,7 @@ import {
   isTokenActive,
   lastUsedText,
   missingScope,
+  PRESET_DESCRIPTIONS,
   sourceText,
   TOKEN_PRESETS,
   tokenStateText,
@@ -78,6 +79,13 @@ function actionsCell(model: TokenListModel, token: TokenMetadata): string {
   return `${rotate} ${revoke}`;
 }
 
+/** The leading state word stands in its own span, so the table check can find it. */
+function stateHtml(text: string): string {
+  const match = /^(Revoked|Expired) (.+)$/.exec(text);
+  if (match === null) return escapeHtml(text);
+  return `<span>${match[1]}</span> ${escapeHtml(match[2] ?? "")}`;
+}
+
 function rowHtml(model: TokenListModel, token: TokenMetadata): string {
   const cells = [
     escapeHtml(token.name),
@@ -86,9 +94,12 @@ function rowHtml(model: TokenListModel, token: TokenMetadata): string {
     escapeHtml(sourceText(token.source)),
     escapeHtml(utcTime(token.createdAt)),
     escapeHtml(lastUsedText(token.lastUsedAt)),
-    escapeHtml(tokenStateText(token, model.now)),
+    stateHtml(tokenStateText(token, model.now)),
   ];
-  const tds = cells.map((cell) => `<td>${cell}</td>`).join("");
+  const nowrap = new Set([1, 4, 5]);
+  const tds = cells
+    .map((cell, i) => (nowrap.has(i) ? `<td class="cell-nowrap">${cell}</td>` : `<td>${cell}</td>`))
+    .join("");
   return `<tr>${tds}<td class="actions-cell">${actionsCell(model, token)}</td></tr>`;
 }
 
@@ -135,13 +146,10 @@ function presetHtml(model: CreateFormModel): string {
     const lacks = model.held === undefined ? undefined : missingScope(preset.scopes, model.held);
     const isChecked = model.preset === preset.id ? " checked" : "";
     const isDisabled = lacks === undefined ? "" : " disabled";
-    const scopes: readonly TokenScope[] = preset.scopes;
-    const hint = scopes.includes("admin")
-      ? `<br><small>${escapeHtml(ADMIN_PRESET_TEXT)}</small>`
-      : "";
+    const description = `<small class="hint">${escapeHtml(PRESET_DESCRIPTIONS[preset.id])}</small>`;
     const lackText =
-      lacks === undefined ? "" : `<br><small>${escapeHtml(lacksScopeText(lacks))}</small>`;
-    return `<label><input type="radio" name="preset" value="${preset.id}"${isChecked}${isDisabled}> ${escapeHtml(preset.label)}${hint}${lackText}</label>`;
+      lacks === undefined ? "" : `<small class="hint">${escapeHtml(lacksScopeText(lacks))}</small>`;
+    return `<label class="choice option-card"><input type="radio" name="preset" value="${preset.id}"${isChecked}${isDisabled}><span class="choice-text"><span class="choice-title">${escapeHtml(preset.label)}</span>${description}${lackText}</span></label>`;
   }).join("\n");
 }
 
@@ -154,11 +162,14 @@ export function createFormHtml(model: CreateFormModel): string {
     presetError === undefined
       ? ""
       : `<span class="error" id="field-preset-error">${escapeHtml(presetError)}</span>\n`;
+  const presetDescribed =
+    presetError === undefined ? "preset-note" : "preset-note field-preset-error";
   return `${notice}${formErrorSummary(model.errors)}<form method="post" action="/tokens/new">
 ${csrfField(model.csrf)}
 ${formTokenField(model.formToken)}
-${field({ label: "Name", name: "name", type: "text", autocomplete: "off", value: model.name, error: nameError })}
-<fieldset id="field-preset"><legend>Access</legend>
+${field({ label: "Name", name: "name", type: "text", autocomplete: "off", value: model.name, error: nameError, width: "medium" })}
+<fieldset id="field-preset" aria-describedby="${presetDescribed}"><legend>Access</legend>
+<p class="hint" id="preset-note">${escapeHtml(ADMIN_PRESET_TEXT)}</p>
 ${presetErrorHtml}${presetHtml(model)}
 </fieldset>
 <div class="actions">${submitButton({ label: "Create token", busyLabel: "Creating…" })}
@@ -196,7 +207,7 @@ export function secretHtml(model: SecretPageModel): string {
 <dt>Access</dt><dd>${escapeHtml(accessText(token.scopes))}</dd>
 </dl>
 <pre id="token-secret" data-secret>${escapeHtml(secret)}</pre>
-<button type="button" data-copy="token-secret" hidden>Copy</button>
+<button type="button" class="secondary small" data-copy="token-secret" hidden>Copy</button>
 ${paragraph(SHOW_ONCE_TEXT)}${overlap}<p>${a("/tokens", "Back to Tokens")}</p>
 `;
 }

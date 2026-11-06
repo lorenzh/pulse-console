@@ -154,7 +154,9 @@ describe("GET /probes", () => {
     for (const text of [
       "probe c-sil",
       "tok_c30000000000000000000003",
-      "<td>Never</td>",
+      '<td class="cell-nowrap">Never</td>',
+      '<td class="cell-nowrap"><code>tok_c30000000000000000000003</code></td>',
+      '<td class="cell-nowrap">2025-12-31 00:00:00 UTC</td>',
       '<td class="actions-cell"><a href="/probes/rotate?id=tok_c30000000000000000000003">Rotate this token</a> <a href="/probes/revoke?id=tok_c30000000000000000000003">Revoke this token</a></td>',
       'href="/probes/rotate?id=tok_c30000000000000000000003">Rotate this token',
       'href="/probes/revoke?id=tok_c30000000000000000000003">Revoke this token',
@@ -238,6 +240,9 @@ describe("add location", () => {
     const res = await getPage(c, "/probes/new", c.cookies.admin);
     expect(res.status).toBe(200);
     const form = res.body.slice(res.body.indexOf('action="/probes/new"'));
+    expect(form).toContain('<input id="field-location" class="input-medium" name="location"');
+    expect(form).toContain('<input id="field-name" class="input-medium" name="name"');
+    expect(form).toContain('<input id="field-api_url" name="api_url"');
     const names = [...form.matchAll(/<input[^>]* name="([^"]+)"/g)].map((m) => m[1]);
     expect(names).toEqual([
       "csrf",
@@ -297,7 +302,9 @@ describe("add location", () => {
       "probe-compose-command",
     ]) {
       expect(res.body).toContain(`<pre id="${id}"`);
-      expect(res.body).toContain(`<button type="button" data-copy="${id}" hidden>Copy</button>`);
+      expect(res.body).toContain(
+        `<button type="button" class="secondary small" data-copy="${id}" hidden>Copy</button>`,
+      );
     }
     expect(res.body).toContain("-e &#39;PULSE_PROBE_BLOCK_PRIVATE_RANGES=false&#39;");
     expect(res.body).toContain("PULSE_PROBE_BLOCK_PRIVATE_RANGES: &quot;false&quot;");

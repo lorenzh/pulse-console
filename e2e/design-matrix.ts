@@ -371,7 +371,7 @@ export async function assertFontsUsed(page: Page, monoSelector: string | undefin
 
 /** The literal header lists of R4 (spec 777), in page order. */
 export const HEADERS = {
-  checks: ["Name", "Id", "Type", "Target", "Source", "State", "Last result", "Actions"],
+  checks: ["Check", "Target", "State", "Actions"],
   members: ["Name", "Email", "Role", "2FA", "Actions"],
   invites: ["Email", "Role", "Created by", "Expires", "State", "Actions"],
   sessions: ["Signed in", "Last used", ""],
@@ -455,7 +455,7 @@ export async function assertActionLines(
 
 /** R2 on /checks: the long-url row shows View, Edit, Export, Delete, each on 1 line. */
 export async function assertChecksActions(page: Page, width: number, label: string) {
-  const cell = 'table.checks tr:has(td:text-is("long-url")) td.actions-cell';
+  const cell = 'table.checks tr:has(td code:text-is("long-url")) td.actions-cell';
   const links = await measure(page, `${cell} a`);
   const want = ["View", "Edit", "Export", "Delete"];
   const got = links.map((l) => l.text);
@@ -509,4 +509,643 @@ export async function assertTypeScale(page: Page, width: number, label: string):
   near(got.h1.letterSpacing, want.h1Spacing, 0.05, `${label}: h1 letter spacing`);
   check(got.h1.weight === "700", `${label}: h1 weight ${got.h1.weight}, want 700`);
   check(got.h2.weight === "500", `${label}: h2 weight ${got.h2.weight}, want 500`);
+}
+
+/** R1 at 1280: the Checks box does not scroll, its table and last action end inside it. */
+export async function assertChecksFit(page: Page, label: string): Promise<void> {
+  await page.evaluate(() => document.fonts.ready);
+  const got = await page.locator("main .table-scroll:has(table.checks)").evaluate((box) => {
+    box.scrollLeft = 0;
+    const table = box.querySelector("table.checks");
+    const links = Array.from(box.querySelectorAll("td.actions-cell a"));
+    const last = links.reduce<Element | undefined>(
+      (best, a) =>
+        best === undefined || a.getBoundingClientRect().right > best.getBoundingClientRect().right
+          ? a
+          : best,
+      undefined,
+    );
+    const td = last?.closest("td");
+    return {
+      overflowX: getComputedStyle(box).overflowX,
+      scrollWidth: box.scrollWidth,
+      clientWidth: box.clientWidth,
+      boxRight: box.getBoundingClientRect().right,
+      tableRight: table?.getBoundingClientRect().right ?? Number.NaN,
+      linkText: last?.textContent ?? "",
+      linkRight: last?.getBoundingClientRect().right ?? Number.NaN,
+      linkFont: last === undefined ? "" : getComputedStyle(last).fontSize,
+      cellEnd:
+        td === null || td === undefined
+          ? Number.NaN
+          : td.getBoundingClientRect().right - Number.parseFloat(getComputedStyle(td).paddingRight),
+    };
+  });
+  check(got.overflowX === "auto", `${label}: Checks box overflow-x ${got.overflowX}, want auto`);
+  check(
+    got.scrollWidth <= got.clientWidth,
+    `${label}: Checks box scrollWidth ${got.scrollWidth} > ${got.clientWidth}`,
+  );
+  check(
+    got.tableRight <= got.boxRight + 0.5,
+    `${label}: Checks table right ${got.tableRight} > box right ${got.boxRight} + 0.5`,
+  );
+  check(
+    got.linkRight <= got.cellEnd + 0.5,
+    `${label}: action "${got.linkText}" right ${got.linkRight} > cell content right ${got.cellEnd} + 0.5`,
+  );
+  near(got.linkFont, 15, 0.01, `${label}: action "${got.linkText}" font size`);
+}
+
+type Unit = { text: string; lines: number };
+type WordsReport = { texts: string[]; units: Unit[]; nowrap: Measured[] };
+
+/** Splits every visible td text node into units (non-space runs, also after - and /). */
+function measureWords(table: Element): WordsReport {
+  const tops = (range: Range): number => {
+    const set = new Set<number>();
+    for (const r of Array.from(range.getClientRects())) {
+      if (r.width > 0) set.add(Math.round(r.top));
+    }
+    return set.size;
+  };
+  // Units are runs of non-space characters, each also ended after "-" or "/".
+  const spansOf = (text: string): [number, number][] => {
+    const spans: [number, number][] = [];
+    let start = -1;
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text.charAt(i);
+      const isSpace = /\s/.test(ch);
+      if (start < 0 && !isSpace) start = i;
+      if (start >= 0 && isSpace) {
+        spans.push([start, i]);
+        start = -1;
+      } else if (start >= 0 && (ch === "-" || ch === "/")) {
+        spans.push([start, i + 1]);
+        start = -1;
+      }
+    }
+    if (start >= 0) spans.push([start, text.length]);
+    return spans;
+  };
+  const texts: string[] = [];
+  const units: Unit[] = [];
+  const cells = Array.from(table.querySelectorAll("td"));
+  for (const td of cells) {
+    texts.push((td.textContent ?? "").trim());
+    for (const el of Array.from(td.querySelectorAll("*")))
+      texts.push((el.textContent ?? "").trim());
+    const walker = document.createTreeWalker(td, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      if (node.parentElement?.closest(".visually-hidden")) continue;
+      const text = node.textContent ?? "";
+      for (const span of spansOf(text)) {
+        const range = document.createRange();
+        range.setStart(node, span[0]);
+        range.setEnd(node, span[1]);
+        units.push({ text: text.slice(span[0], span[1]), lines: tops(range) });
+      }
+    }
+  }
+  const nowrap = Array.from(table.querySelectorAll("td.cell-nowrap")).map((td) => {
+    const range = document.createRange();
+    range.selectNodeContents(td);
+    return { text: (td.textContent ?? "").trim(), lines: tops(range) };
+  });
+  return { texts, units, nowrap };
+}
+
+/** R2: the required texts exist in a td or its descendant, and no word breaks inside. */
+export async function assertWordsIntact(
+  page: Page,
+  tableSelector: string,
+  required: readonly (string | RegExp)[],
+  label: string,
+): Promise<number> {
+  await page.evaluate(() => document.fonts.ready);
+  const reports: WordsReport[] = [];
+  for (const table of await page.locator(tableSelector).all()) {
+    reports.push(await table.evaluate(measureWords));
+  }
+  check(reports.length > 0, `${label}: no table ${tableSelector}`);
+  const texts = reports.flatMap((r) => r.texts);
+  for (const want of required) {
+    const isFound = texts.some((t) =>
+      typeof want === "string" ? t === want : new RegExp(`^(?:${want.source})$`).test(t),
+    );
+    check(isFound, `${label}: no cell text ${String(want)} in ${tableSelector}`);
+  }
+  const units = reports.flatMap((r) => r.units);
+  for (const unit of units) {
+    check(unit.lines === 1, `${label}: unit "${unit.text}" has ${unit.lines} lines, want 1`);
+  }
+  for (const cell of reports.flatMap((r) => r.nowrap)) {
+    check(cell.lines === 1, `${label}: nowrap cell "${cell.text}" has ${cell.lines} lines, want 1`);
+  }
+  return units.length;
+}
+
+/** R1 fallback: the unbroken name and id keep their text and end inside the cell, cut. */
+export async function assertUnbrokenRow(
+  page: Page,
+  name: string,
+  id: string,
+  label: string,
+): Promise<void> {
+  const row = page.locator(`table.checks tr:has(td code:text-is("${id}"))`);
+  check((await row.count()) === 1, `${label}: no Checks row with code ${id}`);
+  const got = await row
+    .locator("td")
+    .first()
+    .evaluate((td) => {
+      const end =
+        td.getBoundingClientRect().right - Number.parseFloat(getComputedStyle(td).paddingRight);
+      return [".cell-title", ".cell-sub"].map((sel) => {
+        const el = td.querySelector(sel);
+        if (el === null)
+          return { sel, missing: true, overflowX: "", ellipsis: "", sw: 0, cw: 0, right: 0, end };
+        const style = getComputedStyle(el);
+        return {
+          sel,
+          missing: false,
+          overflowX: style.overflowX,
+          ellipsis: style.textOverflow,
+          sw: el.scrollWidth,
+          cw: el.clientWidth,
+          right: el.getBoundingClientRect().right,
+          end,
+        };
+      });
+    });
+  for (const g of got) {
+    check(!g.missing, `${label}: unbroken row has no ${g.sel}`);
+    check(g.overflowX === "hidden", `${label}: unbroken ${g.sel} overflow-x ${g.overflowX}`);
+    check(g.ellipsis === "ellipsis", `${label}: unbroken ${g.sel} text-overflow ${g.ellipsis}`);
+    check(g.sw > g.cw, `${label}: unbroken ${g.sel} scrollWidth ${g.sw} <= clientWidth ${g.cw}`);
+    check(g.right <= g.end + 0.5, `${label}: unbroken ${g.sel} right ${g.right} > ${g.end} + 0.5`);
+  }
+  const title = await row.locator(".cell-title").textContent();
+  const code = await row.locator("td code").first().textContent();
+  check(title === name, `${label}: unbroken .cell-title text ${title?.length} chars, want ${name}`);
+  check(code === id, `${label}: unbroken code text ${code}, want ${id}`);
+}
+
+/** R9: the owner row shows On/Off and —, no 2FA: text; action cells have only the row divider. */
+export async function assertTeamTable(page: Page, ownerName: string, label: string) {
+  const table = page.locator('[aria-label="Team table"] table');
+  const owner = table.locator(`tr:has(td:text-is("${ownerName}"))`);
+  check((await owner.count()) === 1, `${label}: no Team row for ${ownerName}`);
+  const twoFactor = ((await owner.locator("td").nth(3).textContent()) ?? "").trim();
+  check(/^(On|Off)$/.test(twoFactor), `${label}: owner 2FA cell "${twoFactor}", want On or Off`);
+  const empty = (
+    (await owner.locator("td.actions-cell .cell-empty [aria-hidden]").textContent()) ?? ""
+  ).trim();
+  check(empty === "—", `${label}: owner action cell "${empty}", want —`);
+  const prefixed = await page
+    .locator("main td")
+    .evaluateAll((tds) =>
+      tds.map((td) => (td.textContent ?? "").trim()).filter((t) => t.startsWith("2FA:")),
+    );
+  check(prefixed.length === 0, `${label}: cells start with 2FA: ${JSON.stringify(prefixed)}`);
+  const bad = await page.locator("main td.actions-cell").evaluateAll((cells) =>
+    cells.flatMap((td) => {
+      const out: string[] = [];
+      const cs = getComputedStyle(td);
+      const first = td.parentElement?.querySelector("td");
+      const rowBottom =
+        first === null || first === undefined ? "" : getComputedStyle(first).borderBottomWidth;
+      const text = (td.textContent ?? "").trim();
+      if (cs.borderLeftWidth !== "0px" || cs.borderRightWidth !== "0px")
+        out.push(`"${text}" cell side borders ${cs.borderLeftWidth}/${cs.borderRightWidth}`);
+      if (cs.borderBottomWidth !== rowBottom)
+        out.push(`"${text}" bottom ${cs.borderBottomWidth}, row ${rowBottom}`);
+      for (const el of Array.from(td.querySelectorAll("*"))) {
+        const s = getComputedStyle(el);
+        const widths = [
+          s.borderTopWidth,
+          s.borderRightWidth,
+          s.borderBottomWidth,
+          s.borderLeftWidth,
+        ];
+        if (widths.some((w) => w !== "0px"))
+          out.push(`"${text}" ${el.tagName} border ${widths.join(" ")}`);
+      }
+      const start = td.querySelector("a, .cell-empty");
+      const left =
+        td.getBoundingClientRect().left +
+        Number.parseFloat(cs.paddingLeft) +
+        Number.parseFloat(cs.borderLeftWidth);
+      const at = start?.getBoundingClientRect().left;
+      if (at === undefined || Math.abs(at - left) > 1)
+        out.push(`"${text}" first action left ${at}, content left ${left}`);
+      return out;
+    }),
+  );
+  check(bad.length === 0, `${label}: Team action cells ${bad.join(" | ")}`);
+}
+
+const RECOVERY_CODE = /^[0-9a-f]{4}(-[0-9a-f]{4}){7}$/;
+
+/** R3: ten codes of 39 characters, each on 1 line, unclipped, inside the panel content box. */
+export async function assertRecoveryCodes(page: Page, label: string): Promise<string[]> {
+  await page.evaluate(() => document.fonts.ready);
+  const codes = await page.locator("#recovery-codes li code").evaluateAll((els) =>
+    els.map((el) => {
+      const panel = el.closest(".plain-panel");
+      const r = el.getBoundingClientRect();
+      const tops = new Set<number>();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      for (const rect of Array.from(range.getClientRects())) {
+        if (rect.width > 0) tops.add(Math.round(rect.top));
+      }
+      let inside = "no .plain-panel";
+      if (panel !== null) {
+        const p = panel.getBoundingClientRect();
+        const s = getComputedStyle(panel);
+        const left =
+          p.left + Number.parseFloat(s.paddingLeft) + Number.parseFloat(s.borderLeftWidth);
+        const right =
+          p.right - Number.parseFloat(s.paddingRight) - Number.parseFloat(s.borderRightWidth);
+        inside =
+          r.left >= left - 0.5 && r.right <= right + 0.5
+            ? ""
+            : `rect ${r.left}-${r.right} outside content ${left}-${right}`;
+      }
+      return {
+        text: el.textContent ?? "",
+        lines: tops.size,
+        scroll: el.scrollWidth,
+        client: el.clientWidth,
+        inside,
+      };
+    }),
+  );
+  check(codes.length === 10, `${label}: ${codes.length} recovery codes, want 10`);
+  for (const code of codes) {
+    check(RECOVERY_CODE.test(code.text), `${label}: code "${code.text}" has the wrong format`);
+    check(code.lines === 1, `${label}: code "${code.text}" has ${code.lines} lines, want 1`);
+    check(
+      code.scroll <= code.client,
+      `${label}: code "${code.text}" scrollWidth ${code.scroll} > ${code.client}`,
+    );
+    check(code.inside === "", `${label}: code "${code.text}" ${code.inside}`);
+  }
+  await assertNoSidewaysScroll(page, label);
+  return codes.map((c) => c.text);
+}
+
+/** R4 literals, written from the spec. */
+export const PRESET_CARDS = [
+  ["read", "Reads the checks and their configuration. Changes nothing."],
+  ["checks", "Reads checks and creates, changes and deletes them."],
+  ["incidents", "Reads checks and posts incidents."],
+  ["full", "Reads and changes checks and posts incidents."],
+] as const;
+
+export const PRESET_NOTE =
+  "Manage checks, Post incidents and Full access can also create, rotate and revoke tokens with the same or fewer scopes, and read the audit log.";
+
+type CardGeometry = {
+  radios: number;
+  value: string;
+  description: string;
+  width: number;
+  height: number;
+  gap: number;
+  centers: number;
+  inside: boolean;
+  checked: boolean;
+  disabled: boolean;
+};
+
+/** R4 on /tokens/new: four cards in order, literal texts, radio geometry and native behavior. */
+export async function assertPresetCards(page: Page, label: string): Promise<void> {
+  await page.evaluate(() => document.fonts.ready);
+  const cards: CardGeometry[] = await page.locator("label.choice.option-card").evaluateAll((els) =>
+    els.map((card) => {
+      const radios = card.querySelectorAll('input[name="preset"]');
+      const radio = radios[0];
+      const title = card.querySelector(".choice-title");
+      const hint = card.querySelector(".choice-text small.hint");
+      const c = card.getBoundingClientRect();
+      const i = radio?.getBoundingClientRect();
+      const t = title?.getBoundingClientRect();
+      return {
+        radios: radios.length,
+        value: radio?.getAttribute("value") ?? "",
+        description: (hint?.textContent ?? "").trim(),
+        width: i?.width ?? 0,
+        height: i?.height ?? 0,
+        gap: i === undefined || t === undefined ? -1 : t.left - i.right,
+        centers:
+          i === undefined || t === undefined
+            ? 99
+            : Math.abs(i.top + i.height / 2 - (t.top + t.height / 2)),
+        inside:
+          i !== undefined &&
+          i.left >= c.left &&
+          i.right <= c.right &&
+          i.top >= c.top &&
+          i.bottom <= c.bottom,
+        checked: radio instanceof HTMLInputElement && radio.checked,
+        disabled: radio instanceof HTMLInputElement && radio.disabled,
+      };
+    }),
+  );
+  check(cards.length === 4, `${label}: ${cards.length} option cards, want 4`);
+  PRESET_CARDS.forEach(([id, text], n) => {
+    const card = cards[n];
+    check(card !== undefined, `${label}: card ${n + 1} missing`);
+    if (card === undefined) return;
+    check(card.radios === 1, `${label}: card ${id} has ${card.radios} radios, want 1`);
+    check(card.value === id, `${label}: card ${n + 1} is "${card.value}", want ${id}`);
+    check(card.description === text, `${label}: card ${id} text "${card.description}"`);
+    check(
+      Math.abs(card.width - 18) <= 0.5 && Math.abs(card.height - 18) <= 0.5,
+      `${label}: card ${id} radio ${card.width}x${card.height}`,
+    );
+    check(Math.abs(card.gap - 12) <= 1, `${label}: card ${id} title gap ${card.gap}`);
+    check(card.centers <= 2, `${label}: card ${id} radio center offset ${card.centers}`);
+    check(card.inside, `${label}: card ${id} radio outside its card`);
+    check(!card.checked, `${label}: card ${id} checked on load`);
+  });
+  const note = (await page.locator("#preset-note").textContent())?.trim();
+  check(note === PRESET_NOTE, `${label}: preset note "${note}"`);
+  const enabled = cards.filter((c) => !c.disabled).map((c) => c.value);
+  const [first, second] = enabled;
+  if (first === undefined || second === undefined) return;
+  await page
+    .locator("label.choice.option-card", { has: page.locator(`input[value="${first}"]`) })
+    .locator("small.hint")
+    .first()
+    .click();
+  check(
+    await page.locator(`input[name="preset"][value="${first}"]`).isChecked(),
+    `${label}: a click on the ${first} description checks its radio`,
+  );
+  await page.locator(`input[name="preset"][value="${first}"]`).focus();
+  await page.keyboard.press("ArrowDown");
+  check(
+    await page.locator(`input[name="preset"][value="${second}"]`).isChecked(),
+    `${label}: ArrowDown from ${first} checks ${second}`,
+  );
+}
+
+type Box = { left: number; width: number; contentLeft: number; contentWidth: number };
+
+function boxOf(page: Page, selector: string): Promise<Box | undefined> {
+  return page
+    .locator(selector)
+    .first()
+    .evaluate((el) => {
+      const form = el.closest("form");
+      if (!form) return undefined;
+      const r = el.getBoundingClientRect();
+      const f = form.getBoundingClientRect();
+      const s = getComputedStyle(form);
+      const pl = Number.parseFloat(s.paddingLeft) + Number.parseFloat(s.borderLeftWidth);
+      const pr = Number.parseFloat(s.paddingRight) + Number.parseFloat(s.borderRightWidth);
+      return {
+        left: r.left,
+        width: r.width,
+        contentLeft: f.left + pl,
+        contentWidth: f.width - pl - pr,
+      };
+    });
+}
+
+/** R6 on /checks/edit?id=web: Save check keeps its width, narrow and medium fields are capped. */
+export async function assertEditorWidths(page: Page, width: number, label: string): Promise<void> {
+  const save = await boxOf(page, 'button[type="submit"]:has-text("Save check")');
+  const interval = await boxOf(page, 'input[name="interval_ms"]');
+  const name = await boxOf(page, 'input[name="name"]');
+  check(save !== undefined && interval !== undefined && name !== undefined, `${label}: fields`);
+  if (save === undefined || interval === undefined || name === undefined) return;
+  if (width === 1280) {
+    check(
+      save.width < 0.5 * save.contentWidth,
+      `${label}: Save check width ${save.width}, form content ${save.contentWidth}`,
+    );
+    check(
+      Math.abs(save.left - save.contentLeft) <= 1,
+      `${label}: Save check left ${save.left}, form content left ${save.contentLeft}`,
+    );
+    check(interval.width <= 192.5, `${label}: interval_ms width ${interval.width}`);
+    check(name.width <= 384.5, `${label}: name width ${name.width}`);
+  }
+  for (const [field, box] of [
+    ["interval_ms", interval],
+    ["name", name],
+  ] as const) {
+    check(
+      box.width <= box.contentWidth + 0.5,
+      `${label}: ${field} width ${box.width} > form ${box.contentWidth}`,
+    );
+  }
+}
+
+/** R6: a Copy button is small, 36px high with a 44px hit area, and left aligned. */
+export async function assertCopyButton(page: Page, selector: string, label: string): Promise<void> {
+  const got = await page.locator(selector).evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const parent = el.parentElement;
+    const p = parent?.getBoundingClientRect();
+    const ps = parent === null ? undefined : getComputedStyle(parent);
+    const left =
+      p === undefined || ps === undefined
+        ? Number.NaN
+        : p.left + Number.parseFloat(ps.paddingLeft) + Number.parseFloat(ps.borderLeftWidth);
+    return {
+      isSmall: el.classList.contains("small"),
+      minHeight: getComputedStyle(el).minHeight,
+      after: getComputedStyle(el, "::after").top,
+      width: r.width,
+      left: r.left,
+      parentLeft: left,
+    };
+  });
+  check(got.isSmall, `${label}: Copy has no class small`);
+  check(got.minHeight === "36px", `${label}: Copy min-height ${got.minHeight}`);
+  check(got.width < 200, `${label}: Copy width ${got.width}`);
+  check(
+    Math.abs(got.left - got.parentLeft) <= 1,
+    `${label}: Copy left ${got.left}, parent content left ${got.parentLeft}`,
+  );
+  check(got.after === "-4px", `${label}: Copy ::after top ${got.after}`);
+}
+
+/** R5 `--rule` colors from `src/styles.ts`, written here as literals. */
+const RULE: Readonly<Record<Scheme, string>> = {
+  light: "rgb(223, 215, 212)",
+  dark: "rgb(62, 48, 73)",
+};
+
+/** Browser 5: the sidebar border spans a long page and the Main nav stays in view. */
+export async function assertSidebarSpans(page: Page, scheme: Scheme, label: string) {
+  const read = () =>
+    page.evaluate(() => {
+      const bar = document.querySelector("header.sidebar");
+      const nav = document.querySelector('nav[aria-label="Main"]');
+      if (bar === null || nav === null) return undefined;
+      const r = bar.getBoundingClientRect();
+      const n = nav.getBoundingClientRect();
+      const s = getComputedStyle(bar);
+      return {
+        top: r.top + scrollY,
+        bottom: r.bottom + scrollY,
+        scrollHeight: document.documentElement.scrollHeight,
+        border: `${s.borderRightWidth} ${s.borderRightStyle} ${s.borderRightColor}`,
+        isNavInside: n.top >= -0.5 && n.bottom <= innerHeight + 0.5 && n.height > 0,
+      };
+    });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const first = await read();
+  check(first !== undefined, `${label}: no header.sidebar or Main nav`);
+  if (first === undefined) return;
+  check(first.scrollHeight >= 1200, `${label}: page scrollHeight ${first.scrollHeight} < 1200`);
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const second = await read();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  for (const [where, got] of [
+    ["top", first],
+    ["bottom", second],
+  ] as const) {
+    check(got !== undefined, `${label} at ${where}: no sidebar`);
+    if (got === undefined) return;
+    check(Math.abs(got.top) <= 0.5, `${label} at ${where}: sidebar top ${got.top}`);
+    check(
+      got.bottom >= got.scrollHeight - 1,
+      `${label} at ${where}: sidebar bottom ${got.bottom} < scrollHeight ${got.scrollHeight}`,
+    );
+    const want = `1px solid ${RULE[scheme]}`;
+    check(got.border === want, `${label} at ${where}: sidebar border ${got.border}, want ${want}`);
+  }
+  check(second?.isNavInside === true, `${label}: Main nav outside the viewport after the scroll`);
+}
+
+/** Browser 6: the edge hints show only where the Main nav has hidden content. */
+export async function assertNavEdges(page: Page, label: string): Promise<void> {
+  const want: ReadonlyArray<readonly [string, number, string]> = [
+    ["start", 0, "0/1"],
+    ["middle", 0.5, "1/1"],
+    ["end", 1, "1/0"],
+  ];
+  for (const [where, share, expected] of want) {
+    const got = await page.evaluate(async (part) => {
+      const nav = document.querySelector('nav[aria-label="Main"]');
+      const start = document.querySelector(".nav-edge-start");
+      const end = document.querySelector(".nav-edge-end");
+      if (!(nav instanceof HTMLElement) || start === null || end === null) return "missing";
+      nav.scrollLeft = (nav.scrollWidth - nav.clientWidth) * part;
+      for (let i = 0; i < 2; i += 1) await new Promise((r) => requestAnimationFrame(r));
+      const o = (el: Element) => Number(getComputedStyle(el).opacity);
+      return `${o(start)}/${o(end)}`;
+    }, share);
+    check(got !== "missing", `${label}: missing .nav-edge or Main nav`);
+    check(got === expected, `${label}: nav edges at ${where} ${got}, want ${expected}`);
+  }
+  await page.evaluate(() => {
+    const nav = document.querySelector('nav[aria-label="Main"]');
+    if (nav instanceof HTMLElement) nav.scrollLeft = 0;
+  });
+}
+
+/** Browser 7: the phone account row is one compact row with both controls in view. */
+export async function assertCompactAccount(
+  page: Page,
+  width: number,
+  email: string,
+  label: string,
+): Promise<void> {
+  const got = await page.evaluate(() => {
+    const rect = (s: string) => document.querySelector(s)?.getBoundingClientRect();
+    const foot = rect(".sidebar-foot");
+    const header = rect("header.sidebar");
+    const account = rect(".account");
+    const link = [...document.querySelectorAll(".sidebar-foot a")]
+      .find((a) => a.textContent?.trim() === "Account security")
+      ?.getBoundingClientRect();
+    const button = rect(".sidebar-foot button");
+    const role = document.querySelector(".account-role");
+    const tops = new Set<number>();
+    if (role !== null) {
+      const range = document.createRange();
+      range.selectNodeContents(role);
+      for (const r of Array.from(range.getClientRects())) {
+        if (r.width > 0) tops.add(Math.round(r.top));
+      }
+    }
+    if ([foot, header, account, link, button].some((r) => r === undefined)) return undefined;
+    const center = (r: DOMRect | undefined) => (r === undefined ? 0 : r.top + r.height / 2);
+    return {
+      parts: [...document.querySelectorAll(".sidebar-inner > *, .sidebar-foot > *")]
+        .map((e) => `${e.className} ${Math.round(e.getBoundingClientRect().height)}`)
+        .join(", "),
+      foot: foot?.height ?? 0,
+      header: header?.height ?? 0,
+      centers: [center(account), center(link), center(button)],
+      edges: [link?.left ?? 0, link?.right ?? 0, button?.left ?? 0, button?.right ?? 0],
+      text: document.querySelector(".account")?.textContent ?? "",
+      roleLines: tops.size,
+      isRoleVisible: role !== null && getComputedStyle(role).visibility === "visible",
+    };
+  });
+  check(got !== undefined, `${label}: account row parts missing`);
+  if (got === undefined) return;
+  check(got.foot <= 56, `${label}: .sidebar-foot height ${got.foot} > 56 (${got.parts})`);
+  check(got.header <= 240, `${label}: header.sidebar height ${got.header} > 240 (${got.parts})`);
+  const spread = Math.max(...got.centers) - Math.min(...got.centers);
+  check(spread <= 6, `${label}: account row centers ${got.centers.join(", ")} differ by ${spread}`);
+  check(
+    got.edges.every((x) => x >= -0.5 && x <= width + 0.5),
+    `${label}: account controls ${got.edges.join(", ")} outside 0-${width}`,
+  );
+  for (const part of ["Signed in as", email, "Role: Owner"]) {
+    check(got.text.includes(part), `${label}: account text "${got.text}" lacks ${part}`);
+  }
+  check(got.isRoleVisible && got.roleLines === 1, `${label}: role has ${got.roleLines} lines`);
+}
+
+const OVERVIEW_TILES: readonly (readonly [string, string, string])[] = [
+  ["Down", "2", "/checks?state=down"],
+  ["Degraded", "1", "/checks?state=degraded"],
+  ["Unknown", "0", "/checks?state=unknown"],
+  ["Maintenance", "0", "/checks?state=maintenance"],
+  ["Up", "3", "/checks?state=up"],
+  ["Total", "6", "/checks"],
+];
+
+/**
+ * Browser 9: the six Overview tiles for the states down, down, degraded, up, up, up, their
+ * literal hrefs, the list style and the label font. Clicking Down filters the Checks list.
+ */
+export async function assertOverviewTiles(page: Page, base: string, label: string) {
+  await page.goto(`${base}/`);
+  await page.evaluate(() => document.fonts.ready);
+  const tiles = await page
+    .locator("a.state-tile")
+    .evaluateAll((links) =>
+      links.map((a) => [
+        a.querySelector(".tile-label")?.textContent?.trim() ?? "",
+        a.querySelector(".tile-count")?.textContent?.trim() ?? "",
+        a.getAttribute("href") ?? "",
+      ]),
+    );
+  check(
+    JSON.stringify(tiles) === JSON.stringify(OVERVIEW_TILES),
+    `${label}: Overview tiles ${JSON.stringify(tiles)}, want ${JSON.stringify(OVERVIEW_TILES)}`,
+  );
+  const style = await page.evaluate(() => ({
+    list: getComputedStyle(document.querySelector("ul.state-tiles") ?? document.body).listStyleType,
+    font: getComputedStyle(document.querySelector(".tile-label") ?? document.body).fontFamily,
+  }));
+  check(style.list === "none", `${label}: ul.state-tiles list-style-type ${style.list}`);
+  check(style.font.startsWith('"Space Grotesk"'), `${label}: .tile-label font ${style.font}`);
+  await Promise.all([
+    page.waitForURL(`${base}/checks?state=down`),
+    page.locator('a.state-tile[href="/checks?state=down"]').click(),
+  ]);
+  const value = await page.locator("select#filter-state").inputValue();
+  check(value === "down", `${label}: after Down, select#filter-state is ${value}`);
 }

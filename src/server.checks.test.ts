@@ -64,9 +64,7 @@ async function consoleFor(
 }
 
 function rowOf(body: string, id: string): string {
-  const row = body
-    .split("<tr>")
-    .find((part) => part.includes(`<td class="mono">${escapeHtml(id)}</td>`));
+  const row = body.split("<tr>").find((part) => part.includes(`<code>${escapeHtml(id)}</code>`));
   return row ?? "";
 }
 
@@ -117,46 +115,66 @@ describe("GET /checks", () => {
     expect(res.body).toContain("6 checks, 1 shadowed definition");
     expect(rowCount(res.body)).toBe(7);
     for (const label of ["HTTP", "TLS", "TCP", "DNS", "Domain", "Heartbeat"]) {
-      expect(res.body).toContain(`<td>${label}</td>`);
+      expect(res.body).toContain(
+        `<td><span class="cell-sub">${label}</span><span class="cell-target">`,
+      );
     }
+    for (const head of ["Check", "Target", "State", "Actions"]) {
+      expect(res.body).toContain(`<th scope="col">${head}</th>`);
+    }
+    expect(res.body).toContain(
+      '<th scope="col">Check</th><th scope="col">Target</th><th scope="col">State</th><th scope="col">Actions</th>',
+    );
+    expect(res.body).not.toContain('<th scope="col">Last result</th>');
+    expect(res.body).toContain(
+      '<colgroup><col class="col-check"><col class="col-target"><col class="col-state"><col class="col-actions"></colgroup>',
+    );
+    expect(res.body).toContain('<span class="visually-hidden">Last result: </span>');
     expect(rowOf(res.body, "web")).toContain(
-      '<td><span class="check-state check-state-up dense"><span class="dot" aria-hidden="true"></span><span>Up</span></span></td>',
+      '<td><span class="check-state check-state-up dense"><span class="dot" aria-hidden="true"></span><span>Up</span></span><span class="cell-sub mono"><span class="visually-hidden">Last result: </span>',
     );
     expect(rowOf(res.body, "cert")).toContain(
-      '<td><span class="check-state check-state-degraded dense"><span class="dot" aria-hidden="true"></span><span>Degraded</span></span></td>',
+      '<td><span class="check-state check-state-degraded dense"><span class="dot" aria-hidden="true"></span><span>Degraded</span></span><span class="cell-sub mono">',
     );
     expect(rowOf(res.body, "db-port")).toContain(
-      '<td><span class="check-state check-state-down dense"><span class="dot" aria-hidden="true"></span><span>Down</span></span></td>',
+      '<td><span class="check-state check-state-down dense"><span class="dot" aria-hidden="true"></span><span>Down</span></span><span class="cell-sub mono">',
     );
     expect(rowOf(res.body, "db-port")).toContain(
-      '<td><span class="tag tag-neutral">checks.json (read-only)</span></td>',
+      '<code>db-port</code> <span class="tag tag-neutral">checks.json (read-only)</span></span></td>',
     );
-    expect(rowOf(res.body, "web")).toContain('<td><span class="tag tag-info">Console</span></td>');
+    expect(rowOf(res.body, "web")).toContain(
+      '<td><span class="cell-title">Web shop</span><span class="cell-sub"><code>web</code> <span class="tag tag-info">Console</span></span></td>',
+    );
     expect(res.body).toContain(
       '<p class="table-scroll-hint">Scroll sideways to see all columns.</p>\n<div class="table-scroll" tabindex="0" role="region" aria-label="Checks table">',
     );
     expect(res.body).not.toContain("style=");
     expect(res.body).not.toContain("<style");
-    expect(rowOf(res.body, "db-port")).toContain("<td>db.internal:5432</td>");
+    expect(rowOf(res.body, "db-port")).toContain(
+      '<span class="cell-target">db.internal:5432</span></td>',
+    );
     expect(rowOf(res.body, "domain-exp")).toContain(
-      '<td><span class="check-state check-state-unknown dense"><span class="dot" aria-hidden="true"></span><span>Unknown</span></span></td>',
-    );
-    expect(rowOf(res.body, "domain-exp")).toContain('<td class="mono">No results yet</td>');
-    expect(rowOf(res.body, "nightly-backup")).toContain(
-      '<td><span class="check-state check-state-unknown dense"><span class="dot" aria-hidden="true"></span><span>Unknown</span></span></td>',
+      '<td><span class="check-state check-state-unknown dense"><span class="dot" aria-hidden="true"></span><span>Unknown</span></span><span class="cell-sub mono"><span class="visually-hidden">Last result: </span>No results yet</span></td>',
     );
     expect(rowOf(res.body, "nightly-backup")).toContain(
-      '<td><span class="tag tag-info">Console</span></td>',
+      '<td><span class="check-state check-state-unknown dense"><span class="dot" aria-hidden="true"></span><span>Unknown</span></span><span class="cell-sub mono"><span class="visually-hidden">Last result: </span>',
     );
-    expect(rowOf(res.body, "web")).toContain('<td class="mono">2026-11-05 11:59:30 UTC</td>');
-    expect(rowOf(res.body, "web")).toContain(`<td>${escapeHtml(QUOTE_URL)}</td>`);
+    expect(rowOf(res.body, "nightly-backup")).toContain(
+      '<code>nightly-backup</code> <span class="tag tag-info">Console</span></span></td>',
+    );
+    expect(rowOf(res.body, "web")).toContain(
+      `${'<span class="cell-sub mono"><span class="visually-hidden">Last result: </span>'}2026-11-05 11:59:30 UTC</span></td>`,
+    );
+    expect(rowOf(res.body, "web")).toContain(
+      `<span class="cell-target">${escapeHtml(QUOTE_URL)}</span></td>`,
+    );
     expect(res.body).toContain(
-      '<td><span class="check-state check-state-maintenance dense"><span class="dot" aria-hidden="true"></span><span>Maintenance</span></span></td>',
+      '<td><span class="check-state check-state-maintenance dense"><span class="dot" aria-hidden="true"></span><span>Maintenance</span></span><span class="cell-sub mono">',
     );
     expect(res.body).toContain(
       '<td><span class="check-state check-state-shadowed dense"><span class="dot" aria-hidden="true"></span><span>Shadowed by checks.json</span></span></td>',
     );
-    expect(res.body).toContain("<td>example.com AAAA</td>");
+    expect(res.body).toContain('<span class="cell-target">example.com AAAA</span></td>');
     expect(res.body).toContain('href="/checks/new"');
     expect(res.body).toContain('href="/checks/export"');
     expect(res.body).toContain('href="/checks/export?id=dns-a&amp;shadowed=1"');
@@ -182,6 +200,21 @@ describe("GET /checks", () => {
     expect(res.body).not.toContain("/checks/export");
     expect(res.body).not.toContain("/checks/edit");
     expect(res.body).not.toContain("/checks/delete");
+  });
+
+  test("an overlong unbroken name and id stay whole and escaped in the Check cell", async () => {
+    const name = `<b>Unbroken${"n".repeat(92)}`;
+    const id = `unbroken${"x".repeat(56)}`;
+    const config = {
+      ...checkConfig,
+      checks: [...checkConfig.checks, { ...checkConfig.checks[0], id, name }],
+    };
+    const c = await consoleFor(fakeApi(config));
+    const res = await getPage(c, "/checks");
+    expect(rowOf(res.body, id)).toContain(
+      `<td><span class="cell-title">&lt;b&gt;Unbroken${"n".repeat(92)}</span><span class="cell-sub"><code>${id}</code> <span class="tag tag-info">Console</span></span></td>`,
+    );
+    expect(res.body).not.toContain("<b>Unbroken");
   });
 
   test("a Member gets edit but no delete links", async () => {
@@ -616,7 +649,7 @@ describe("GET /checks/check", () => {
     // The host-binding line, escaped once, never the old template.
     expect(res.body).toContain(`<pre id="host-binding-line">${escapeHtml(HOST_LINE)}</pre>`);
     expect(res.body).toContain(
-      '<button type="button" data-copy="host-binding-line" hidden>Copy</button>',
+      '<button type="button" class="secondary small" data-copy="host-binding-line" hidden>Copy</button>',
     );
     expect(res.body).not.toContain(escapeHtml(UNSAFE_TEMPLATE));
     expect(res.body).not.toContain(UNSAFE_TEMPLATE);
@@ -809,7 +842,7 @@ describe("GET /checks/check", () => {
     expect(res.body).not.toContain(`${api.url}/heartbeat`);
     expect(res.body).not.toContain(api.url.replace("http://", ""));
     expect(res.body).toContain(
-      '<button type="button" data-copy="heartbeat-line" hidden>Copy</button>',
+      '<button type="button" class="secondary small" data-copy="heartbeat-line" hidden>Copy</button>',
     );
     expect(res.body).toContain(
       "Replace &lt;pulse-api-url&gt; with the address under which your job reaches pulse-api, for example https://pulse-api.example.com, and &lt;secret&gt; with the secret of this check. The secret is not shown again.",

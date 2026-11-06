@@ -53,6 +53,9 @@ export function paragraph(text: string | undefined, extra = ""): string {
   return text === undefined ? "" : `<p${extra}>${escapeHtml(text)}</p>\n`;
 }
 
+/** An optional cap on a control's width: `input-narrow` (12rem) or `input-medium` (24rem). */
+export type FieldWidth = "narrow" | "medium";
+
 export type Field = {
   label: string;
   name: string;
@@ -60,6 +63,7 @@ export type Field = {
   autocomplete: string;
   value?: string | undefined;
   error?: string | undefined;
+  width?: FieldWidth | undefined;
 };
 
 function fieldParts(name: string, error: string | undefined) {
@@ -75,12 +79,17 @@ function fieldParts(name: string, error: string | undefined) {
   };
 }
 
+/** The class attribute of an optional field width. */
+export function widthClass(width: FieldWidth | undefined): string {
+  return width === undefined ? "" : ` class="input-${width}"`;
+}
+
 /** A labelled input with its error message. */
 export function field(f: Field): string {
   const parts = fieldParts(f.name, f.error);
   const value = f.value === undefined ? "" : ` value="${escapeHtml(f.value)}"`;
   return `<label for="${parts.id}">${escapeHtml(f.label)}
-<input id="${parts.id}" name="${escapeHtml(f.name)}" type="${f.type}" autocomplete="${escapeHtml(f.autocomplete)}" required${value}${parts.described}>${parts.error}
+<input id="${parts.id}"${widthClass(f.width)} name="${escapeHtml(f.name)}" type="${f.type}" autocomplete="${escapeHtml(f.autocomplete)}" required${value}${parts.described}>${parts.error}
 </label>`;
 }
 
@@ -109,11 +118,15 @@ export function submitButton(view: {
   name?: string | undefined;
   value?: string | undefined;
   variant?: "primary" | "secondary" | "ghost" | "danger" | undefined;
+  size?: "small" | undefined;
 }): string {
   const name = view.name === undefined ? "" : ` name="${escapeHtml(view.name)}"`;
   const value = view.value === undefined ? "" : ` value="${escapeHtml(view.value)}"`;
-  const cls =
-    view.variant === undefined || view.variant === "primary" ? "" : ` class="${view.variant}"`;
+  const classes = [
+    view.variant === undefined || view.variant === "primary" ? "" : view.variant,
+    view.size ?? "",
+  ].filter((c) => c !== "");
+  const cls = classes.length === 0 ? "" : ` class="${classes.join(" ")}"`;
   return `<button type="submit"${name}${value}${cls} data-busy-label="${escapeHtml(view.busyLabel)}">${escapeHtml(view.label)}</button>`;
 }
 

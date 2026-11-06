@@ -38,21 +38,33 @@ import {
   assertActionLines,
   assertChecksActions,
   assertChecksBoxEnd,
+  assertChecksFit,
+  assertCompactAccount,
+  assertCopyButton,
   assertDanger,
+  assertEditorWidths,
   assertFontsUsed,
   assertForbidden,
   assertHeaderLines,
   assertHostileText,
   assertInput,
   assertLinkColor,
+  assertNavEdges,
   assertNoSidewaysScroll,
   assertNotFound,
   assertOverviewColors,
+  assertOverviewTiles,
+  assertPresetCards,
   assertPrimary,
   assertRadio,
+  assertRecoveryCodes,
   assertSettingsBreakpoint,
   assertShellGeometry,
+  assertSidebarSpans,
+  assertTeamTable,
   assertTypeScale,
+  assertUnbrokenRow,
+  assertWordsIntact,
   FONT_BYTES_BOUND,
   FONT_PATHS,
   HEADERS,
@@ -77,6 +89,8 @@ const LONG_NAME = `Checkout-API-${"very-long-unbroken-name-".repeat(8)}end`;
 const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 const SERVE_WAIT_MS = 3000;
 const DEMO_EMAIL = "demo-owner@example.com";
+/** A 70-character owner e-mail for the design matrix (R7). */
+const MATRIX_EMAIL = "a-seventy-character-address-for-the-design-matrix-check-12@example.com";
 // --accent-text in the light scheme, the default of a new context.
 const LINK_COLOUR = "rgb(122, 66, 144)";
 // --text in the light scheme: the ghost confirmation Cancel is a button, not a link colour.
@@ -95,6 +109,7 @@ const VISITED_RULES: Readonly<Record<string, string>> = {
   ".nav-item:visited": "var(--lead)",
   '.nav-item[aria-current="page"]:visited': "var(--text)",
   ".breadcrumbs a:visited": "var(--muted)",
+  "a.state-tile:visited": "var(--text)",
 };
 
 type Env = {
@@ -441,6 +456,7 @@ async function checkLongEmail(browser: Browser): Promise<void> {
     const text = await page.locator(".account-email").textContent();
     assert(text === `(${email})`, `long e-mail span text: ${text}`);
     await assertFits(page, 390, "long e-mail");
+    await assertCompactAccount(page, 390, email, "light 390px long e-mail");
     ok("390px: a 70-character e-mail is shown in full in parentheses and fits");
   } finally {
     await context.close();
@@ -742,7 +758,7 @@ async function checkMobileNavFocus(env: Env, browser: Browser): Promise<void> {
   await checkMobileNavIcons(env, browser);
   for (const width of [390, 375, 360, 320]) await checkMobileNavFocusAt(env, browser, width);
   ok(
-    "mobile nav: every focused item keeps its 2px outline at offset 3px inside the row at 390, 375, 360 and 320 px",
+    "mobile nav: nav edge hints 0/1, 1/1, 1/0, compact account row and every focused item keeps its 2px outline at offset 3px inside the row at 390, 375, 360 and 320 px",
   );
 }
 
@@ -758,6 +774,8 @@ async function checkMobileNavFocusAt(env: Env, browser: Browser, width: number):
     ),
   );
   assert(new Set(tops).size === 1, `mobile nav: items on ${new Set(tops).size} rows`);
+  await assertNavEdges(page, `light ${width}px /`);
+  await assertCompactAccount(page, width, env.ownerEmail, `light ${width}px /`);
   await page.keyboard.press("Tab");
   for (const text of ["Overview", "Checks", "Tokens", "Probes", "Team"]) {
     await page.keyboard.press("Tab");
@@ -1124,6 +1142,24 @@ async function checkTeamActions(env: Env, browser: Browser): Promise<void> {
     ]);
     await page.goto(`${base}/team`);
     await assertFits(page, 390, "390px team with action links");
+    const remActions = await page
+      .locator('[aria-label="Team table"] tr:has(td:text-is("Rem Ovable")) td.actions-cell a')
+      .evaluateAll((links) =>
+        links.map((a) =>
+          Array.from(a.childNodes)
+            .filter((n) => n.nodeType === Node.TEXT_NODE)
+            .map((n) => n.textContent ?? "")
+            .join("")
+            .trim(),
+        ),
+      );
+    const wantRem = ["Change role", "Reset link", "Reset 2FA", "Remove"];
+    assert(
+      remActions.join("|") === wantRem.join("|"),
+      `390px /team Rem Ovable actions ${JSON.stringify(remActions)}, want ${JSON.stringify(wantRem)}`,
+    );
+    await assertTeamTable(page, "Owner", "390px /team with action links");
+    ok("390px /team: Rem Ovable actions Change role, Reset link, Reset 2FA, Remove; cells aligned");
     await assertTeamLines(page, "390px /team with member action links");
     for (const [name, label] of [
       ["Change role for Rem Ovable", "role form"],
@@ -1376,6 +1412,7 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     const copy = page.locator("button[data-copy]").first();
     assert((await copy.isVisible()) === hasScript, `${label}: copy button visible ${hasScript}`);
     if (hasScript) {
+      await assertCopyButton(page, "button[data-copy]", `${label} detail host binding`);
       await copy.click();
       const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
       assert(copied[0] === HOST_LINE, `${label}: copied host line is the literal`);
@@ -1819,6 +1856,7 @@ async function createInBrowser(page: Page, base: string, label: string): Promise
 async function checkCopy(page: Page, label: string): Promise<string> {
   const button = page.locator('button[data-copy="token-secret"]');
   if (!(await button.isVisible())) return "copy button hidden";
+  await assertCopyButton(page, 'button[data-copy="token-secret"]', `${label} token secret`);
   await button.click();
   const copied = await page.evaluate(() => navigator.clipboard.readText());
   assert(copied === E2E_SECRET, `${label}: the copy button copies the secret`);
@@ -1964,7 +2002,43 @@ async function checkTokenFocus(page: Page, base: string): Promise<void> {
   );
 }
 
-async function checkTokenLayout(page: Page, base: string): Promise<void> {
+const ID_PATTERN = /tok_[0-9a-f]{24}/;
+const TIME_PATTERN = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC/;
+const E2E_WORD_TOKENS = [
+  adminTokenRow({
+    id: "tok_c1de00000000000000000005",
+    name: "ci-deploy",
+    scopes: ["read"],
+    lastUsedAt: Date.UTC(2026, 0, 2, 3, 4, 5),
+  }),
+  adminTokenRow({
+    id: "tok_01dc00000000000000000006",
+    name: "old-ci",
+    revokedAt: Date.UTC(2026, 0, 3),
+  }),
+];
+
+/** R2 on /tokens with the word rows; the earlier rows come back afterwards. */
+async function checkTokenWords(page: Page, base: string, state: TokensApi, width: number) {
+  const earlier = state.rows();
+  state.setTokens([...earlier, ...E2E_WORD_TOKENS]);
+  try {
+    await page.goto(`${base}/tokens`);
+    const label = `/tokens at ${width}`;
+    const units = await assertWordsIntact(
+      page,
+      "main table.tokens",
+      ["ci-deploy", "Active", "Read", "Revoked", ID_PATTERN, TIME_PATTERN],
+      label,
+    );
+    await assertFits(page, width, `${label} with word rows`);
+    ok(`${label}: ci-deploy, Active, Read, Revoked, id and date found; ${units} units 1 line each`);
+  } finally {
+    state.setTokens(earlier);
+  }
+}
+
+async function checkTokenLayout(page: Page, base: string, state: TokensApi): Promise<void> {
   for (const width of [390, 1280]) {
     await page.setViewportSize({ width, height: 800 });
     await page.goto(`${base}/tokens`);
@@ -1974,11 +2048,21 @@ async function checkTokenLayout(page: Page, base: string): Promise<void> {
     assert(rotates > 0, `/tokens at ${width}: Rotate links ${rotates}, want more than 0`);
     const links = await assertActionLines(page, "td.actions-cell a", `/tokens at ${width}`);
     ok(`/tokens at ${width}: headers 1 line each; ${links.length} Rotate/Revoke links 1 line each`);
+    await checkTokenWords(page, base, state, width);
     await page.goto(`${base}/tokens/new`);
     await assertFits(page, width, `/tokens/new at ${width}`);
+    await assertPresetCards(page, `light ${width}px /tokens/new`);
+    ok(
+      `/tokens/new at ${width}: 4 preset cards in order with their texts, 18px radio centered on its title, click and ArrowDown, none checked`,
+    );
     await page.goto(`${base}/tokens/revoke?id=${E2E_OPS.id}`);
     await assertFits(page, width, `/tokens/revoke at ${width}`);
   }
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto(`${base}/tokens/new`);
+  await assertPresetCards(page, "dark 1280px /tokens/new");
+  await page.emulateMedia({ colorScheme: "light" });
+  ok("/tokens/new dark at 1280: 4 preset cards with their texts and radio geometry");
 }
 
 /** Tokens in a real browser: create, copy, Back, reload, typed revoke, countdown, layout. */
@@ -2016,7 +2100,7 @@ async function checkTokensWith(browser: Browser, hasScript: boolean): Promise<vo
       creates.length === 2,
       `${label}: 2 creates for 2 submits and 1 reload, got ${creates.length}`,
     );
-    await checkTokenLayout(page, server.base);
+    await checkTokenLayout(page, server.base, state);
     if (hasScript) {
       await checkTokenFocus(page, server.base);
       await axeOn(page, `${server.base}/tokens`, "/tokens");
@@ -2188,6 +2272,13 @@ async function checkProbeLayout(page: Page, base: string): Promise<void> {
       assert(links.length > 0, `${label}: ${name} links ${links.length}, want more than 0`);
     }
     ok(`${label}: headers 1 line each; Rotate this token and Revoke this token 1 line each`);
+    const units = await assertWordsIntact(
+      page,
+      "main table.tokens",
+      [ID_PATTERN, TIME_PATTERN, "Active"],
+      label,
+    );
+    ok(`${label}: probe id, date and Active found; ${units} units 1 line each`);
   }
 }
 
@@ -2260,10 +2351,13 @@ async function checkProbesWith(browser: Browser, hasScript: boolean): Promise<vo
 }
 
 const HOSTILE_NAME = "<img src=x onerror=alert(1)>";
+const UNBROKEN_NAME = `Unbroken${"n".repeat(92)}`;
+const UNBROKEN_ID = `unbroken${"x".repeat(56)}`;
 const MATRIX_CHECKS = [
   { id: "long-url", name: "Long URL", url: `https://example.com/${"p".repeat(100)}` },
   { id: "long-name", name: `Long-${"name-".repeat(59)}end`, url: "https://example.com/" },
   { id: "hostile", name: HOSTILE_NAME, url: "https://example.com/h" },
+  { id: UNBROKEN_ID, name: UNBROKEN_NAME, url: "https://example.com/u" },
 ];
 const MATRIX_WIDTHS: [number, number][] = [
   [1280, 800],
@@ -2300,11 +2394,36 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   await assertOverviewColors(page, scheme);
   await assertLinkColor(page, "Checks", PALETTE[scheme].lead, `${at} nav Checks`);
   await assertNoSidewaysScroll(page, `${at} /`);
-  if (width === 390) await assertAccountVisible(page, `${at} /`);
+  if (width === 390) {
+    await assertAccountVisible(page, `${at} /`);
+    assert(MATRIX_EMAIL.length === 70, `matrix e-mail has ${MATRIX_EMAIL.length} characters`);
+    await assertCompactAccount(page, width, MATRIX_EMAIL, `${at} /`);
+    await assertNavEdges(page, `${at} /`);
+    ok(
+      `matrix ${at}: one-row nav hints 0/1, 1/1, 1/0; account row foot <= 56px, header <= 240px, 70-character e-mail in the DOM`,
+    );
+  }
   await assertFontsUsed(page, "main .mono", `${at} /`);
   page.off("response", onFont);
   await axeOn(page, `${base}/`, `${at} Overview`);
   ok(`matrix ${at}: overview body, current and other nav colors, fonts used, no sideways scroll`);
+
+  env.api.reply(
+    "/checks",
+    jsonReply(
+      ["down", "down", "degraded", "up", "up", "up"].map((state, i) =>
+        checkWithState(`tile-${i}`, state),
+      ),
+    ),
+  );
+  try {
+    await assertOverviewTiles(page, base, `${at} /`);
+  } finally {
+    replyChecks(env.api, MATRIX_CHECKS);
+  }
+  ok(
+    `matrix ${at}: Overview tiles Down 2, Degraded 1, Unknown 0, Maintenance 0, Up 3, Total 6 with their /checks?state= links; Down selects down`,
+  );
 
   await page.goto(`${base}/checks`);
   await page.evaluate(() => document.fonts.ready);
@@ -2312,6 +2431,20 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   await assertHostileText(page, HOSTILE_NAME, `${at} /checks`);
   if (width === 390) await assertChecksBoxEnd(page, `${at} /checks`);
   await assertChecksActions(page, width, `${at} /checks`);
+  if (width === 1280) {
+    await assertChecksFit(page, `${at} /checks`);
+    ok(`matrix ${at}: Checks box does not scroll, last action inside its cell, action font 15px`);
+  }
+  const checkUnits = await assertWordsIntact(
+    page,
+    "main table.checks",
+    ["long-url", "hostile", "Maintenance", "Console", UNBROKEN_NAME, UNBROKEN_ID],
+    `${at} /checks`,
+  );
+  await assertUnbrokenRow(page, UNBROKEN_NAME, UNBROKEN_ID, `${at} /checks`);
+  ok(
+    `matrix ${at}: /checks required texts found, ${checkUnits} units 1 line each; unbroken name and id clipped with an ellipsis inside the Check cell`,
+  );
   ok(
     `matrix ${at}: /checks headers ${HEADERS.checks.join(", ")} 1 line each; long-url View, Edit, Export, Delete 1 line each${width === 390 ? ", its Actions cell inside the box" : ""}`,
   );
@@ -2330,10 +2463,17 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   );
   await assertInput(page, 'input[name="name"]', scheme, `${at} edit Name`);
   await assertRadio(page, `${at} edit`);
+  await assertEditorWidths(page, width, `${at} edit`);
+  if (width === 1280) {
+    await assertSidebarSpans(page, scheme, `${at} edit`);
+    ok(
+      `matrix ${at}: sidebar spans the editor page with its ${scheme} rule, Main nav stays in view`,
+    );
+  }
   await assertNoSidewaysScroll(page, `${at} edit`);
   await axeOn(page, `${base}/checks/edit?id=web`, `${at} /checks/edit`);
   ok(
-    `matrix ${at}: edit form primary, input and focus colors; 18px radio 12px from its text on a 44px row, arrow keys move it`,
+    `matrix ${at}: edit form primary, input and focus colors; 18px radio 12px from its text on a 44px row, arrow keys move it; ${width === 1280 ? "Save check under half the form, interval_ms <= 192.5px, name <= 384.5px" : "interval_ms and name fit the form"}`,
   );
 
   await page.goto(`${base}/checks/delete?id=hostile`);
@@ -2438,12 +2578,29 @@ async function matrixTeamAndAccount(env: Env, page: Page, scheme: Scheme, width:
   assert(linkFamily.startsWith('"JetBrains Mono"'), `${at}: link output not mono ${linkFamily}`);
   const linkAxe = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
   assert(linkAxe.violations.length === 0, `${at} axe on the invite link page`);
+  await page.goto(`${base}/team`);
+  await page.fill('input[name="email"]', `matrix-admin-${scheme}-${width}@example.com`);
+  await page.selectOption('select[name="role"]', "admin");
+  await Promise.all([
+    page.waitForURL(`${base}/team/invites`),
+    page.getByRole("button", { name: "Create invite link" }).click(),
+  ]);
   await axeOn(page, `${base}/team`, `${at} /team`);
   await assertTimestampsMono(page, `${at} /team pending invites`);
   await assertNoSidewaysScroll(page, `${at} /team`);
   await assertTypeScale(page, width, `${at} /team`);
   ok(`matrix ${at}: body, h1 and #people-heading sizes, h1 line height, spacing and weights`);
   await assertTeamLines(page, `${at} /team`);
+  const teamUnits = await assertWordsIntact(
+    page,
+    "main table",
+    ["Owner", "Admin", "Member", /On|Off/, /\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "pending"],
+    `${at} /team`,
+  );
+  await assertTeamTable(page, "Owner", `${at} /team`);
+  ok(
+    `matrix ${at}: /team required texts found, ${teamUnits} units 1 line each; owner 2FA On/Off and —, action cells only the row divider and aligned`,
+  );
   const revoke = await page
     .locator(`a[href^="/team/invites/revoke?invite="]`)
     .last()
@@ -2540,6 +2697,27 @@ async function matrixCold(env: Env, browser: Browser): Promise<void> {
 }
 
 /** Shell geometry (5), breakpoints (6) and the long data (11) at 390 px. */
+/** Browser check 3: real new recovery codes on 1 line each at 1280 and 390. */
+async function matrixRecoveryCodes(env: Env, page: Page, scheme: Scheme): Promise<void> {
+  const base = env.console.base;
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`${base}/account/recovery-codes`);
+  await page.fill('input[name="password"]', OWNER_PASSWORD);
+  await Promise.all([
+    page.waitForURL(`${base}/account/recovery-codes`),
+    page.getByRole("button", { name: "Create new recovery codes", exact: true }).click(),
+  ]);
+  const codes = await assertRecoveryCodes(page, `${scheme} 1280px recovery codes`);
+  // The old codes stop working; later sign-ins use the new ones.
+  env.console.recoveryCodes.splice(0, env.console.recoveryCodes.length, ...codes);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await assertRecoveryCodes(page, `${scheme} 390px recovery codes`);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  ok(
+    `matrix ${scheme}: 10 recovery codes of 39 characters, 1 line each inside the panel at 1280 and 390`,
+  );
+}
+
 async function matrixGeometry(env: Env, page: Page, scheme: Scheme): Promise<void> {
   const base = env.console.base;
   await page.goto(`${base}/`);
@@ -2557,10 +2735,7 @@ async function matrixGeometry(env: Env, page: Page, scheme: Scheme): Promise<voi
 }
 
 async function checkDesignMatrix(browser: Browser): Promise<void> {
-  const env = await startEnv(
-    0,
-    "a-seventy-character-address-for-the-design-matrix-check@example.com",
-  );
+  const env = await startEnv(0, MATRIX_EMAIL);
   replyChecks(env.api, MATRIX_CHECKS);
   env.target.current = { name: HOSTILE_NAME, revision: "rev-1" };
   try {
@@ -2599,6 +2774,7 @@ async function checkDesignMatrix(browser: Browser): Promise<void> {
           await matrixPages(env, page, scheme, width);
           await matrixTeamAndAccount(env, page, scheme, width);
         }
+        await matrixRecoveryCodes(env, page, scheme);
         await matrixGeometry(env, page, scheme);
       } finally {
         await context.close();

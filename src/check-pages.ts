@@ -162,14 +162,14 @@ function rowHtml(
 ): string {
   const { check } = row;
   const state = row.kind === "shadowed" ? "shadowed" : row.state;
+  const time =
+    row.kind === "shadowed"
+      ? ""
+      : `<span class="cell-sub mono"><span class="visually-hidden">Last result: </span>${escapeHtml(lastResultAt(row, results))}</span>`;
   const cells = [
-    `<td>${escapeHtml(check.name)}</td>`,
-    `<td class="mono">${escapeHtml(check.id)}</td>`,
-    `<td>${escapeHtml(TYPE_LABELS[check.type ?? "http"])}</td>`,
-    `<td>${escapeHtml(targetText(check))}</td>`,
-    `<td>${sourceTag(check.source)}</td>`,
-    `<td>${checkStateHtml(state, true)}</td>`,
-    `<td class="mono">${escapeHtml(lastResultAt(row, results))}</td>`,
+    `<td><span class="cell-title">${escapeHtml(check.name)}</span><span class="cell-sub"><code>${escapeHtml(check.id)}</code> ${sourceTag(check.source)}</span></td>`,
+    `<td><span class="cell-sub">${escapeHtml(TYPE_LABELS[check.type ?? "http"])}</span><span class="cell-target">${escapeHtml(targetText(check))}</span></td>`,
+    `<td>${checkStateHtml(state, true)}${time}</td>`,
   ];
   return `<tr>${cells.join("")}<td class="actions-cell">${rowActions(row, role)}</td></tr>`;
 }
@@ -179,12 +179,13 @@ function table(
   role: ConsoleRole,
   results: ReadonlyMap<string, number | null>,
 ): string {
-  const heads = ["Name", "Id", "Type", "Target", "Source", "State", "Last result", "Actions"]
+  const heads = ["Check", "Target", "State", "Actions"]
     .map((head) => `<th scope="col">${head}</th>`)
     .join("");
   return `<p class="table-scroll-hint">Scroll sideways to see all columns.</p>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Checks table">
 <table class="checks">
+<colgroup><col class="col-check"><col class="col-target"><col class="col-state"><col class="col-actions"></colgroup>
 <thead><tr>${heads}</tr></thead>
 <tbody>
 ${rows.map((row) => rowHtml(row, role, results)).join("\n")}
