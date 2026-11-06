@@ -347,7 +347,7 @@ function headerRows(ctx: Ctx): string {
     visible < HEADER_ROWS
       ? `<details>\n<summary>More rows</summary>\n${rows.slice(visible).join("")}</details>\n`
       : "";
-  return `<details${existing > 0 ? " open" : ""}>
+  return `<details open>
 <summary>Headers</summary>
 ${rows.slice(0, visible).join("")}${more}</details>
 `;
@@ -422,7 +422,7 @@ function httpFields(ctx: Ctx): string {
       name: "expected_status",
       hint: "Codes or ranges, for example 200, 204 or 200-299. Empty means 200-299.",
     },
-  )}${input(ctx, { label: "Keyword", name: "keyword" })}${bodyField(ctx)}${headerRows(ctx)}${hostBindingBlock(ctx)}<details>
+  )}${input(ctx, { label: "Keyword", name: "keyword" })}${bodyField(ctx)}${headerRows(ctx)}${hostBindingBlock(ctx)}<details open>
 <summary>JSON assertions</summary>
 ${asserts}</details>
 `;

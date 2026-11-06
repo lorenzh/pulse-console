@@ -173,7 +173,8 @@ or `equals`) and `assert_<i>_equals`, which must be JSON (`"ok"`, `200`, `true`)
   has neither input: both come from the stored view.
 - Durations are whole milliseconds; each such label ends in `(ms)`. Defaults: method GET, TLS
   port 443 and warn days 14, domain warn days 30 and interval 86400000, heartbeat grace 0.
-- HTTP has 20 header rows and 10 JSON assertion rows. The first `max(existing + 3, 5)` header
+- HTTP has 20 header rows and 10 JSON assertion rows. The Headers and JSON assertions
+  disclosures are always open, on create and edit, with or without stored values. The first `max(existing + 3, 5)` header
   rows are open; the rest sit in `More rows`. On edit the stored literal headers come first, as
   text with `Value: set` and Keep, Replace and Remove; env headers fill the next free rows.
 - The heartbeat secret is a `password` input with `autocomplete="new-password"`. On edit it
