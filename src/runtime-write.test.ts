@@ -8,7 +8,7 @@ import { type AccountStore, createAccountStore, type User } from "./account-stor
 import type { CheckWriteDeps } from "./check-write.ts";
 import { openDatabase } from "./database.ts";
 import type { PeopleEvent } from "./people-log.ts";
-import { type RuntimeWrite, sendRuntimeWrite } from "./runtime-write.ts";
+import { type RuntimeWrite, sendResend, sendRuntimeWrite } from "./runtime-write.ts";
 
 const TOKEN = "runtime-write-token-sentinel";
 const PATH = "/admin/status/settings";
@@ -153,5 +153,54 @@ describe("sendRuntimeWrite", () => {
       reason: "other",
     });
     expect(events.map((e) => e.value)).toEqual(["unknown"]);
+  });
+});
+
+describe("sendResend", () => {
+  const request = { channelId: "a", key: "1:opened", requestId: "R".repeat(24) };
+  const commandBody = JSON.stringify({
+    id: "C".repeat(24),
+    ...request,
+    state: "queued",
+    createdAt: 1,
+    updatedAt: 1,
+  });
+
+  test.each([200, 202])("%i names the command; no If-Match is sent", async (status) => {
+    events.length = 0;
+    api.replyTo("POST", "/admin/notify/resends", {
+      status,
+      headers: WIRE_HEADERS,
+      body: commandBody,
+    });
+    const answer = await sendResend(deps(), api.url, request, user);
+    expect(answer).toEqual({ kind: "created", commandId: "C".repeat(24), isLogged: true });
+    const seen = api.seen.at(-1);
+    expect(seen?.headers["if-match"]).toBeUndefined();
+    expect(JSON.parse(seen?.body ?? "")).toEqual(request);
+    expect(events.map((e) => [e.action, e.target, e.value])).toEqual([
+      ["notify-resend.create", { kind: "notify-resend", channelId: "a" }, "C".repeat(24)],
+    ]);
+  });
+
+  test("503 is busy with the api reason; 409 is refused", async () => {
+    api.replyTo("POST", "/admin/notify/resends", {
+      status: 503,
+      headers: WIRE_HEADERS,
+      body: JSON.stringify({ error: "too many resend requests" }),
+    });
+    expect(await sendResend(deps(), api.url, request, user)).toEqual({
+      kind: "busy",
+      message: "pulse-api cannot take a resend now: too many resend requests. Try again later.",
+    });
+    api.replyTo("POST", "/admin/notify/resends", {
+      status: 409,
+      headers: WIRE_HEADERS,
+      body: JSON.stringify({ error: "not a failed delivery" }),
+    });
+    expect(await sendResend(deps(), api.url, request, user)).toEqual({
+      kind: "refused",
+      answer: { kind: "form", status: 409, message: "not a failed delivery" },
+    });
   });
 });

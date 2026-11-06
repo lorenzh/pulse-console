@@ -1,13 +1,21 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import {
   jsonReply,
+  NOTIFY_REVISION,
+  notifyChannelsView,
   STATUS_REVISION,
   startFakeApi,
   statusSettingsView,
   WIRE_HEADERS,
+  webhookChannel,
 } from "../test/fake-api.ts";
 import type { ApiReadDeps } from "./api-read.ts";
-import { readStatusSettings } from "./runtime-read.ts";
+import {
+  readNotifyChannels,
+  readNotifyFailed,
+  readResendCommand,
+  readStatusSettings,
+} from "./runtime-read.ts";
 
 const TOKEN = "runtime-read-token-sentinel";
 const PATH = "/admin/status/settings";
@@ -94,5 +102,46 @@ describe("readStatusSettings", () => {
     });
     expect(delays).toEqual([5000]);
     expect(read).toEqual({ kind: "failed", failure: { kind: "timeout" } });
+  });
+});
+
+describe("notify reads", () => {
+  test("the channels view passes the admin record validator", async () => {
+    api.reply(
+      "/admin/notify/channels",
+      jsonReply(notifyChannelsView({ channels: [webhookChannel("a")] })),
+    );
+    const read = await readNotifyChannels(api.url, deps);
+    expect(read.kind === "ok" && read.view.revision).toBe(NOTIFY_REVISION);
+    expect(read.kind === "ok" && read.view.channels.map((c) => c.id)).toEqual(["a"]);
+  });
+
+  test("a record with a secret value field is an invalid answer", async () => {
+    const view = notifyChannelsView({ channels: [webhookChannel("a", { secret: "s" })] });
+    api.reply("/admin/notify/channels", jsonReply(view));
+    expect(await readNotifyChannels(api.url, deps)).toEqual({
+      kind: "failed",
+      failure: { kind: "invalid" },
+    });
+  });
+
+  test("the failed view reads state, receivedAt, failed and failedTotal", async () => {
+    const view = { state: "never", receivedAt: null, failed: [], failedTotal: 0 } as const;
+    api.reply("/admin/notify/failed", jsonReply(view));
+    expect(await readNotifyFailed(api.url, deps)).toEqual({
+      kind: "ok",
+      view: { ...view, failed: [] },
+    });
+  });
+
+  test("an unknown resend command is not-found, not an old api", async () => {
+    api.reply("/admin/notify/resends/AAAAAAAAAAAAAAAAAAAAAAAA", {
+      status: 404,
+      headers: WIRE_HEADERS,
+      body: "{}",
+    });
+    expect(await readResendCommand(api.url, "AAAAAAAAAAAAAAAAAAAAAAAA", deps)).toEqual({
+      kind: "not-found",
+    });
   });
 });
