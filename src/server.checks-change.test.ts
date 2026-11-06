@@ -7,6 +7,7 @@ import {
   startFakeApi,
   WIRE_HEADERS,
 } from "../test/fake-api.ts";
+import { expectCalloutsOnly } from "../test/rendered-audit.ts";
 import { formTokenOf, getPage, postForm, type Reply } from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import type { ConsoleRole } from "./roles.ts";
@@ -472,6 +473,8 @@ describe("edit and delete targets", () => {
     const file = await getPage(c, "/checks/edit?id=db-port", c.cookies.admin);
     expect(file.status).toBe(409);
     expect(file.body).toContain("This check comes from checks.json. Edit the file to change it.");
+    expect(file.body).toContain('<section class="callout callout-error" role="alert">');
+    expectCalloutsOnly(file.body);
     const fileDelete = await getPage(c, "/checks/delete?id=db-port", c.cookies.admin);
     expect(fileDelete.status).toBe(409);
     expect(fileDelete.body).toContain("This check comes from checks.json.");
@@ -532,6 +535,8 @@ describe("expired and replayed tokens on edit and delete", () => {
         "This form has expired. Nothing was sent. Open it again to see the current version.",
       );
       expect(res.body).toContain(`<a href="${path}?id=a%2Fb">Open it again</a>`);
+      expect(res.body).toContain('<section class="callout callout-warning" role="alert">');
+      expectCalloutsOnly(res.body);
       expect(res.body).not.toContain('value="Typed"');
       expect(res.body).not.toContain('name="revision"');
       expect(api.seen).toEqual([]);
@@ -598,7 +603,9 @@ describe("POST /checks/delete", () => {
         },
       ]);
       const list = await getPage(c, "/checks?deleted=1", c.cookies.admin);
-      expect(list.body).toContain("Check deleted.");
+      expect(list.body).toContain('<section class="callout callout-success" role="status">');
+      expect(list.body).toContain("<p>Check deleted.</p>");
+      expectCalloutsOnly(list.body);
     });
   }
 

@@ -108,7 +108,7 @@ describe("GET / Overview summary", () => {
     const c = await consoleFor(api.url);
     const res = await getPage(c, "/");
     expect(res.body).toContain(
-      "<li>Down: 2</li>\n<li>Degraded: 0</li>\n<li>Unknown: 0</li>\n<li>Maintenance: 0</li>\n<li>Up: 1</li>\n<li>Total: 3</li>",
+      '<li><span class="check-state check-state-down"><span class="dot" aria-hidden="true"></span></span>Down: 2</li>\n<li><span class="check-state check-state-degraded"><span class="dot" aria-hidden="true"></span></span>Degraded: 0</li>\n<li><span class="check-state check-state-unknown"><span class="dot" aria-hidden="true"></span></span>Unknown: 0</li>\n<li><span class="check-state check-state-maintenance"><span class="dot" aria-hidden="true"></span></span>Maintenance: 0</li>\n<li><span class="check-state check-state-up"><span class="dot" aria-hidden="true"></span></span>Up: 1</li>\n<li>Total: 3</li>',
     );
   });
 

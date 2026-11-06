@@ -155,6 +155,10 @@ main.shell-main > * { min-width: 0; }
 .check-state-unknown .dot, .check-state-shadowed .dot { border: 1px solid var(--field-line); background: transparent; }
 .check-state.dense { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); }
 .check-state.dense.check-state-down { color: var(--error); }
+ul.counts { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+ul.counts .check-state { margin-right: 8px; }
+.type-choice { list-style: none; padding: 0; display: grid; gap: 8px; }
+.type-choice li.panel { padding: 14px 16px; overflow-wrap: anywhere; }
 .tag { display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border: 1px solid currentColor; border-radius: var(--radius-pill); background: transparent; font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; white-space: nowrap; }
 .tag-neutral { color: var(--muted); }
 .tag-info { color: var(--accent2); background: var(--bg); }

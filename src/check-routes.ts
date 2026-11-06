@@ -55,7 +55,7 @@ import { paragraph } from "./html.ts";
 import { isAllowed, routeRole } from "./permissions.ts";
 import type { PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
 import type { ConsoleRole } from "./roles.ts";
-import { notFoundState, staleState, tokenRejectedBanner } from "./states.ts";
+import { alertCallout, callout, notFoundState, staleState, tokenRejectedBanner } from "./states.ts";
 
 export type CheckRouteDeps = {
   store: AccountStore;
@@ -97,7 +97,9 @@ function listRoute(deps: CheckRouteDeps): ProtectedRoute {
       const view = checkListView(read, parseCheckFilters(request.query), request.role);
       const banner = view.banner === "" ? undefined : view.banner;
       const deleted =
-        request.query.get("deleted") === "1" ? paragraph(CHECK_DELETED_TEXT, ' role="status"') : "";
+        request.query.get("deleted") === "1"
+          ? callout({ kind: "success", body: paragraph(CHECK_DELETED_TEXT), role: "status" })
+          : "";
       return { kind: "page", status: 200, title: "Checks", body: deleted + view.body, banner };
     },
   };
@@ -116,7 +118,9 @@ export const CHECK_DELETED_TEXT = "Check deleted.";
 function detailResult(page: DetailPage, isSaved = false): PageResult {
   if (page.kind === "not-found") return notFound();
   const banner = page.view.banner === "" ? undefined : page.view.banner;
-  const saved = isSaved ? paragraph(CHECK_SAVED_TEXT, ' role="status"') : "";
+  const saved = isSaved
+    ? callout({ kind: "success", body: paragraph(CHECK_SAVED_TEXT), role: "status" })
+    : "";
   return { kind: "page", status: 200, title: page.title, body: saved + page.view.body, banner };
 }
 
@@ -240,7 +244,7 @@ function writeDeps(deps: CheckRouteDeps): CheckWriteDeps {
 }
 
 function choicePage(status: number, notice?: string): PageResult {
-  const top = notice === undefined ? "" : paragraph(notice, ' role="alert"');
+  const top = alertCallout(notice);
   return { kind: "page", status, title: "New check", body: top + checkTypeChoiceHtml() };
 }
 
@@ -262,7 +266,7 @@ function createEditorPage(request: PageRequest, view: CreateView): PageResult {
     csrf: request.csrf,
     formToken: request.issueFormToken(CREATE_PATH),
   });
-  const top = view.notice === undefined ? "" : paragraph(view.notice, ' role="alert"');
+  const top = alertCallout(view.notice);
   return {
     kind: "page",
     status: view.status,
@@ -334,7 +338,7 @@ function writeAnswerPage(
         kind: "page",
         status: answer.status,
         title: "Not saved",
-        body: paragraph(answer.message, ' role="alert"') + kept,
+        body: alertCallout(answer.message) + kept,
       };
     default: {
       const never: never = answer.reason;
@@ -350,7 +354,7 @@ function savedPage(id: string, answer: Extract<WriteAnswer, { kind: "saved" }>):
     kind: "page",
     status: 200,
     title: "Saved",
-    body: `${paragraph(SAVED_NOT_LOGGED_TEXT, ' role="alert"')}<p><a href="${escapeHtml(href)}">Open the check</a></p>\n`,
+    body: `${callout({ kind: "warning", body: paragraph(SAVED_NOT_LOGGED_TEXT), role: "alert" })}<p><a href="${escapeHtml(href)}">Open the check</a></p>\n`,
   };
 }
 
@@ -452,7 +456,7 @@ function conflictPage(text: string, links = ""): PageResult {
     kind: "page",
     status: 409,
     title: "Not possible",
-    body: `${paragraph(text, ' role="alert"')}${links}`,
+    body: `${alertCallout(text)}${links}`,
   };
 }
 
@@ -530,7 +534,8 @@ function expiredChangePage(request: PageRequest, path: string): PageResult {
     kind: "page",
     status: 409,
     title: "Form expired",
-    body: paragraph(CHANGE_EXPIRED_TEXT, ' role="alert"') + reopen,
+    body:
+      callout({ kind: "warning", body: paragraph(CHANGE_EXPIRED_TEXT), role: "alert" }) + reopen,
   };
 }
 
@@ -753,7 +758,7 @@ async function deleteCheck(
       kind: "page",
       status: 200,
       title: "Deleted",
-      body: `${paragraph(SAVED_NOT_LOGGED_TEXT, ' role="alert"')}<p>${link("/checks", "Open the checks")}</p>\n`,
+      body: `${callout({ kind: "warning", body: paragraph(SAVED_NOT_LOGGED_TEXT), role: "alert" })}<p>${link("/checks", "Open the checks")}</p>\n`,
     };
   }
   return writeAnswerPage(answer, NO_INPUT, reopen, (errors, status) =>

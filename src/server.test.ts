@@ -152,6 +152,15 @@ describe("app routes", () => {
     expect(res.headers.get("content-type")).toBe("text/css; charset=utf-8");
     expectSecurityHeaders(res);
     const css = await res.text();
+    for (const rule of [
+      ".type-choice li.panel { padding: 14px 16px; overflow-wrap: anywhere; }",
+      "ul.counts { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 4px; }",
+      ".check-state-maintenance .dot {",
+      ".tag-info { color: var(--accent2); background: var(--bg); }",
+      "td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }",
+    ]) {
+      expect(css).toContain(rule);
+    }
     expect(css).toContain(
       ":focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }",
     );

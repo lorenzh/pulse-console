@@ -157,7 +157,9 @@ describe("edit form uses the trusted view", () => {
     expect(html).not.toContain('name="header_0_name"');
     expect(html).not.toContain('name="header_0_kind"');
     expect(html).toContain("<legend>Header X-Api-Key</legend>\n<p>Value: set</p>");
-    expect(html).toContain('<input type="radio" name="header_0_intent" value="keep" checked> Keep');
+    expect(html).toContain(
+      '<label class="choice"><input type="radio" name="header_0_intent" value="keep" checked><span>Keep</span></label>',
+    );
     expect(html).toContain(
       'name="header_1_name" type="text" autocomplete="off" value="Authorization"',
     );
@@ -166,7 +168,9 @@ describe("edit form uses the trusted view", () => {
     );
     expect(html).toContain('<input type="radio" name="header_1_kind" value="env" checked>');
     expect(html).toContain("<p>Body: set</p>");
-    expect(html).toContain('<input type="radio" name="body_intent" value="keep" checked> Keep');
+    expect(html).toContain(
+      '<label class="choice"><input type="radio" name="body_intent" value="keep" checked><span>Keep</span></label>',
+    );
     expect(html).toContain('action="/checks/edit?id=web"');
   });
 
@@ -203,8 +207,16 @@ describe("edit form uses the trusted view", () => {
   test("heartbeat edit shows Secret: set with keep and replace, not required", () => {
     const html = checkEditorHtml(editModel(viewOf(checkConfig, "nightly-backup")));
     expect(html).toContain("<p>Secret: set</p>");
-    expect(html).toContain('<input type="radio" name="secret_intent" value="keep" checked> Keep');
-    expect(html).toContain('<input type="radio" name="secret_intent" value="replace"> Replace');
+    expect(html).toContain(
+      '<label class="choice"><input type="radio" name="secret_intent" value="keep" checked><span>Keep</span></label>',
+    );
+    expect(html).toContain(
+      '<label class="choice"><input type="radio" name="secret_intent" value="replace"><span>Replace</span></label>',
+    );
+    const radios = html.match(/<input type="radio"[^>]*>/g) ?? [];
+    expect(radios.length).toBeGreaterThan(0);
+    expect(html.split('<label class="choice"><input type="radio"').length - 1).toBe(radios.length);
+    expect(html.match(/<input type="radio"[^>]*><span>/g) ?? []).toHaveLength(radios.length);
     expect(html).not.toContain('name="secret_intent" value="remove"');
     expect(html).toContain(
       '<input id="field-secret" name="secret" type="password" autocomplete="new-password">',

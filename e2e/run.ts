@@ -215,6 +215,18 @@ async function assertFits(page: Page, width: number, label: string): Promise<voi
   assert(!result.hidden, `${label}: overflow hidden on the root`);
 }
 
+/** R6: the checks table box is a named, focusable region whose arrow keys scroll it. */
+async function assertChecksTableBox(page: Page, label: string): Promise<void> {
+  const box = page.getByRole("region", { name: "Checks table", exact: true });
+  assert((await box.count()) === 1, `${label}: one Checks table region`);
+  const hint = page.getByText("Scroll sideways to see all columns.", { exact: true });
+  assert(await hint.isVisible(), `${label}: scroll hint visible at 390 px`);
+  await box.focus();
+  for (let i = 0; i < 5; i += 1) await page.keyboard.press("ArrowRight");
+  const left = await box.evaluate((el) => el.scrollLeft);
+  assert(left > 0, `${label}: ArrowRight scrolls the Checks table (scrollLeft ${left})`);
+}
+
 const ACCOUNT_ROUTES = [
   "/account/security",
   "/account/sessions",
@@ -1273,6 +1285,7 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
       `${label}: counts`,
     );
     await assertFits(page, 390, `${label} list`);
+    await assertChecksTableBox(page, label);
     await page.goto(`${base}/checks/check?id=web`);
     await assertFits(page, 390, `${label} detail`);
     const pre = await page.locator("pre").first().textContent();
@@ -1310,7 +1323,7 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     }
     assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
     ok(
-      `Checks, ${label}: entered through the Checks nav link, list and detail fit 390 px, literal host-binding${hasScript ? " and heartbeat copy" : " line selectable, copy hidden"}, fixed quorum or heartbeat rule on ${EDITORS.length} editors${hasScript ? ", axe 0 on list/detail/shadowed/delete/editors" : ""}, 0 CSP violations`,
+      `Checks, ${label}: entered through the Checks nav link, list and detail fit 390 px, the Checks table region scrolls by ArrowRight under its hint, literal host-binding${hasScript ? " and heartbeat copy" : " line selectable, copy hidden"}, fixed quorum or heartbeat rule on ${EDITORS.length} editors${hasScript ? ", axe 0 on list/detail/shadowed/delete/editors" : ""}, 0 CSP violations`,
     );
   } finally {
     await context.close();
