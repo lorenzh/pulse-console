@@ -10,9 +10,9 @@ import {
   plainDocument,
   submitButton,
 } from "./html.ts";
-import { messagePage } from "./pages.ts";
 import { targetDecision } from "./permissions.ts";
 import { type ConsoleRole, roleLabel } from "./roles.ts";
+import { callout } from "./states.ts";
 import type { PendingInvite, TeamMember } from "./team-store.ts";
 
 /** The kept values and errors of a refused invite form. */
@@ -65,7 +65,7 @@ function memberRow(m: TeamMember, actor: ConsoleRole): string {
   return `<tr>
 <td>${escapeHtml(m.name)}</td>
 <td>${escapeHtml(m.email)}</td>
-<td>${escapeHtml(roleLabel(m.role))}</td>
+<td>${roleTag(m.role)}</td>
 <td>${m.hasAuthenticator ? "2FA: on" : "2FA: off"}</td>
 <td>${memberActions(m, actor)}</td>
 </tr>`;
@@ -79,12 +79,28 @@ function inviteRow(invite: PendingInvite, view: TeamView): string {
     : "";
   return `<tr>
 <td>${escapeHtml(invite.email)}</td>
-<td>${escapeHtml(roleLabel(invite.role))}</td>
+<td>${roleTag(invite.role)}</td>
 <td>${escapeHtml(invite.createdByName ?? "removed")}</td>
-<td>${escapeHtml(utcMinute(invite.expiresAt))}</td>
+<td class="mono">${escapeHtml(utcMinute(invite.expiresAt))}</td>
 <td>${state}</td>
 <td>${action}</td>
 </tr>`;
+}
+
+function warningNotice(text: string | undefined): string {
+  return text === undefined
+    ? ""
+    : callout({ kind: "warning", body: paragraph(text), role: "alert" });
+}
+
+function roleTag(role: ConsoleRole): string {
+  return `<span class="tag tag-neutral">${escapeHtml(roleLabel(role))}</span>`;
+}
+
+function tableBox(name: string, table: string): string {
+  return `<div class="table-scroll" tabindex="0" role="region" aria-label="${name}">
+${table}
+</div>`;
 }
 
 function roleOption(value: string, label: string, selected: string | undefined): string {
@@ -110,7 +126,7 @@ function inviteFormHtml(view: TeamView): string {
   const adminOption = view.role === "owner" ? `\n${roleOption("admin", "Admin", form.role)}` : "";
   return `<section aria-labelledby="invite-heading">
 <h2 id="invite-heading">Invite a person</h2>
-${paragraph(form.notice, ' role="alert"')}${summary}<form method="post" action="/team/invites" class="invite-form">
+${warningNotice(form.notice)}${summary}<form method="post" action="/team/invites" class="invite-form">
 ${csrfField(view.csrf)}
 ${formTokenField(view.inviteFormToken)}
 ${field({ label: "Email", name: "email", type: "email", autocomplete: "off", value: form.email, error: errors.email })}
@@ -134,14 +150,15 @@ function invitesSection(view: TeamView): string {
   }
   return `<section aria-labelledby="invites-heading">
 <h2 id="invites-heading">Pending invites</h2>
-<div class="table-wrap">
-<table>
+${tableBox(
+  "Pending invites table",
+  `<table>
 <thead><tr><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Created by</th><th scope="col">Expires</th><th scope="col">State</th><th scope="col">Actions</th></tr></thead>
 <tbody>
 ${view.invites.map((i) => inviteRow(i, view)).join("\n")}
 </tbody>
-</table>
-</div>
+</table>`,
+)}
 </section>`;
 }
 
@@ -165,7 +182,7 @@ ${formTokenField(view.switchFormToken)}
 <h2 id="org-2fa-heading">Organisation 2FA</h2>
 <p>Two-factor sign-in for everyone: ${isOn ? "on" : "off"}.</p>
 <p>When it is on, every person must set up an authenticator before they can use the console.</p>
-${paragraph(view.switchNotice, ' role="alert"')}${form}
+${warningNotice(view.switchNotice)}${form}
 </section>`;
 }
 
@@ -173,14 +190,15 @@ ${paragraph(view.switchNotice, ' role="alert"')}${form}
 export function teamPageBody(view: TeamView): string {
   return `<section aria-labelledby="people-heading">
 <h2 id="people-heading">People</h2>
-<div class="table-wrap">
-<table>
+${tableBox(
+  "Team table",
+  `<table>
 <thead><tr><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Role</th><th scope="col">2FA</th><th scope="col">Actions</th></tr></thead>
 <tbody>
 ${view.members.map((m) => memberRow(m, view.role)).join("\n")}
 </tbody>
-</table>
-</div>
+</table>`,
+)}
 </section>
 ${invitesSection(view)}
 ${inviteFormHtml(view)}${organisationSection(view)}
@@ -202,17 +220,19 @@ export function inviteLinkBody(view: {
 <input id="invite-link" class="link-output" type="text" readonly value="${escapeHtml(view.link)}">
 </label>
 <p><code>${escapeHtml(view.link)}</code></p>
-${paragraph(`It works once and expires on ${utcMinute(view.expiresAt)}. It is shown only now.`)}<p><a href="/team">Back to the team</a></p>
+<p>It works once and expires on <span class="mono">${escapeHtml(utcMinute(view.expiresAt))}</span>. It is shown only now.</p>
+<p class="plain-foot"><a href="/team">Back to the team</a></p>
 </section>`;
 }
 
 /** The `409` body when the actor's session row went while the request was saved. */
 export function notSavedBody(reloadHref: string): string {
-  return `<section class="state state-error" role="alert">
-<h2>Not saved</h2>
-${paragraph(NOT_SAVED_TEXT)}<p><a href="${escapeHtml(reloadHref)}">Reload</a></p>
-</section>
-`;
+  return callout({
+    kind: "error",
+    title: "Not saved",
+    body: `${paragraph(NOT_SAVED_TEXT)}<p><a href="${escapeHtml(reloadHref)}">Reload</a></p>\n`,
+    role: "alert",
+  });
 }
 
 /** The plain confirmation of revoking one invite. */
@@ -233,12 +253,16 @@ export function revokeInviteBody(view: {
     busyLabel: "Revoking…",
     cancelHref: "/team",
     notice: view.notice,
+    tone: "danger",
   });
 }
 
 /** The plain `404` page of an unknown, expired, revoked or used link; it names no case. */
 export function linkNotValidPage(): string {
-  return messagePage("Link not valid", LINK_NOT_VALID_TEXT);
+  return plainDocument(
+    "Link not valid",
+    `<p class="plain-foot">${escapeHtml(LINK_NOT_VALID_TEXT)}</p>\n`,
+  );
 }
 
 /** The accept form of an invite: the bound email as text, never as a field. */
@@ -261,7 +285,7 @@ export function acceptInvitePage(view: {
   );
   return plainDocument(
     "Join the team",
-    `${paragraph(view.notice, ' role="alert" class="error"')}${summary}<p>Email: ${escapeHtml(view.email)}</p>
+    `${warningNotice(view.notice)}${summary}<p>Email: ${escapeHtml(view.email)}</p>
 <p>Role: ${escapeHtml(roleLabel(view.role))}</p>
 <form method="post" action="${escapeHtml(view.action)}">
 ${csrfField(view.csrf)}
@@ -300,18 +324,17 @@ export function roleFormBody(
   const summary = formErrorSummary(
     view.error === undefined ? [] : [{ name: "role", text: view.error }],
   );
-  return `${paragraph(view.notice, ' role="alert"')}${summary}<p>${escapeHtml(m.name)} (${escapeHtml(m.email)}) is ${escapeHtml(roleLabel(m.role))} now. A new role signs them out.</p>
-<form method="post" action="/team/role?user=${m.id}" class="confirm">
+  return `${warningNotice(view.notice)}${summary}<form method="post" action="/team/role?user=${m.id}" class="panel">
 ${csrfField(view.csrf)}
 ${formTokenField(view.formToken)}
 <input type="hidden" name="revision" value="${escapeHtml(m.revision)}">
+<div class="panel-body"><p>${escapeHtml(m.name)} (${escapeHtml(m.email)}) is ${escapeHtml(roleLabel(m.role))} now. A new role signs them out.</p>
 <label for="field-role">New role
 <select id="field-role" name="role"${described}>
 ${options}
 </select>${error}
-</label>
-<div class="actions">${submitButton({ label: "Change role", busyLabel: "Saving…" })}
-<a class="cancel" href="/team">Cancel</a></div>
+</label></div>
+<div class="panel-foot"><a class="button ghost cancel" href="/team">Cancel</a> ${submitButton({ label: "Change role", busyLabel: "Saving…" })}</div>
 </form>
 `;
 }
@@ -370,6 +393,7 @@ export function resetTwoFactorBody(view: MemberConfirmView): string {
     busyLabel: "Resetting…",
     cancelHref: "/team",
     notice: view.notice,
+    tone: "danger",
   });
 }
 
@@ -386,6 +410,7 @@ export function resetLinkConfirmBody(view: MemberConfirmView): string {
     busyLabel: "Making…",
     cancelHref: "/team",
     notice: view.notice,
+    tone: "safe",
   });
 }
 
@@ -397,7 +422,8 @@ export function resetLinkBody(view: { link: string; name: string; expiresAt: num
 <input id="reset-link" class="link-output" type="text" readonly value="${escapeHtml(view.link)}">
 </label>
 <p><code>${escapeHtml(view.link)}</code></p>
-${paragraph(`It works once and expires on ${utcMinute(view.expiresAt)}. Using it signs ${view.name} out everywhere.`)}<p><a href="/team">Back to the team</a></p>
+<p>It works once and expires on <span class="mono">${escapeHtml(utcMinute(view.expiresAt))}</span>. Using it signs ${escapeHtml(view.name)} out everywhere.</p>
+<p class="plain-foot"><a href="/team">Back to the team</a></p>
 </section>`;
 }
 
@@ -415,7 +441,7 @@ export function resetPasswordPage(view: {
   );
   return plainDocument(
     "Set a new password",
-    `${paragraph(view.notice, ' role="alert" class="error"')}${summary}<p>Email: ${escapeHtml(view.email)}</p>
+    `${warningNotice(view.notice)}${summary}<p>Email: ${escapeHtml(view.email)}</p>
 <form method="post" action="${escapeHtml(view.action)}">
 ${csrfField(view.csrf)}
 ${formTokenField(view.formToken)}

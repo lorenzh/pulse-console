@@ -3,7 +3,7 @@ import { escapeHtml } from "@lorenzh/pulse-kit";
 import { NO_TOKEN_TEXT } from "./connection-test.ts";
 import { paragraph } from "./html.ts";
 import type { OverviewRead } from "./overview-read.ts";
-import { apiUnavailableState, emptyState, tokenRejectedBanner } from "./states.ts";
+import { apiUnavailableState, callout, emptyState, tokenRejectedBanner } from "./states.ts";
 
 /** The number of checks per state, and the total. */
 export type CheckCounts = Record<CheckState, number> & { total: number };
@@ -61,10 +61,14 @@ function summary(counts: CheckCounts): string {
       action: { href: "/", label: "Reload" },
     });
   }
-  const rows = COUNT_ROWS.map(
-    ([label, key]) => `<li>${escapeHtml(label)}: ${String(counts[key])}</li>`,
-  ).join("\n");
-  return `${paragraph(OVERALL_TEXT[state])}<ul class="counts">
+  const rows = COUNT_ROWS.map(([label, key]) => {
+    const dot =
+      key === "total"
+        ? ""
+        : `<span class="check-state check-state-${key}"><span class="dot" aria-hidden="true"></span></span>`;
+    return `<li>${dot}${escapeHtml(label)}: ${String(counts[key])}</li>`;
+  }).join("\n");
+  return `${paragraph(OVERALL_TEXT[state])}<ul class="counts mono">
 ${rows}
 </ul>
 `;
@@ -75,15 +79,12 @@ export type OverviewView = { banner: string; body: string };
 
 /** Renders the Overview for one read. `apiOrigin` is the origin of the saved API URL. */
 export function overviewView(apiOrigin: string, read: OverviewRead): OverviewView {
-  const origin = paragraph(`pulse-api: ${apiOrigin}`);
+  const origin = paragraph(`pulse-api: ${apiOrigin}`, ' class="mono"');
   switch (read.kind) {
     case "no-token":
       return {
         banner: "",
-        body: `${origin}<section class="state state-error" role="alert">
-<h2>${escapeHtml("pulse-api is not available")}</h2>
-${paragraph(NO_TOKEN_TEXT)}</section>
-`,
+        body: `${origin}${callout({ kind: "error", title: "pulse-api is not available", body: paragraph(NO_TOKEN_TEXT), role: "alert" })}`,
       };
     case "token-rejected":
       return { banner: tokenRejectedBanner(), body: origin };

@@ -10,6 +10,7 @@ ENV NODE_ENV=production PULSE_CONSOLE_HOST=0.0.0.0 PULSE_CONSOLE_DB=/data/consol
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
+COPY assets ./assets
 RUN mkdir /data && chown bun:bun /data
 USER bun
 EXPOSE 8082

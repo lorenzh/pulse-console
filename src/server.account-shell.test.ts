@@ -11,7 +11,7 @@ import {
 } from "../test/signed-in-console.ts";
 
 const CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -39,12 +39,12 @@ function expectAccountShell(res: Reply, title: string): void {
   expect(countOf(res.body, "<h1>")).toBe(1);
   expect(res.body).toContain(`<h1>${title}</h1>`);
   expect(res.body).toContain(`<title>${title}`);
-  expect(countOf(res.body, '<header class="shell-header">')).toBe(1);
+  expect(countOf(res.body, '<header class="sidebar">')).toBe(1);
   expect(countOf(res.body, '<nav aria-label="Main">')).toBe(1);
   expect(countOf(res.body, "<script")).toBe(1);
   expect(res.body).toContain('<script src="/console.js" defer></script>');
-  expect(res.body).toContain('<a href="/">Overview</a>');
-  expect(res.body).not.toContain("aria-current");
+  expect(res.body).toContain('<a class="nav-item" href="/"><svg class="icon"');
+  expect(res.body).not.toMatch(/class="nav-item"[^>]*aria-current/);
   expect(res.body).toContain(
     'Signed in as Owner <span class="account-email">(owner@example.com)</span>',
   );
@@ -53,9 +53,15 @@ function expectAccountShell(res: Reply, title: string): void {
   expect(res.body).not.toMatch(/\son[a-z]+=/);
 }
 
+const SUBMITS: Record<string, string> = {
+  "Sign out all other sessions": '<button type="submit" class="danger">',
+  "Create new recovery codes": '<button type="submit">',
+};
+
+/** Cancel is a ghost link before the submit; sign out all is danger, new codes stay primary. */
 function expectCancel(body: string, button: string, href: string): void {
   expect(body).toContain(
-    `<div class="actions"><button type="submit">${button}</button>\n<a class="cancel" href="${href}">Cancel</a></div>`,
+    `<div class="panel-foot"><a class="button ghost cancel" href="${href}">Cancel</a> ${SUBMITS[button]}${button}</button></div>`,
   );
 }
 
@@ -119,23 +125,38 @@ describe("account pages in the signed-in shell", () => {
     const c = await signedIn();
     const { body } = await getPage(c, "/account/sessions");
     expect(body).toContain('<p><a href="/account/security">Back to account security</a></p>');
+    expect(body).toContain(
+      '<div class="table-scroll" tabindex="0" role="region" aria-label="Sessions table">\n<table id="sessions">',
+    );
+    expect(body).toContain("This browser");
     expect(countOf(body, 'action="/sign-out"')).toBe(1);
   });
 
-  test("both confirmations have Cancel next to the primary button", async () => {
+  test("both confirmations are panels with Cancel before the submit", async () => {
     const c = await signedIn();
     const all = await getPage(c, "/account/sessions/sign-out-all");
     expectCancel(all.body, "Sign out all other sessions", "/account/sessions");
+    expect(all.body).toContain(
+      '<form method="post" action="/account/sessions/sign-out-all" class="panel confirm confirm-danger">',
+    );
     const codes = await getPage(c, "/account/recovery-codes");
     expectCancel(codes.body, "Create new recovery codes", "/account/security");
+    expect(codes.body).toContain(
+      '<form method="post" action="/account/recovery-codes" class="panel confirm confirm-safe">',
+    );
+    expect(codes.body).toMatch(
+      /<div class="panel-body">[\s\S]*name="password"[\s\S]*<\/div>\n<div class="panel-foot">/,
+    );
+    expect(codes.body).not.toContain("danger");
   });
 
   test("a viewer sees Overview and no Team", async () => {
     const c = await signedIn({ isViewer: true });
     const res = await getPage(c, "/account/security");
     expect(res.status).toBe(200);
-    expect(res.body).toContain('<a href="/">Overview</a>');
+    expect(res.body).toContain("<span>Overview</span></a>");
     expect(res.body).not.toContain(">Team<");
+    expect(res.body).not.toContain("Instance");
     expect(res.body).toContain("Role: Viewer");
   });
 
@@ -155,6 +176,15 @@ describe("account pages in the signed-in shell", () => {
   });
 });
 
+describe("account notices are callouts", () => {
+  test("the signed-out notice on Sessions is a success callout with role status", async () => {
+    const c = await signedIn();
+    const { body } = await getPage(c, "/account/sessions?signed-out=others");
+    expect(body).toContain('<section class="callout callout-success" role="status">');
+    expect(body).toContain("<p>All other sessions are signed out.</p>");
+  });
+});
+
 describe("account re-renders keep the shell and Cancel", () => {
   async function codesPost(c: SignedInConsole, password: string, token?: string): Promise<Reply> {
     const page = await getPage(c, "/account/recovery-codes");
@@ -171,6 +201,13 @@ describe("account re-renders keep the shell and Cancel", () => {
     expect(res.status).toBe(401);
     expectAccountShell(res, "New recovery codes");
     expectCancel(res.body, "Create new recovery codes", "/account/security");
+  });
+
+  test("the wrong password is an error callout with role alert, not a bare paragraph", async () => {
+    const c = await signedIn();
+    const res = await codesPost(c, "wrong-password-0123456789");
+    expect(res.body).toContain('<section class="callout callout-error" role="alert">');
+    expect(res.body).not.toContain('class="error"');
   });
 
   test("an empty password is 422 in the shell", async () => {
@@ -220,7 +257,7 @@ describe("account pages outside the full stage", () => {
     const res = await getPage(c, "/account/security");
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/account/authenticator");
-    expect(res.body).not.toContain("shell-header");
+    expect(res.body).not.toContain('class="sidebar"');
   });
 
   test("a factor-stage session is sent to /sign-in/factor", async () => {
@@ -232,6 +269,6 @@ describe("account pages outside the full stage", () => {
     const res = await getPage(c, "/account/sessions");
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/sign-in/factor");
-    expect(res.body).not.toContain("shell-header");
+    expect(res.body).not.toContain('class="sidebar"');
   });
 });

@@ -8,6 +8,7 @@ import {
   startFakeApi,
   WIRE_HEADERS,
 } from "../test/fake-api.ts";
+import { expectCalloutsOnly } from "../test/rendered-audit.ts";
 import {
   formTokenOf,
   getPage,
@@ -106,9 +107,20 @@ describe("GET /checks/new", () => {
     const c = await teamConsole(fakeApi());
     const res = await getPage(c, "/checks/new", c.cookies.member);
     expect(res.status).toBe(200);
-    for (const type of ["http", "tls", "tcp", "dns", "domain", "heartbeat"]) {
-      expect(res.body).toContain(`<a href="/checks/new?type=${type}">`);
+    const labels = {
+      http: "HTTP",
+      tls: "TLS",
+      tcp: "TCP",
+      dns: "DNS",
+      domain: "Domain",
+      heartbeat: "Heartbeat",
+    };
+    for (const [type, label] of Object.entries(labels)) {
+      expect(res.body).toContain(
+        `<li class="panel"><a href="/checks/new?type=${type}">${label}</a>: `,
+      );
     }
+    expectCalloutsOnly(res.body);
     const unknown = await getPage(c, "/checks/new?type=ftp", c.cookies.member);
     expect(unknown.body).toContain('<a href="/checks/new?type=heartbeat">');
     expect(unknown.body).not.toContain('<form method="post" action="/checks/new');
@@ -217,7 +229,8 @@ describe("POST /checks/new", () => {
     const c = await teamConsole(api);
     const res = await getPage(c, "/checks/check?id=web&saved=1", c.cookies.member);
     expect(res.status).toBe(200);
-    expect(res.body).toContain('<p role="status">Check saved.</p>');
+    expect(res.body).toContain('<section class="callout callout-success" role="status">');
+    expect(res.body).toContain("<p>Check saved.</p>");
   });
 
   test("an existing id answers 409 at the id field without a write", async () => {
@@ -767,6 +780,10 @@ describe("write outcomes (R8 rows)", () => {
       const res = await create(c, HTTP_FIELDS);
       expect(res.status).toBe(item.status);
       if (item.text !== "") expect(res.body).toContain(escapeHtml(item.text));
+      if (item.status === 404) {
+        expect(res.body).toContain('<section class="callout callout-error" role="alert">\n');
+      }
+      expectCalloutsOnly(res.body);
       expect(writes(api)).toEqual(["POST /admin/checks"]);
       expect(peopleRows(c)).toEqual(item.rows.map(row));
       expect(res.headers.get("location")).toBe(
@@ -833,6 +850,8 @@ describe("write outcomes (R8 rows)", () => {
     const res = await create(c, HTTP_FIELDS);
     expect(res.status).toBe(200);
     expect(res.body).toContain("Saved in pulse-api. The People log row could not be written.");
+    expect(res.body).toContain('<section class="callout callout-warning" role="alert">');
+    expectCalloutsOnly(res.body);
     const errors = c.logs.filter((line) => line.includes("check change not logged"));
     expect(errors).toHaveLength(1);
     expect(JSON.parse(errors[0] ?? "{}")).toMatchObject({ error: "PeopleLogError" });

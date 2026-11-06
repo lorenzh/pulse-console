@@ -16,7 +16,7 @@ import { sessionDigest } from "./account-store.ts";
 
 const START = 9_000_000;
 const CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -37,13 +37,15 @@ describe("GET /team", () => {
     expect(r.status).toBe(200);
     expect(r.headers.get("content-security-policy")).toBe(CSP);
     expect(r.headers.get("cache-control")).toBe("no-store");
-    expect(r.body).toContain('<a href="/team" aria-current="page">Team</a>');
+    expect(r.body).toContain(
+      '<a class="nav-item" href="/team" aria-current="page"><svg class="icon"',
+    );
     expect(r.body).toContain("<h1");
     for (const row of [
-      "<td>Owner</td>\n<td>owner@example.com</td>\n<td>Owner</td>\n<td>2FA: on</td>",
-      "<td>Ada Admin</td>\n<td>admin@example.com</td>\n<td>Admin</td>\n<td>2FA: on</td>",
-      "<td>Mo Member</td>\n<td>member@example.com</td>\n<td>Member</td>\n<td>2FA: off</td>",
-      "<td>Vi Viewer</td>\n<td>viewer@example.com</td>\n<td>Viewer</td>\n<td>2FA: off</td>",
+      '<td>Owner</td>\n<td>owner@example.com</td>\n<td><span class="tag tag-neutral">Owner</span></td>\n<td>2FA: on</td>',
+      '<td>Ada Admin</td>\n<td>admin@example.com</td>\n<td><span class="tag tag-neutral">Admin</span></td>\n<td>2FA: on</td>',
+      '<td>Mo Member</td>\n<td>member@example.com</td>\n<td><span class="tag tag-neutral">Member</span></td>\n<td>2FA: off</td>',
+      '<td>Vi Viewer</td>\n<td>viewer@example.com</td>\n<td><span class="tag tag-neutral">Viewer</span></td>\n<td>2FA: off</td>',
     ]) {
       expect(r.body).toContain(row);
     }
@@ -110,10 +112,10 @@ describe("GET /team", () => {
     const r = await getPage(c, "/team", c.cookies.admin);
     expect(r.status).toBe(200);
     expect(r.body).toContain(
-      "<td>new@example.com</td>\n<td>Member</td>\n<td>Ada Admin</td>\n<td>2023-11-14 22:13 UTC</td>\n<td>pending</td>",
+      '<td>new@example.com</td>\n<td><span class="tag tag-neutral">Member</span></td>\n<td>Ada Admin</td>\n<td class="mono">2023-11-14 22:13 UTC</td>\n<td>pending</td>',
     );
     expect(r.body).toContain(
-      "<td>late@example.com</td>\n<td>Viewer</td>\n<td>removed</td>\n<td>1970-01-01 02:30 UTC</td>\n<td>expired</td>",
+      '<td>late@example.com</td>\n<td><span class="tag tag-neutral">Viewer</span></td>\n<td>removed</td>\n<td class="mono">1970-01-01 02:30 UTC</td>\n<td>expired</td>',
     );
     expect(r.body).not.toContain("used@example.com");
     expect(r.body).not.toContain("gone@example.com");
@@ -228,7 +230,8 @@ describe("team commits from a revoked session (acceptance 5b)", () => {
     expect(out.status).toBe(303);
     const r = await held.finish();
     expect(r.status).toBe(409);
-    expect(r.body).toContain("<h2>Not saved</h2>");
+    expect(r.body).toContain('<section class="callout callout-error" role="alert">');
+    expect(r.body).toContain('<h2 class="callout-title">Not saved</h2>');
     expect(r.body).toContain(
       "Your password or session changed while this was saved. Nothing was changed.",
     );
@@ -720,6 +723,7 @@ describe("ownership transfer", () => {
     });
     expect(bare.status).toBe(409);
     expect(bare.body).toContain("Ada Admin has not set up two-factor sign-in yet.");
+    expect(bare.body).toContain('<p class="plain-foot"><a href="/team">Back to the team</a></p>');
     expect(everyRow(c)).toEqual(after);
   });
 
@@ -1247,5 +1251,46 @@ describe("acceptance 5b: the four held team commits and the control", () => {
     expect(r.status).toBe(200);
     expect(r.body).toContain("/invite/");
     expect(count(c, "invites")).toBe(1);
+  });
+});
+
+describe("Team confirmation tones and table regions", () => {
+  test("destructive submits are danger, Make reset link and Change role stay primary", async () => {
+    const c = await startTeamConsole({
+      apiUrl: "http://127.0.0.1:9",
+      extra: (db, ids) => {
+        db.query(
+          "INSERT INTO invites (token_digest, email, role, created_by, created_at, expires_at, used_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ).run("d1", "new@example.com", "member", ids.owner, START, START + 10_000_000, null, null);
+      },
+    });
+    cleanups.push(() => c.close());
+    const page = await getPage(c, "/team", c.cookies.owner);
+    expect(page.body).toContain(
+      '<div class="table-scroll" tabindex="0" role="region" aria-label="Team table">\n<table>',
+    );
+    expect(page.body).toContain(
+      '<div class="table-scroll" tabindex="0" role="region" aria-label="Pending invites table">\n<table>',
+    );
+    const invite = /\/team\/invites\/revoke\?invite=(\d+)/.exec(page.body)?.[1];
+    expect(invite).toBeDefined();
+    const rows: Array<[string, string, boolean]> = [
+      [`/team/invites/revoke?invite=${invite}`, "Revoke invite", true],
+      [`/team/remove?user=${c.ids.admin}`, "Remove", true],
+      [`/team/transfer?user=${c.ids.admin}`, "Make owner", true],
+      [`/team/reset-2fa?user=${c.ids.admin}`, "Reset 2FA", true],
+      [`/team/reset-link?user=${c.ids.admin}`, "Make reset link", false],
+      [`/team/role?user=${c.ids.admin}`, "Change role", false],
+    ];
+    for (const [path, label, isDanger] of rows) {
+      const r = await getPage(c, path, c.cookies.owner);
+      expect(r.status).toBe(200);
+      const submit = new RegExp(
+        `<button type="submit"( class="danger")? data-busy-label="[^"]+">${label}</button>`,
+      ).exec(r.body);
+      expect(submit === null ? undefined : submit[1] !== undefined).toBe(isDanger);
+      expect(r.body).toContain('<a class="button ghost cancel" href="/team">Cancel</a> <button');
+      expect(r.body).not.toContain("style=");
+    }
   });
 });

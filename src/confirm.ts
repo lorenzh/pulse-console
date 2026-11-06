@@ -7,9 +7,10 @@ import {
   paragraph,
   submitButton,
 } from "./html.ts";
+import { callout } from "./states.ts";
 
 /** The parts every confirmation page shares. The shell renders the heading as its `h1`. */
-export type ConfirmView = {
+type ConfirmParts = {
   /** The consequence text, written by the caller. */
   consequence: string;
   action: string;
@@ -26,7 +27,16 @@ export type ConfirmView = {
   hidden?: ReadonlyArray<readonly [string, string]> | undefined;
 };
 
-export type TypedConfirmView = ConfirmView & {
+/**
+ * A plain confirmation. `tone` has no default, so every caller decides: `danger` for an action
+ * that deletes, revokes, removes or transfers, `safe` otherwise.
+ */
+export type ConfirmView = ConfirmParts & { tone: ConfirmTone };
+
+export type ConfirmTone = "danger" | "safe";
+
+/** A typed confirmation. It is always danger, so it has no `tone`. */
+export type TypedConfirmView = ConfirmParts & {
   /** The target's display name, read from the route's own data. */
   targetName: string;
   /** The kept typed value after a refused POST. */
@@ -47,7 +57,9 @@ export function typedNameError(typed: string, expected: string): string | undefi
 }
 
 function notice(text: string | undefined): string {
-  return text === undefined ? "" : paragraph(text, ' role="alert"');
+  return text === undefined
+    ? ""
+    : callout({ kind: "warning", body: paragraph(text), role: "alert" });
 }
 
 function hiddenFields(hidden: ConfirmView["hidden"]): string {
@@ -59,13 +71,19 @@ function hiddenFields(hidden: ConfirmView["hidden"]): string {
     .join("");
 }
 
-function confirmForm(view: ConfirmView, inner: string): string {
-  return `<form method="post" action="${escapeHtml(view.action)}" class="confirm">
+function confirmForm(view: ConfirmParts, tone: ConfirmTone, inner: string): string {
+  const submit = submitButton({
+    label: view.submitLabel,
+    busyLabel: view.busyLabel,
+    variant: tone === "danger" ? "danger" : "primary",
+  });
+  return `<form method="post" action="${escapeHtml(view.action)}" class="panel confirm confirm-${tone}">
 ${csrfField(view.csrf)}
 ${formTokenField(view.formToken)}
 <input type="hidden" name="revision" value="${escapeHtml(view.revision)}">
-${hiddenFields(view.hidden)}${inner}<div class="actions">${submitButton({ label: view.submitLabel, busyLabel: view.busyLabel })}
-<a class="cancel" href="${escapeHtml(view.cancelHref)}">Cancel</a></div>
+${hiddenFields(view.hidden)}<div class="panel-body"><p class="confirm-title">${escapeHtml(view.consequence)}</p>
+${inner}</div>
+<div class="panel-foot"><a class="button ghost cancel" href="${escapeHtml(view.cancelHref)}">Cancel</a> ${submit}</div>
 </form>
 `;
 }
@@ -81,11 +99,11 @@ export function typedConfirmPage(view: TypedConfirmView): string {
     value: view.typed,
     error: view.error,
   });
-  return `${notice(view.notice)}${formErrorSummary(errors)}${paragraph(view.consequence)}<p class="confirm-target">${escapeHtml(view.targetName)}</p>
-${confirmForm(view, input + "\n")}`;
+  const inner = `<p class="confirm-target mono">${escapeHtml(view.targetName)}</p>\n${input}\n`;
+  return `${notice(view.notice)}${formErrorSummary(errors)}${confirmForm(view, "danger", inner)}`;
 }
 
 /** A confirmation with one submit button. GET never acts. */
 export function plainConfirmPage(view: ConfirmView): string {
-  return `${notice(view.notice)}${paragraph(view.consequence)}${confirmForm(view, "")}`;
+  return `${notice(view.notice)}${confirmForm(view, view.tone, "")}`;
 }

@@ -37,6 +37,7 @@ export type PathLabel =
   | "/checks/delete"
   | "/invite/:token"
   | "/reset/:token"
+  | "/fonts/:file"
   | "other";
 
 export type AuthKind =

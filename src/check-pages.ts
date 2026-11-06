@@ -17,7 +17,7 @@ import { NO_TOKEN_TEXT } from "./connection-test.ts";
 import { paragraph } from "./html.ts";
 import { isAllowed } from "./permissions.ts";
 import type { ConsoleRole } from "./roles.ts";
-import { apiUnavailableState, emptyState, tokenRejectedBanner } from "./states.ts";
+import { apiUnavailableState, callout, emptyState, tokenRejectedBanner } from "./states.ts";
 
 /** A Checks page body and the banner for the shell slot (empty when none). */
 export type CheckView = { banner: string; body: string };
@@ -49,10 +49,26 @@ const SOURCE_LABELS: Record<(typeof CHECK_SOURCE_FILTERS)[number], string> = {
 };
 
 function errorSection(heading: string, text: string): string {
-  return `<section class="state state-error" role="alert">
-<h2>${escapeHtml(heading)}</h2>
-${paragraph(text)}</section>
-`;
+  return callout({ kind: "error", title: heading, body: paragraph(text), role: "alert" });
+}
+
+/** R7: a check state with its dot and the unchanged label; `dense` is the table form. */
+export function checkStateHtml(state: CheckState | "shadowed", isDense: boolean): string {
+  const label = state === "shadowed" ? SHADOWED_TEXT : STATE_LABELS[state];
+  const dense = isDense ? " dense" : "";
+  return `<span class="check-state check-state-${state}${dense}"><span class="dot" aria-hidden="true"></span><span>${escapeHtml(label)}</span></span>`;
+}
+
+/** R7: a tag of one kind around unchanged text. */
+export function tagHtml(kind: "neutral" | "info" | "error", text: string): string {
+  return `<span class="tag tag-${kind}">${escapeHtml(text)}</span>`;
+}
+
+/** R7: the source tag of a check: checks.json neutral, Console info. */
+export function sourceTag(source: "file" | "database"): string {
+  return source === "file"
+    ? tagHtml("neutral", "checks.json (read-only)")
+    : tagHtml("info", "Console");
 }
 
 /** The view of a read the Checks pages cannot use. `retryHref` is the page itself. */
@@ -82,10 +98,13 @@ const FILE_HEADINGS: Record<Exclude<AdminFileStatus["state"], "ok">, string> = {
 /** R1: the banner of a file status other than `ok`. */
 function fileBanner(file: AdminFileStatus): string {
   if (file.state === "ok") return "";
-  return `<section class="state state-error" role="alert">
-<h2>${escapeHtml(FILE_HEADINGS[file.state])}</h2>
-${paragraph(file.message ?? undefined)}${paragraph(`The last valid version from ${utcTime(file.lastAppliedAt)} stays in use.`)}${paragraph("Console checks can still be changed.")}</section>
-`;
+  const lastValid = `<p>The last valid version from <span class="mono">${escapeHtml(utcTime(file.lastAppliedAt))}</span> stays in use.</p>`;
+  return callout({
+    kind: "info",
+    title: FILE_HEADINGS[file.state],
+    body: `${paragraph(file.message ?? undefined)}${lastValid}${paragraph("Console checks can still be changed.")}`,
+    role: "alert",
+  });
 }
 
 /** List rows: the effective checks in api order, then the shadowed definitions. */
@@ -142,17 +161,16 @@ function rowHtml(
   results: ReadonlyMap<string, number | null>,
 ): string {
   const { check } = row;
-  const source = check.source === "file" ? "checks.json (read-only)" : "Console";
-  const state = row.kind === "shadowed" ? SHADOWED_TEXT : STATE_LABELS[row.state];
+  const state = row.kind === "shadowed" ? "shadowed" : row.state;
   const cells = [
-    check.name,
-    check.id,
-    TYPE_LABELS[check.type ?? "http"],
-    targetText(check),
-    source,
-    state,
-    lastResultAt(row, results),
-  ].map((text) => `<td>${escapeHtml(text)}</td>`);
+    `<td>${escapeHtml(check.name)}</td>`,
+    `<td class="mono">${escapeHtml(check.id)}</td>`,
+    `<td>${escapeHtml(TYPE_LABELS[check.type ?? "http"])}</td>`,
+    `<td>${escapeHtml(targetText(check))}</td>`,
+    `<td>${sourceTag(check.source)}</td>`,
+    `<td>${checkStateHtml(state, true)}</td>`,
+    `<td class="mono">${escapeHtml(lastResultAt(row, results))}</td>`,
+  ];
   return `<tr>${cells.join("")}<td>${rowActions(row, role)}</td></tr>`;
 }
 
@@ -164,7 +182,8 @@ function table(
   const heads = ["Name", "Id", "Type", "Target", "Source", "State", "Last result", "Actions"]
     .map((head) => `<th scope="col">${head}</th>`)
     .join("");
-  return `<div class="table-wrap table-scroll">
+  return `<p class="table-scroll-hint">Scroll sideways to see all columns.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Checks table">
 <table class="checks">
 <thead><tr>${heads}</tr></thead>
 <tbody>
@@ -213,7 +232,7 @@ function counts(config: AdminConfigResponse): string {
   const checks = `${n} ${n === 1 ? "check" : "checks"}`;
   const definitions = m === 1 ? "definition" : "definitions";
   const shadowed = m > 0 ? `, ${m} shadowed ${definitions}` : "";
-  return paragraph(`${checks}${shadowed}`, ' class="counts"');
+  return paragraph(`${checks}${shadowed}`, ' class="counts mono"');
 }
 
 function memberLinks(role: ConsoleRole): string {
@@ -229,10 +248,7 @@ function emptyInstallation(role: ConsoleRole): string {
         text: "pulse-api has no checks.",
         action: { href: "/checks/new", label: "Add a check" },
       })
-    : `<section class="state state-empty">
-<h2>No checks yet</h2>
-${paragraph("A member can add checks.")}</section>
-`;
+    : emptyState({ title: "No checks yet", text: "A member can add checks." });
 }
 
 function listBody(
@@ -242,7 +258,9 @@ function listBody(
   role: ConsoleRole,
   results: ReadonlyMap<string, number | null>,
 ): string {
-  const notice = parsed.hasIgnoredValues ? paragraph(FILTERS_IGNORED_NOTICE, ' role="status"') : "";
+  const notice = parsed.hasIgnoredValues
+    ? callout({ kind: "info", body: paragraph(FILTERS_IGNORED_NOTICE), role: "status" })
+    : "";
   if (rows.length === 0) return `${memberLinks(role)}${notice}${emptyInstallation(role)}`;
   const matched = rows.filter((row) => isCheckRowMatched(row, parsed.filters));
   const content =

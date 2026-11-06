@@ -23,7 +23,7 @@ import { createConsoleServer, listen } from "./server.ts";
 import { createTeamStore } from "./team-store.ts";
 
 const CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const LINK_NOT_VALID =
   "This link is not valid. It may have expired or been used. Ask an admin for a new one.";
 const PASSWORD = "invited-person-password-1";
@@ -120,7 +120,7 @@ describe("create and the link page", () => {
     expect(reply.body).toContain("<p>Email: new@example.com</p>");
     expect(reply.body).toContain("<p>Role: Member</p>");
     expect(reply.body).toContain(
-      "<p>It works once and expires on 1970-01-08 02:30 UTC. It is shown only now.</p>",
+      '<p>It works once and expires on <span class="mono">1970-01-08 02:30 UTC</span>. It is shown only now.</p>',
     );
     expect(reply.body).not.toContain("SMTP");
     const expected = createHash("sha256").update(token).digest("hex");
@@ -270,6 +270,7 @@ describe("accept", () => {
     const late = await getPage(c, `/invite/${second.token}`, "");
     expect(late.status).toBe(404);
     expect(late.body).toContain("<h1>Link not valid</h1>");
+    expect(late.body).toContain(`<p class="plain-foot">${LINK_NOT_VALID}</p>`);
     expect(late.body).toContain(LINK_NOT_VALID);
     expect(late.body).not.toContain("two@example.com");
     expect((await accept(c, second.token, openedSecond)).status).toBe(404);

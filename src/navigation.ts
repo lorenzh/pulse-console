@@ -52,3 +52,14 @@ export function visibleNavigation(
 ): NavEntry[] {
   return registry.filter((e) => e.isAvailable && hasRole(role, e.minRole));
 }
+
+/** Splits visible entries into the main group and the admin "Instance" group, in order. */
+export function navigationGroups(entries: readonly NavEntry[]): {
+  main: NavEntry[];
+  instance: NavEntry[];
+} {
+  return {
+    main: entries.filter((e) => e.minRole !== "admin"),
+    instance: entries.filter((e) => e.minRole === "admin"),
+  };
+}

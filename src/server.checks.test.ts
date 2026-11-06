@@ -20,6 +20,7 @@ import {
   UPSTREAM_SENTINEL,
   WIRE_HEADERS,
 } from "../test/fake-api.ts";
+import { expectCalloutsOnly } from "../test/rendered-audit.ts";
 import {
   getPage,
   type SignedInConsole,
@@ -60,7 +61,9 @@ async function consoleFor(
 }
 
 function rowOf(body: string, id: string): string {
-  const row = body.split("<tr>").find((part) => part.includes(`<td>${escapeHtml(id)}</td>`));
+  const row = body
+    .split("<tr>")
+    .find((part) => part.includes(`<td class="mono">${escapeHtml(id)}</td>`));
   return row ?? "";
 }
 
@@ -113,19 +116,43 @@ describe("GET /checks", () => {
     for (const label of ["HTTP", "TLS", "TCP", "DNS", "Domain", "Heartbeat"]) {
       expect(res.body).toContain(`<td>${label}</td>`);
     }
-    expect(rowOf(res.body, "web")).toContain("<td>Up</td>");
-    expect(rowOf(res.body, "cert")).toContain("<td>Degraded</td>");
-    expect(rowOf(res.body, "db-port")).toContain("<td>Down</td>");
-    expect(rowOf(res.body, "db-port")).toContain("<td>checks.json (read-only)</td>");
+    expect(rowOf(res.body, "web")).toContain(
+      '<td><span class="check-state check-state-up dense"><span class="dot" aria-hidden="true"></span><span>Up</span></span></td>',
+    );
+    expect(rowOf(res.body, "cert")).toContain(
+      '<td><span class="check-state check-state-degraded dense"><span class="dot" aria-hidden="true"></span><span>Degraded</span></span></td>',
+    );
+    expect(rowOf(res.body, "db-port")).toContain(
+      '<td><span class="check-state check-state-down dense"><span class="dot" aria-hidden="true"></span><span>Down</span></span></td>',
+    );
+    expect(rowOf(res.body, "db-port")).toContain(
+      '<td><span class="tag tag-neutral">checks.json (read-only)</span></td>',
+    );
+    expect(rowOf(res.body, "web")).toContain('<td><span class="tag tag-info">Console</span></td>');
+    expect(res.body).toContain(
+      '<p class="table-scroll-hint">Scroll sideways to see all columns.</p>\n<div class="table-scroll" tabindex="0" role="region" aria-label="Checks table">',
+    );
+    expect(res.body).not.toContain("style=");
+    expect(res.body).not.toContain("<style");
     expect(rowOf(res.body, "db-port")).toContain("<td>db.internal:5432</td>");
-    expect(rowOf(res.body, "domain-exp")).toContain("<td>Unknown</td>");
-    expect(rowOf(res.body, "domain-exp")).toContain("<td>No results yet</td>");
-    expect(rowOf(res.body, "nightly-backup")).toContain("<td>Unknown</td>");
-    expect(rowOf(res.body, "nightly-backup")).toContain("<td>Console</td>");
-    expect(rowOf(res.body, "web")).toContain("<td>2026-11-05 11:59:30 UTC</td>");
+    expect(rowOf(res.body, "domain-exp")).toContain(
+      '<td><span class="check-state check-state-unknown dense"><span class="dot" aria-hidden="true"></span><span>Unknown</span></span></td>',
+    );
+    expect(rowOf(res.body, "domain-exp")).toContain('<td class="mono">No results yet</td>');
+    expect(rowOf(res.body, "nightly-backup")).toContain(
+      '<td><span class="check-state check-state-unknown dense"><span class="dot" aria-hidden="true"></span><span>Unknown</span></span></td>',
+    );
+    expect(rowOf(res.body, "nightly-backup")).toContain(
+      '<td><span class="tag tag-info">Console</span></td>',
+    );
+    expect(rowOf(res.body, "web")).toContain('<td class="mono">2026-11-05 11:59:30 UTC</td>');
     expect(rowOf(res.body, "web")).toContain(`<td>${escapeHtml(QUOTE_URL)}</td>`);
-    expect(res.body).toContain("<td>Maintenance</td>");
-    expect(res.body).toContain("<td>Shadowed by checks.json</td>");
+    expect(res.body).toContain(
+      '<td><span class="check-state check-state-maintenance dense"><span class="dot" aria-hidden="true"></span><span>Maintenance</span></span></td>',
+    );
+    expect(res.body).toContain(
+      '<td><span class="check-state check-state-shadowed dense"><span class="dot" aria-hidden="true"></span><span>Shadowed by checks.json</span></span></td>',
+    );
     expect(res.body).toContain("<td>example.com AAAA</td>");
     expect(res.body).toContain('href="/checks/new"');
     expect(res.body).toContain('href="/checks/export"');
@@ -183,7 +210,9 @@ describe("GET /checks", () => {
     const c = await consoleFor(fakeApi());
     for (const query of ["type=http&type=tcp", "state=shadowed", "type=", `q=${"x".repeat(201)}`]) {
       const res = await getPage(c, `/checks?${query}`);
-      expect(res.body).toContain("Some filter values were not understood and were ignored.");
+      expect(res.body).toContain('<section class="callout callout-info" role="status">');
+      expect(res.body).toContain("<p>Some filter values were not understood and were ignored.</p>");
+      expectCalloutsOnly(res.body);
       expect(rowCount(res.body)).toBe(7);
     }
   });
@@ -205,8 +234,12 @@ describe("GET /checks", () => {
     const viewer = await consoleFor(fakeApi(empty), { role: "viewer" });
     const seen = await getPage(viewer, "/checks");
     expect(seen.body).toContain("No checks yet");
-    expect(seen.body).toContain("A member can add checks.");
+    expect(seen.body).toContain(
+      '<section class="empty-state">\n<h2>No checks yet</h2>\n<p>A member can add checks.</p>\n</section>',
+    );
     expect(seen.body).not.toContain("/checks/new");
+    expect(seen.body).not.toContain('class="button"');
+    expectCalloutsOnly(seen.body);
   });
 
   test.each([
@@ -219,7 +252,9 @@ describe("GET /checks", () => {
       const c = await consoleFor(fakeApi(empty), { role });
       const res = await getPage(c, "/checks?type=invalid");
       expect(res.body).toContain("No checks yet");
-      expect(res.body).toContain("Some filter values were not understood and were ignored.");
+      expect(res.body).toContain('<section class="callout callout-info" role="status">');
+      expect(res.body).toContain("<p>Some filter values were not understood and were ignored.</p>");
+      expectCalloutsOnly(res.body);
       expect(res.body.includes('<a href="/checks/export">Export as checks.json</a>')).toBe(
         hasExport,
       );
@@ -235,9 +270,13 @@ describe("GET /checks", () => {
     const c = await consoleFor(fakeApi({ ...checkConfig, file }));
     const res = await getPage(c, "/checks");
     expect(res.status).toBe(200);
-    expect(res.body).toContain(heading);
+    expect(res.body).toContain(`<section class="callout callout-info" role="alert">`);
+    expect(res.body).toContain(`<h2 class="callout-title">${heading}</h2>`);
+    expectCalloutsOnly(res.body);
     expect(res.body).toContain("line 3: &lt;bad&gt;");
-    expect(res.body).toContain("The last valid version from 2026-11-04 08:00:00 UTC stays in use.");
+    expect(res.body).toContain(
+      '<p>The last valid version from <span class="mono">2026-11-04 08:00:00 UTC</span> stays in use.</p>',
+    );
     expect(res.body).toContain("Console checks can still be changed.");
     expect(res.body).toContain('href="/checks/edit?id=web"');
   });
@@ -532,12 +571,21 @@ function seenRequests(api: FakeApi): string[] {
 }
 
 function tbodyRows(body: string, heading: string): number {
-  const panel = body.split(`<h2>${heading}</h2>`)[1]?.split("</section>")[0] ?? "";
+  const panel = body.split(`<h2 class="eyebrow">${heading}</h2>`)[1]?.split("</section>")[0] ?? "";
   const tbody = /<tbody>[\s\S]*?<\/tbody>/.exec(panel)?.[0] ?? "";
   return tbody.split("<tr>").length - 1;
 }
 
 describe("GET /checks/check", () => {
+  test("the maintenance window shows its times in mono", async () => {
+    const c = await consoleFor(detailApi(), { role: "viewer" });
+    const res = await getPage(c, "/checks/check?id=dns-a");
+    expect(res.status).toBe(200);
+    expect(res.body).toContain(
+      '<dt>Maintenance</dt><dd><span class="mono">1970-01-01 00:00:00 UTC</span> to <span class="mono">2100-01-01 00:00:00 UTC</span>: Window</dd>',
+    );
+  });
+
   test("shows settings, state, locations, uptime, latency and results of an HTTP check", async () => {
     const api = detailApi();
     const c = await consoleFor(api, { role: "viewer" });
@@ -561,7 +609,7 @@ describe("GET /checks/check", () => {
     );
     expect(res.body).toContain("<dt>Header X-Api-Key</dt><dd>set</dd>");
     expect(res.body).toContain("<dt>Body</dt><dd>set</dd>");
-    expect(res.body).toContain("<dt>Source</dt><dd>Console</dd>");
+    expect(res.body).toContain('<dt>Source</dt><dd><span class="tag tag-info">Console</span></dd>');
     // The host-binding line, escaped once, never the old template.
     expect(res.body).toContain(`<pre id="host-binding-line">${escapeHtml(HOST_LINE)}</pre>`);
     expect(res.body).toContain(
@@ -569,8 +617,34 @@ describe("GET /checks/check", () => {
     );
     expect(res.body).not.toContain(escapeHtml(UNSAFE_TEMPLATE));
     expect(res.body).not.toContain(UNSAFE_TEMPLATE);
+    // R6/R11: panels with eyebrow headings, labelled table boxes, mono settings values.
+    expect(res.body).toContain(
+      '<section class="panel">\n<div class="panel-head"><h2 class="eyebrow">Settings</h2></div>\n<div class="panel-body">',
+    );
+    for (const name of ["Locations", "Uptime", "Latency", "Recent results"]) {
+      expect(res.body).toContain(
+        `<div class="table-scroll" tabindex="0" role="region" aria-label="${name} table">`,
+      );
+    }
+    expect(res.body).not.toContain("table-scroll-hint");
+    expect(res.body).toContain('<dt>Id</dt><dd><span class="mono">web</span></dd>');
+    for (const term of [
+      "Name",
+      "Type",
+      "Source",
+      "State",
+      "Consecutive down",
+      "Last result",
+      "Last reason",
+    ]) {
+      expect(res.body).toContain(`<dt>${term}</dt>`);
+    }
+    expect(res.body).toContain('<th scope="col" class="num">Latency</th>');
+    expectCalloutsOnly(res.body);
     // State and SLO with a negative budget whose rounded text is -0.0.
-    expect(res.body).toContain("<dt>State</dt><dd>Up</dd>");
+    expect(res.body).toContain(
+      '<dt>State</dt><dd><span class="check-state check-state-up"><span class="dot" aria-hidden="true"></span><span>Up</span></span></dd>',
+    );
     expect(res.body).toContain(
       "Availability 99.95 % over 30 days, objective 99.9 %. Error budget exceeded (-0.0 %)",
     );
@@ -580,31 +654,34 @@ describe("GET /checks/check", () => {
     );
     expect(tbodyRows(res.body, "Locations")).toBe(4);
     expect(res.body).toContain(
-      "<tr><td>ap</td><td>Up</td><td>2026-11-05 11:59:30 UTC</td><td>120 ms</td><td>1</td><td></td><td></td><td>No results in 90 days</td></tr>",
+      '<tr><td>ap</td><td><span class="check-state check-state-up dense"><span class="dot" aria-hidden="true"></span><span>Up</span></span></td><td class="mono">2026-11-05 11:59:30 UTC</td><td class="num">120 ms</td><td class="num">1</td><td></td><td></td><td class="num">No results in 90 days</td></tr>',
     );
     expect(res.body).toContain(
-      "<tr><td>eu</td><td>Degraded</td><td>2026-11-05 11:59:30 UTC</td><td>120 ms</td><td>1</td><td></td><td></td><td>80.00 % with 4 of 5 results</td></tr>",
+      '<tr><td>eu</td><td><span class="check-state check-state-degraded dense"><span class="dot" aria-hidden="true"></span><span>Degraded</span></span></td><td class="mono">2026-11-05 11:59:30 UTC</td><td class="num">120 ms</td><td class="num">1</td><td></td><td></td><td class="num">80.00 % with 4 of 5 results</td></tr>',
     );
     expect(res.body).toContain(
-      "<tr><td>old</td><td>No current result</td><td></td><td></td><td></td><td></td><td></td><td>No results in 90 days</td></tr>",
+      '<tr><td>old</td><td>No current result</td><td class="mono"></td><td class="num"></td><td class="num"></td><td></td><td></td><td class="num">No results in 90 days</td></tr>',
     );
     expect(res.body).toContain(
-      "<tr><td>us</td><td>Down</td><td>2026-11-05 09:59:30 UTC</td><td>120 ms</td><td>3</td><td>connect timeout</td><td>Stale</td><td>99.90 % with 999 of 1000 results</td></tr>",
+      '<tr><td>us</td><td><span class="check-state check-state-down dense"><span class="dot" aria-hidden="true"></span><span>Down</span></span></td><td class="mono">2026-11-05 09:59:30 UTC</td><td class="num">120 ms</td><td class="num">3</td><td>connect timeout</td><td>Stale</td><td class="num">99.90 % with 999 of 1000 results</td></tr>',
     );
     // Aggregate uptime over 90 days, never rounded up.
     expect(res.body).toContain("<p>99.99 % over 90 days</p>");
-    expect(res.body).toContain("<tr><td>2026-08-08</td><td>No results</td><td>0</td></tr>");
+    expect(res.body).toContain(
+      '<tr><td class="mono">2026-08-08</td><td class="num">No results</td><td class="num">0</td></tr>',
+    );
     expect(tbodyRows(res.body, "Uptime")).toBe(90);
     // Latency newest first: 14 rows visible, the remaining 76 in details.
-    const latency = res.body.split("<h2>Latency</h2>")[1]?.split("</section>")[0] ?? "";
+    const latency =
+      res.body.split('<h2 class="eyebrow">Latency</h2>')[1]?.split("</section>")[0] ?? "";
     const [visible, older] = latency.split("<details>");
     expect((visible ?? "").split("<tr>").length - 2).toBe(14);
     expect((older ?? "").split("<tr>").length - 2).toBe(76);
     expect(visible).toContain(
-      "<tr><td>2026-11-05</td><td>189 ms</td><td>389 ms</td><td>10</td></tr>",
+      '<tr><td class="mono">2026-11-05</td><td class="num">189 ms</td><td class="num">389 ms</td><td class="num">10</td></tr>',
     );
     expect(older).toContain(
-      "<tr><td>2026-08-08</td><td>No results</td><td>No results</td><td>0</td></tr>",
+      '<tr><td class="mono">2026-08-08</td><td class="num">No results</td><td class="num">No results</td><td class="num">0</td></tr>',
     );
     // A complete timestamp group: 21 rows for limit=20, then one Older link.
     expect(tbodyRows(res.body, "Recent results")).toBe(21);
@@ -665,9 +742,13 @@ describe("GET /checks/check", () => {
       "/checks/cert/results",
       "/uptime",
     ]);
-    expect(res.body).not.toContain("<h2>Latency</h2>");
-    expect(res.body).toContain("<dt>Certificate days left</dt><dd>12</dd>");
-    expect(res.body).toContain("<dt>State</dt><dd>Degraded</dd>");
+    expect(res.body).not.toContain('<h2 class="eyebrow">Latency</h2>');
+    expect(res.body).toContain(
+      '<dt>Certificate days left</dt><dd><span class="mono">12</span></dd>',
+    );
+    expect(res.body).toContain(
+      '<dt>State</dt><dd><span class="check-state check-state-degraded"><span class="dot" aria-hidden="true"></span><span>Degraded</span></span></dd>',
+    );
     expect(res.body).toContain("<p>No availability objective</p>");
     expect(res.body).toContain("<p>No location has reported yet.</p>");
     expect(res.body).toContain("<p>No results yet</p>");
@@ -727,9 +808,9 @@ describe("GET /checks/check", () => {
     expect(res.body).toContain("Heartbeat checks are not run by probes; your job pings pulse-api.");
     expect(res.body).not.toContain("Every probe runs this check.");
     expect(res.body).toContain(
-      "<tr><td>Heartbeat pings</td><td>Up</td><td>2026-11-05 11:59:30 UTC</td><td>Not applicable</td>",
+      '<tr><td>Heartbeat pings</td><td><span class="check-state check-state-up dense"><span class="dot" aria-hidden="true"></span><span>Up</span></span></td><td class="mono">2026-11-05 11:59:30 UTC</td><td class="num">Not applicable</td>',
     );
-    expect(res.body).toContain("<td>100 % with 30 of 30 results</td>");
+    expect(res.body).toContain('<td class="num">100 % with 30 of 30 results</td>');
     expect(api.seen.some((s) => s.path.endsWith("/latency"))).toBe(false);
   });
 
@@ -794,14 +875,18 @@ describe("GET /checks/check", () => {
       const res = await getPage(c, "/checks/check?id=web");
       expect(res.status).toBe(200);
       const panel =
-        res.body.split(`<h2>${heading}</h2>`)[1]?.split("</section>\n</section>")[0] ?? "";
+        res.body
+          .split(`<h2 class="eyebrow">${heading}</h2>`)[1]
+          ?.split("</div>\n</section>\n<section")[0] ?? "";
       expect(panel).toContain(escapeHtml(text));
       expect(res.body.split(escapeHtml(text))).toHaveLength(2);
       expect(warnings(c)).toHaveLength(1);
-      expect(res.body).toContain("<dt>State</dt><dd>Up</dd>");
+      expect(res.body).toContain(
+        '<dt>State</dt><dd><span class="check-state check-state-up"><span class="dot" aria-hidden="true"></span><span>Up</span></span></dd>',
+      );
       expect(res.body).not.toContain(UPSTREAM_SENTINEL);
       for (const other of ["Recent results", "Uptime", "Latency", "Locations"]) {
-        expect(res.body).toContain(`<h2>${other}</h2>`);
+        expect(res.body).toContain(`<h2 class="eyebrow">${other}</h2>`);
       }
     },
   );
@@ -814,7 +899,7 @@ describe("GET /checks/check", () => {
     expect(res.status).toBe(200);
     expect(res.body).toContain("<p>Location uptime needs a newer pulse-api.</p>");
     expect(res.body).not.toContain("pulse-api answered 404.");
-    expect(res.body).toContain("<td>Not available</td>");
+    expect(res.body).toContain('<td class="num">Not available</td>');
     expect(res.body).toContain("<p>99.99 % over 90 days</p>");
     expect(tbodyRows(res.body, "Recent results")).toBe(21);
   });
@@ -963,9 +1048,11 @@ describe("GET /checks/shadowed", () => {
     const res = await getPage(c, "/checks/shadowed?id=dns-a");
     expect(res.status).toBe(200);
     expect(seenRequests(api)).toEqual(["GET /admin/config"]);
+    expect(res.body).toContain('<section class="callout callout-info" role="status">');
     expect(res.body).toContain(
-      "Shadowed by checks.json: the check from checks.json runs instead. This definition is kept in the database.",
+      "<p>Shadowed by checks.json: the check from checks.json runs instead. This definition is kept in the database.</p>",
     );
+    expectCalloutsOnly(res.body);
     expect(res.body).toContain("<dt>Name</dt><dd>DNS record (old)</dd>");
     expect(res.body).toContain("<dt>recordType</dt><dd>AAAA</dd>");
     expect(res.body).toContain('href="/checks/check?id=dns-a"');
@@ -973,11 +1060,11 @@ describe("GET /checks/shadowed", () => {
     expect(res.body).toContain('href="/checks/delete?id=dns-a&amp;shadowed=1"');
     expect(res.body).not.toContain("/checks/edit");
     for (const runtime of [
-      "<h2>State</h2>",
-      "<h2>Uptime</h2>",
-      "<h2>Latency</h2>",
-      "<h2>Recent results</h2>",
-      "<h2>Locations</h2>",
+      '<h2 class="eyebrow">State</h2>',
+      '<h2 class="eyebrow">Uptime</h2>',
+      '<h2 class="eyebrow">Latency</h2>',
+      '<h2 class="eyebrow">Recent results</h2>',
+      '<h2 class="eyebrow">Locations</h2>',
       "objective",
     ]) {
       expect(res.body).not.toContain(runtime);

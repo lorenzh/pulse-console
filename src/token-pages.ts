@@ -234,6 +234,7 @@ export function rotateConfirmHtml(model: ConfirmModel, now: number): string {
       revision: model.revision,
       submitLabel: "Rotate token",
       busyLabel: "Rotating…",
+      tone: "safe",
       cancelHref: "/tokens",
       notice: model.notice,
     })

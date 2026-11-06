@@ -4,7 +4,13 @@
 import { randomBytes } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import type { TokenMetadata } from "@lorenzh/pulse-contract";
-import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
+import {
+  type Browser,
+  type BrowserContext,
+  chromium,
+  type Page,
+  type Response as PageResponse,
+} from "playwright";
 import type { ConsoleRole } from "../src/roles.ts";
 import {
   checkConfig,
@@ -27,6 +33,27 @@ import {
   type SignedInConsole,
   startSignedInConsole,
 } from "../test/signed-in-console.ts";
+import {
+  assertAccountVisible,
+  assertChecksBoxEnd,
+  assertDanger,
+  assertFontsUsed,
+  assertForbidden,
+  assertHostileText,
+  assertInput,
+  assertLinkColor,
+  assertNoSidewaysScroll,
+  assertNotFound,
+  assertOverviewColors,
+  assertPrimary,
+  assertRadio,
+  assertSettingsBreakpoint,
+  assertShellGeometry,
+  FONT_BYTES_BOUND,
+  FONT_PATHS,
+  PALETTE,
+  type Scheme,
+} from "./design-matrix.ts";
 
 class CheckError extends Error {
   override name = "CheckError";
@@ -45,7 +72,25 @@ const LONG_NAME = `Checkout-API-${"very-long-unbroken-name-".repeat(8)}end`;
 const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 const SERVE_WAIT_MS = 3000;
 const DEMO_EMAIL = "demo-owner@example.com";
-const LINK_COLOUR = "rgb(27, 79, 156)";
+// --accent-text in the light scheme, the default of a new context.
+const LINK_COLOUR = "rgb(122, 66, 144)";
+// --text in the light scheme: the ghost confirmation Cancel is a button, not a link colour.
+const TEXT_COLOUR = "rgb(39, 27, 50)";
+// Light --error fill and --bg text of a danger submit; light --strong fill of a primary one.
+const DANGER_FILL = "rgb(164, 38, 44)";
+const PRIMARY_FILL = "rgb(39, 27, 50)";
+// The R3 link table: every :visited selector part and its color, written out from the spec.
+const VISITED_RULES: Readonly<Record<string, string>> = {
+  "a:visited": "var(--accent-text)",
+  "a.button:visited": "var(--on-strong)",
+  "a.button.secondary:visited": "var(--text)",
+  "a.button.ghost:visited": "var(--text)",
+  "a.button.danger:visited": "var(--bg)",
+  ".callout a:not(.button):visited": "var(--text)",
+  ".nav-item:visited": "var(--lead)",
+  '.nav-item[aria-current="page"]:visited': "var(--text)",
+  ".breadcrumbs a:visited": "var(--muted)",
+};
 
 type Env = {
   ownerEmail: string;
@@ -197,6 +242,24 @@ async function assertFits(page: Page, width: number, label: string): Promise<voi
   assert(!result.hidden, `${label}: overflow hidden on the root`);
 }
 
+/** R6: the checks table box is a named, focusable region whose arrow keys scroll it. */
+async function assertChecksTableBox(page: Page, label: string): Promise<void> {
+  const box = page.getByRole("region", { name: "Checks table", exact: true });
+  assert((await box.count()) === 1, `${label}: one Checks table region`);
+  const hint = page.getByText("Scroll sideways to see all columns.", { exact: true });
+  assert(await hint.isVisible(), `${label}: scroll hint visible at 390 px`);
+  await box.focus();
+  for (let i = 0; i < 5; i += 1) await page.keyboard.press("ArrowRight");
+  // Keyboard scrolling is animated; give it time before reading scrollLeft.
+  await page
+    .waitForFunction(() => (document.activeElement?.scrollLeft ?? 0) > 0, undefined, {
+      timeout: 2000,
+    })
+    .catch(() => undefined);
+  const left = await box.evaluate((el) => el.scrollLeft);
+  assert(left > 0, `${label}: ArrowRight scrolls the Checks table (scrollLeft ${left})`);
+}
+
 const ACCOUNT_ROUTES = [
   "/account/security",
   "/account/sessions",
@@ -207,7 +270,7 @@ const ACCOUNT_ROUTES = [
 /** The account page is in the shell, fits, and its Overview link goes to `/`. */
 async function assertAccountShell(page: Page, width: number, label: string): Promise<void> {
   await assertFits(page, width, `${width}px ${label}`);
-  assert(await page.locator("header.shell-header").isVisible(), `${label}: header`);
+  assert(await page.locator("header.sidebar").isVisible(), `${label}: header`);
   assert(await page.locator('nav[aria-label="Main"]').isVisible(), `${label}: Main nav`);
   assert((await page.locator("h1").count()) === 1, `${label}: one h1`);
 }
@@ -387,7 +450,7 @@ async function checkNotFound(env: Env, browser: Browser): Promise<void> {
   const base = env.console.base;
   await signIn(page, env);
   await page.goto(`${base}/does-not-exist`);
-  const titles = page.getByText("Page not found", { exact: true });
+  const titles = page.locator("h1").getByText("Page not found", { exact: true });
   assert((await titles.count()) === 1 && (await titles.isVisible()), "404: one visible title");
   const sentence = "There is no page at this address; go to the overview.";
   assert(await page.getByText(sentence, { exact: true }).isVisible(), "404: sentence");
@@ -407,33 +470,82 @@ async function checkNotFound(env: Env, browser: Browser): Promise<void> {
 }
 
 /** Computed colour and keyboard outline of a link, reached by Tab. */
-async function assertLink(page: Page, name: string, label: string): Promise<void> {
+async function assertLink(
+  page: Page,
+  name: string,
+  label: string,
+  want = LINK_COLOUR,
+): Promise<void> {
   const link = page.getByRole("link", { name, exact: true }).first();
   const colour = await link.evaluate((a) => getComputedStyle(a).color);
-  assert(colour === LINK_COLOUR, `${label}: colour ${colour}`);
+  assert(colour === want, `${label}: colour ${colour}`);
   await page.locator("body").focus();
   await tabTo(page, name);
   const outline = (await focusedOutline(page)).outline;
   assert(outline !== "none", `${label}: no focus outline`);
 }
 
-/** Reads the CSS rules, because getComputedStyle hides the visited colour for privacy. */
-async function visitedRules(page: Page): Promise<{ matching: number; conflicting: string[] }> {
-  return page.evaluate((colour) => {
-    const rules = Array.from(document.styleSheets).flatMap((sheet) =>
-      Array.from(sheet.cssRules).filter((rule) => rule instanceof CSSStyleRule),
-    );
-    const visited = rules.filter((rule) => rule.selectorText.includes(":visited"));
-    const matching = visited.filter(
-      (rule) =>
-        rule.selectorText.split(",").some((s) => s.trim() === "a:visited") &&
-        rule.style.color === colour,
-    ).length;
-    const conflicting = visited
-      .filter((rule) => rule.style.color !== "" && rule.style.color !== colour)
-      .map((rule) => rule.selectorText);
-    return { matching, conflicting };
-  }, LINK_COLOUR);
+/** The confirmation foot: the ghost Cancel comes before the submit in DOM and visual order. */
+async function assertGhostCancelFirst(page: Page, label: string): Promise<void> {
+  const foot = await page
+    .locator(".panel-foot")
+    .first()
+    .evaluate((el) => {
+      const cancel = el.querySelector("a.button.ghost.cancel");
+      const submit = el.querySelector('button[type="submit"]');
+      if (cancel === null || submit === null) return undefined;
+      return {
+        isBefore: (cancel.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        isLeft: cancel.getBoundingClientRect().right <= submit.getBoundingClientRect().left,
+      };
+    });
+  assert(
+    foot?.isBefore === true && foot.isLeft,
+    `${label}: Cancel is not a ghost before the submit`,
+  );
+}
+
+async function assertSubmitFill(page: Page, name: string, want: string): Promise<void> {
+  const fill = await page
+    .getByRole("button", { name, exact: true })
+    .evaluate((b) => getComputedStyle(b).backgroundColor);
+  assert(fill === want, `${name}: fill ${fill}, want ${want}`);
+}
+
+/**
+ * Reads the CSS rules, because getComputedStyle hides the visited colour for privacy. Returns the
+ * problems: a :visited part outside the R3 table, a wrong color, a missing entry, or a :visited
+ * rule inside an @media block.
+ */
+async function visitedProblems(page: Page): Promise<string[]> {
+  const found = await page.evaluate(() => {
+    const top = Array.from(document.styleSheets).flatMap((sheet) => Array.from(sheet.cssRules));
+    const nested = top
+      .filter((rule) => rule instanceof CSSMediaRule)
+      .flatMap((rule) => Array.from(rule.cssRules))
+      .filter((rule) => rule instanceof CSSStyleRule && rule.selectorText.includes(":visited"))
+      .map((rule) => (rule instanceof CSSStyleRule ? rule.selectorText : ""));
+    const parts = top
+      .filter((rule) => rule instanceof CSSStyleRule)
+      .flatMap((rule) =>
+        rule.selectorText
+          .split(",")
+          .map((part) => ({ part: part.trim(), color: rule.style.color }))
+          .filter((p) => p.part.includes(":visited")),
+      );
+    return { nested, parts };
+  });
+  const problems = found.nested.map((selector) => `in @media: ${selector}`);
+  for (const { part, color } of found.parts) {
+    const want = VISITED_RULES[part];
+    if (want === undefined) problems.push(`not listed: ${part}`);
+    else if (color !== want) problems.push(`${part}: ${color}`);
+  }
+  const seen = new Set(found.parts.map((p) => p.part));
+  for (const part of Object.keys(VISITED_RULES)) {
+    if (!seen.has(part)) problems.push(`missing: ${part}`);
+  }
+  return problems;
 }
 
 async function checkLinks(env: Env, browser: Browser): Promise<void> {
@@ -445,20 +557,27 @@ async function checkLinks(env: Env, browser: Browser): Promise<void> {
   await assertLink(page, "Account security", "header Account security");
   await assertLink(page, "Sessions", "account-content link");
   await page.goto(`${base}/account/sessions/sign-out-all`);
-  await assertLink(page, "Cancel", "sign out all Cancel");
+  await assertLink(page, "Cancel", "sign out all Cancel", TEXT_COLOUR);
+  await assertGhostCancelFirst(page, "sign out all");
+  await assertSubmitFill(page, "Sign out all other sessions", DANGER_FILL);
   await page.goto(`${base}/account/recovery-codes`);
-  await assertLink(page, "Cancel", "recovery codes Cancel");
-  const rules = await visitedRules(page);
-  assert(rules.matching >= 1, "no a:visited rule with the link colour");
-  assert(rules.conflicting.length === 0, `other visited colours: ${rules.conflicting.join(", ")}`);
+  await assertLink(page, "Cancel", "recovery codes Cancel", TEXT_COLOUR);
+  await assertGhostCancelFirst(page, "recovery codes");
+  await assertSubmitFill(page, "Create new recovery codes", PRIMARY_FILL);
+  const problems = await visitedProblems(page);
+  assert(problems.length === 0, `visited rules: ${problems.join(", ")}`);
   await page.fill('input[name="password"]', OWNER_PASSWORD);
   await page.getByRole("button", { name: "Create new recovery codes" }).click();
   const codes = await page.locator("#recovery-codes li").allTextContents();
   env.console.recoveryCodes.splice(0, env.console.recoveryCodes.length, ...codes);
   await assertLink(page, "Continue", "result Continue");
   await context.close();
-  ok(`links: header, account, both Cancels and Continue are ${LINK_COLOUR} with a focus outline`);
-  ok(`Visited links: an a:visited rule has ${LINK_COLOUR} and no :visited rule has another colour`);
+  ok(
+    `links: header, account and Continue are ${LINK_COLOUR}; both ghost Cancels are ${TEXT_COLOUR} before the submit; sign out all is ${DANGER_FILL}, new codes ${PRIMARY_FILL}; all with a focus outline`,
+  );
+  ok(
+    `Visited links: ordinary links are ${LINK_COLOUR}; the ${Object.keys(VISITED_RULES).length} listed :visited rules (link, 4 button, callout, 2 nav, breadcrumb) match R3 and none sits in @media`,
+  );
 }
 
 /** Gaps between consecutive forms, top of the next minus bottom of the previous. */
@@ -521,7 +640,11 @@ async function checkAxe(env: Env, browser: Browser): Promise<void> {
   await axeOn(page, `${base}/__test/states/forbidden`, "shell 403");
   env.role.current = "owner";
   await axeOn(page, `${base}/__test/confirm/typed/delete-check`, "typed confirmation");
+  await assertGhostCancelFirst(page, "typed confirmation");
+  await assertSubmitFill(page, "Delete check", DANGER_FILL);
   await axeOn(page, `${base}/__test/confirm/plain/resolve-incident`, "plain confirmation");
+  await assertGhostCancelFirst(page, "plain confirmation");
+  await assertSubmitFill(page, "Resolve incident", PRIMARY_FILL);
   assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
   await context.close();
 }
@@ -539,7 +662,17 @@ async function checkFocus(env: Env, browser: Browser): Promise<void> {
   const page = await context.newPage();
   await signIn(page, env);
   await page.goto(`${env.console.base}/`);
-  const expected = ["Skip to content", "Account security", "Sign out", "Overview"];
+  // Skip link, the nav entries, Account security, Sign out; the overview has no breadcrumb link.
+  const expected = [
+    "Skip to content",
+    "Overview",
+    "Checks",
+    "Tokens",
+    "Probes",
+    "Team",
+    "Account security",
+    "Sign out",
+  ];
   for (const text of expected) {
     await page.keyboard.press("Tab");
     const got = await focusedOutline(page);
@@ -548,7 +681,7 @@ async function checkFocus(env: Env, browser: Browser): Promise<void> {
   }
   await context.close();
   ok(
-    "Tab reaches Skip to content, Account security, Sign out and Overview in order, each with an outline",
+    "Tab reaches Skip to content, the nav entries, Account security and Sign out in order, each with an outline",
   );
 }
 
@@ -561,6 +694,93 @@ async function tabTo(page: Page, text: string): Promise<void> {
   throw new CheckError(`Tab never reached ${text}`);
 }
 
+/** R9: at 390 px every nav item reached by Tab keeps its whole outline inside the row. */
+async function checkMobileNavIcons(env: Env, browser: Browser): Promise<void> {
+  for (const colorScheme of ["light", "dark"] as const) {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      colorScheme,
+    });
+    const page = await context.newPage();
+    await signIn(page, env);
+    await page.goto(`${env.console.base}/`);
+    await page.evaluate(() => document.fonts.ready);
+    const icons = await page.evaluate(() =>
+      [...document.querySelectorAll(".sidebar nav .nav-item")].map((item) => {
+        const icon = item.querySelector(".icon");
+        if (icon === null) return "missing";
+        const r = icon.getBoundingClientRect();
+        const text = item.querySelector("span");
+        if (text === null) return "no label";
+        const label = text.getBoundingClientRect();
+        const shown = getComputedStyle(icon).display !== "none";
+        const center = (r.top + r.bottom) / 2;
+        const sameLine = center >= label.top && center <= label.bottom;
+        return shown && r.width === 16 && r.height === 16 && sameLine && r.right <= label.left
+          ? "ok"
+          : `${r.width}x${r.height} icon ${r.left}-${r.right},${r.top}-${r.bottom} label ${label.left},${label.top}-${label.bottom}`;
+      }),
+    );
+    assert(icons.length === 5, `mobile nav ${colorScheme}: ${icons.length} items`);
+    assert(
+      icons.every((x) => x === "ok"),
+      `mobile nav ${colorScheme}: icons ${icons.join(",")}`,
+    );
+    await context.close();
+  }
+  ok(
+    "mobile nav: every item shows its 16px icon left of its label on the same line at 390 px in light and dark",
+  );
+}
+
+async function checkMobileNavFocus(env: Env, browser: Browser): Promise<void> {
+  await checkMobileNavIcons(env, browser);
+  for (const width of [390, 375, 360, 320]) await checkMobileNavFocusAt(env, browser, width);
+  ok(
+    "mobile nav: every focused item keeps its 2px outline at offset 3px inside the row at 390, 375, 360 and 320 px",
+  );
+}
+
+async function checkMobileNavFocusAt(env: Env, browser: Browser, width: number): Promise<void> {
+  const context = await browser.newContext({ viewport: { width, height: 844 } });
+  const page = await context.newPage();
+  await signIn(page, env);
+  await page.goto(`${env.console.base}/`);
+  await page.evaluate(() => document.fonts.ready);
+  const tops = await page.evaluate(() =>
+    [...document.querySelectorAll(".sidebar nav .nav-item")].map((el) =>
+      Math.round(el.getBoundingClientRect().top),
+    ),
+  );
+  assert(new Set(tops).size === 1, `mobile nav: items on ${new Set(tops).size} rows`);
+  await page.keyboard.press("Tab");
+  for (const text of ["Overview", "Checks", "Tokens", "Probes", "Team"]) {
+    await page.keyboard.press("Tab");
+    const got = await page.evaluate(() => {
+      const el = document.activeElement;
+      const row = document.querySelector(".sidebar nav");
+      if (!(el instanceof HTMLElement) || !(row instanceof HTMLElement)) return undefined;
+      const s = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      const box = row.getBoundingClientRect();
+      const left = box.left + row.clientLeft;
+      const right = left + row.clientWidth;
+      return {
+        text: el.textContent?.trim() ?? "",
+        outline: `${s.outlineStyle} ${s.outlineWidth} ${s.outlineOffset}`,
+        inside: r.left - 5 >= left - 0.5 && r.right + 5 <= right + 0.5,
+        where: `${r.left}-${r.right} in ${left}-${right}`,
+      };
+    });
+    if (got === undefined || got.text !== text) {
+      throw new CheckError(`mobile nav: Tab reached ${got?.text}`);
+    }
+    assert(got.outline === "solid 2px 3px", `mobile nav ${text}: outline ${got.outline}`);
+    assert(got.inside, `mobile nav ${width}px ${text}: outline clipped (${got.where})`);
+  }
+  await context.close();
+}
+
 async function checkNoScript(env: Env, browser: Browser): Promise<void> {
   const violations: string[] = [];
   const context = await browser.newContext({ javaScriptEnabled: false });
@@ -569,6 +789,10 @@ async function checkNoScript(env: Env, browser: Browser): Promise<void> {
   await signIn(page, env);
   env.recorder.actions.length = 0;
   await page.goto(`${base}/__test/confirm/typed/delete-check`);
+  const nameFont = await page
+    .locator('input[name="confirm_name"]')
+    .evaluate((el) => getComputedStyle(el).fontFamily);
+  assert(nameFont.startsWith('"JetBrains Mono"'), `typed name input is mono: ${nameFont}`);
   await page.fill('input[name="confirm_name"]', "Checkout API");
   await Promise.all([page.waitForURL(`${base}/__test/confirm/done`), page.keyboard.press("Enter")]);
   assert(env.recorder.actions.length === 1, "typed confirmation records 1 action");
@@ -841,6 +1065,7 @@ async function checkInvites(env: Env, browser: Browser): Promise<void> {
     await page.goto(`${base}/team`);
     await assertFits(page, 390, "390px team with a pending invite");
     await axeOn(page, `${base}/team/invites/revoke?invite=1`, "revoke invite");
+    await assertSubmitFill(page, "Revoke invite", DANGER_FILL);
     await assertFits(page, 390, "390px revoke invite");
     const anon = await newPage(invitee, violations);
     await axeOn(anon, link, "invite accept form");
@@ -1029,6 +1254,15 @@ async function assertQuorumText(page: Page, url: string, isHeartbeat: boolean): 
 
 function startChecksApi(): ReturnType<typeof startFakeApi> {
   const api = startFakeApi();
+  replyChecks(api, []);
+  return api;
+}
+
+/** The checks fixture, plus extra database HTTP checks for the design matrix. */
+function replyChecks(
+  api: ReturnType<typeof startFakeApi>,
+  extra: { id: string; name: string; url: string }[],
+): void {
   // The fixture's TCP and DNS checks come from checks.json; these database copies have an editor.
   const editable = checkConfig.checks
     .filter((c) => c.source === "file")
@@ -1039,15 +1273,26 @@ function startChecksApi(): ReturnType<typeof startFakeApi> {
     }));
   api.reply(
     "/admin/config",
-    jsonReply({ ...checkConfig, checks: [...checkConfig.checks, ...editable] }),
+    jsonReply({
+      ...checkConfig,
+      checks: [
+        ...checkConfig.checks,
+        ...editable,
+        ...extra.map((c) => ({ ...c, intervalMs: 60000, source: "database" })),
+      ],
+    }),
   );
-  api.reply("/checks", jsonReply([webState, ...checkStates.slice(1)]));
+  const extraStates = extra.map((c) => ({
+    ...checkWithState(c.id, "up"),
+    name: c.name,
+    url: c.url,
+  }));
+  api.reply("/checks", jsonReply([webState, ...checkStates.slice(1), ...extraStates]));
   api.reply("/admin/config/export", jsonReply(checkExport));
   api.reply("/uptime", jsonReply(checkUptime));
   api.reply("/checks/web/results", jsonReply(webResults));
   api.reply("/checks/web/location-uptime", jsonReply(webLocationUptime));
   api.reply("/checks/web/latency", jsonReply(webLatency));
-  return api;
 }
 
 async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<void> {
@@ -1093,6 +1338,7 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
       `${label}: counts`,
     );
     await assertFits(page, 390, `${label} list`);
+    await assertChecksTableBox(page, label);
     await page.goto(`${base}/checks/check?id=web`);
     await assertFits(page, 390, `${label} detail`);
     const pre = await page.locator("pre").first().textContent();
@@ -1130,7 +1376,7 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     }
     assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
     ok(
-      `Checks, ${label}: entered through the Checks nav link, list and detail fit 390 px, literal host-binding${hasScript ? " and heartbeat copy" : " line selectable, copy hidden"}, fixed quorum or heartbeat rule on ${EDITORS.length} editors${hasScript ? ", axe 0 on list/detail/shadowed/delete/editors" : ""}, 0 CSP violations`,
+      `Checks, ${label}: entered through the Checks nav link, list and detail fit 390 px, the Checks table region scrolls by ArrowRight under its hint, literal host-binding${hasScript ? " and heartbeat copy" : " line selectable, copy hidden"}, fixed quorum or heartbeat rule on ${EDITORS.length} editors${hasScript ? ", axe 0 on list/detail/shadowed/delete/editors" : ""}, 0 CSP violations`,
     );
   } finally {
     await context.close();
@@ -1928,10 +2174,344 @@ async function checkProbesWith(browser: Browser, hasScript: boolean): Promise<vo
   }
 }
 
+const HOSTILE_NAME = "<img src=x onerror=alert(1)>";
+const MATRIX_CHECKS = [
+  { id: "long-url", name: "Long URL", url: `https://example.com/${"p".repeat(100)}` },
+  { id: "long-name", name: `Long-${"name-".repeat(59)}end`, url: "https://example.com/" },
+  { id: "hostile", name: HOSTILE_NAME, url: "https://example.com/h" },
+];
+const MATRIX_WIDTHS: [number, number][] = [
+  [1280, 800],
+  [390, 844],
+];
+
+/** Check 10: fails on another origin and on a font outside the seven routes. */
+function watchRequests(page: Page, base: string, problems: string[]): void {
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.protocol === "data:") return;
+    if (url.origin !== base) problems.push(`other origin: ${url.origin}`);
+    if (request.resourceType() === "font" && !FONT_PATHS.includes(url.pathname))
+      problems.push(`font path: ${url.pathname}`);
+  });
+  page.on("response", (response) => {
+    if (response.request().resourceType() !== "font") return;
+    const type = response.headers()["content-type"];
+    if (response.status() !== 200 || type !== "font/woff2")
+      problems.push(`font answer ${response.status()} ${type ?? ""}`);
+  });
+}
+
+async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number): Promise<void> {
+  const base = env.console.base;
+  const at = `${scheme} ${width}px`;
+  const fonts: string[] = [];
+  const onFont = (r: { url: () => string; request: () => { resourceType: () => string } }) => {
+    if (r.request().resourceType() === "font") fonts.push(new URL(r.url()).pathname);
+  };
+  page.on("response", onFont);
+  await page.goto(`${base}/`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertOverviewColors(page, scheme);
+  await assertLinkColor(page, "Checks", PALETTE[scheme].lead, `${at} nav Checks`);
+  await assertNoSidewaysScroll(page, `${at} /`);
+  if (width === 390) await assertAccountVisible(page, `${at} /`);
+  await assertFontsUsed(page, "main .mono", `${at} /`);
+  page.off("response", onFont);
+  await axeOn(page, `${base}/`, `${at} Overview`);
+  ok(`matrix ${at}: overview body, current and other nav colors, fonts used, no sideways scroll`);
+
+  await page.goto(`${base}/checks`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertNoSidewaysScroll(page, `${at} /checks`);
+  await assertHostileText(page, HOSTILE_NAME, `${at} /checks`);
+  if (width === 390) await assertChecksBoxEnd(page, `${at} /checks`);
+  await axeOn(page, `${base}/checks`, `${at} /checks`);
+  ok(
+    `matrix ${at}: checks list with ${MATRIX_CHECKS.length} long/hostile rows fits${width === 390 ? ", the named box scrolls to Actions" : ""}`,
+  );
+
+  await page.goto(`${base}/checks/edit?id=web`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertPrimary(
+    page,
+    'button[type="submit"]:has-text("Save check")',
+    scheme,
+    `${at} Save check`,
+  );
+  await assertInput(page, 'input[name="name"]', scheme, `${at} edit Name`);
+  await assertRadio(page, `${at} edit`);
+  await assertNoSidewaysScroll(page, `${at} edit`);
+  await axeOn(page, `${base}/checks/edit?id=web`, `${at} /checks/edit`);
+  ok(
+    `matrix ${at}: edit form primary, input and focus colors; 18px radio 12px from its text on a 44px row, arrow keys move it`,
+  );
+
+  await page.goto(`${base}/checks/delete?id=hostile`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertDanger(page, 'button[type="submit"].danger', scheme, `${at} Delete check`);
+  await assertInput(page, 'input[name="confirm_name"]', scheme, `${at} confirm name`);
+  await assertLinkColor(page, "Cancel", PALETTE[scheme].text, `${at} ghost Cancel`);
+  await assertHostileText(page, HOSTILE_NAME, `${at} delete`);
+  await assertNoSidewaysScroll(page, `${at} delete`);
+  await assertFontsUsed(page, ".confirm-target.mono", `${at} delete`);
+  await axeOn(page, `${base}/checks/delete?id=hostile`, `${at} /checks/delete`);
+  ok(
+    `matrix ${at}: typed delete danger and input colors, ghost Cancel ${PALETTE[scheme].text}, hostile name as text, fonts used`,
+  );
+
+  for (const path of ["/account/sessions/sign-out-all", "/__test/confirm/typed/delete-check"]) {
+    await page.goto(base + path);
+    await assertDanger(page, 'main button[type="submit"]', scheme, `${at} ${path}`);
+  }
+  for (const path of ["/account/recovery-codes", "/__test/confirm/plain/resolve-incident"]) {
+    await page.goto(base + path);
+    await assertPrimary(page, 'main button[type="submit"]', scheme, `${at} ${path}`);
+  }
+  await page.goto(`${base}/account/security`);
+  await assertLinkColor(page, "Sessions", PALETTE[scheme].link, `${at} Sessions link`);
+  const problems = await visitedProblems(page);
+  assert(problems.length === 0, `${at} visited rules: ${problems.join(", ")}`);
+  ok(
+    `matrix ${at}: sign out all and typed fixture danger, new codes and resolve incident primary, link ${PALETTE[scheme].link}, ${Object.keys(VISITED_RULES).length} visited rules match R3`,
+  );
+
+  await assertNotFound(page, base);
+  env.role.current = "member";
+  await assertForbidden(page, base, scheme);
+  await axeOn(page, `${base}/__test/states/forbidden`, `${at} 403`);
+  env.role.current = "owner";
+  await axeOn(page, `${base}/does-not-exist`, `${at} 404`);
+  ok(
+    `matrix ${at}: 403 one heading, warning ${PALETTE[scheme].warning}, overview link works; 404 neutral with one h1`,
+  );
+  if (width === 1280) {
+    assert(
+      fonts.includes("/fonts/space-grotesk-latin-700-normal.woff2") &&
+        fonts.includes("/fonts/jetbrains-mono-latin-600-normal.woff2"),
+      `${at}: overview font responses ${fonts.join(",")}`,
+    );
+  }
+}
+
+/** R2: every UTC timestamp on a page is set in JetBrains Mono. */
+async function assertTimestampsMono(page: Page, label: string): Promise<void> {
+  await page.evaluate(() => document.fonts.ready);
+  const found = await page.evaluate(() => {
+    const out: { text: string; family: string }[] = [];
+    const walker = document.createTreeWalker(
+      document.querySelector("main") ?? document.body,
+      NodeFilter.SHOW_TEXT,
+    );
+    for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+      const text = n.textContent ?? "";
+      const parent = n.parentElement;
+      if (parent === null || !/\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})? UTC/.test(text)) continue;
+      out.push({ text: text.trim(), family: getComputedStyle(parent).fontFamily });
+    }
+    return out;
+  });
+  assert(found.length > 0, `${label}: no UTC timestamp found`);
+  const bad = found.filter((f) => !f.family.startsWith('"JetBrains Mono"'));
+  assert(bad.length === 0, `${label}: timestamps not mono ${JSON.stringify(bad)}`);
+}
+
+/** Team, account, invite and the danger confirmations in each scheme and width. */
+async function matrixTeamAndAccount(env: Env, page: Page, scheme: Scheme, width: number) {
+  const base = env.console.base;
+  const at = `${scheme} ${width}px`;
+  await page.goto(`${base}/team`);
+  await page.fill('input[name="email"]', `matrix-${scheme}-${width}@example.com`);
+  await Promise.all([
+    page.waitForURL(`${base}/team/invites`),
+    page.getByRole("button", { name: "Create invite link" }).click(),
+  ]);
+  await assertTimestampsMono(page, `${at} invite link page`);
+  const link = await page.inputValue("#invite-link");
+  const linkFamily = await page
+    .locator("#invite-link")
+    .evaluate((el) => getComputedStyle(el).fontFamily);
+  assert(linkFamily.startsWith('"JetBrains Mono"'), `${at}: link output not mono ${linkFamily}`);
+  const linkAxe = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+  assert(linkAxe.violations.length === 0, `${at} axe on the invite link page`);
+  await axeOn(page, `${base}/team`, `${at} /team`);
+  await assertTimestampsMono(page, `${at} /team pending invites`);
+  await assertNoSidewaysScroll(page, `${at} /team`);
+  const revoke = await page
+    .locator(`a[href^="/team/invites/revoke?invite="]`)
+    .last()
+    .getAttribute("href");
+  assert(revoke !== null, `${at}: revoke link`);
+  await axeOn(page, base + revoke, `${at} revoke invite`);
+  await assertDanger(page, 'main button[type="submit"]', scheme, `${at} Revoke invite`);
+  await axeOn(page, link, `${at} invite page`);
+  await axeOn(page, `${base}/invite/${"A".repeat(43)}`, `${at} invalid invite link`);
+  for (const path of ACCOUNT_ROUTES) {
+    await axeOn(page, base + path, `${at} ${path}`);
+    await assertNoSidewaysScroll(page, `${at} ${path}`);
+  }
+  for (const path of ["/account/sessions", "/account/security", "/account/authenticator"]) {
+    await page.goto(base + path);
+    await assertTimestampsMono(page, `${at} ${path}`);
+  }
+  for (const path of [
+    "/__test/confirm/typed/remove-member",
+    "/__test/confirm/typed/transfer-ownership",
+    "/__test/confirm/plain/reset-2fa",
+    "/__test/confirm/plain/delete-maintenance",
+  ]) {
+    await axeOn(page, base + path, `${at} ${path}`);
+    await assertDanger(page, 'main button[type="submit"]', scheme, `${at} ${path}`);
+  }
+  for (const path of [
+    "/__test/confirm/plain/resolve-incident",
+    "/__test/confirm/plain/new-recovery-codes",
+  ]) {
+    await axeOn(page, base + path, `${at} ${path}`);
+    await assertPrimary(page, 'main button[type="submit"]', scheme, `${at} ${path}`);
+  }
+  ok(
+    `matrix ${at}: axe 0 on team, invite link, revoke invite, invite and invalid link, account pages and plain/typed confirmations; revoke, remove, transfer, reset 2FA and delete maintenance danger; timestamps mono`,
+  );
+}
+
+/** The signed-out sign-in page in a context of its own, so no recovery code is spent. */
+async function matrixSignIn(env: Env, page: Page, scheme: Scheme, width: number): Promise<void> {
+  const at = `${scheme} ${width}px`;
+  await page.goto(`${env.console.base}/sign-in`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertPrimary(page, 'button[type="submit"]', scheme, `${at} Sign in`);
+  await assertInput(page, 'input[name="email"]', scheme, `${at} sign-in Email`);
+  await assertFontsUsed(page, undefined, `${at} sign-in`);
+  await assertNoSidewaysScroll(page, `${at} /sign-in`);
+  await axeOn(page, `${env.console.base}/sign-in`, `${at} /sign-in`);
+  ok(`matrix ${at}: sign-in primary, input and focus colors, fonts used, axe 0`);
+}
+
+/** Check 10 cold numbers: a new context, an empty cache, the load of / after sign-in. */
+async function matrixCold(env: Env, browser: Browser): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await signIn(page, env);
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Network.clearBrowserCache");
+    let requests = 0;
+    let fontBytes = 0;
+    const counts: Promise<void>[] = [];
+    page.on("request", () => {
+      requests += 1;
+    });
+    const onResponse = (response: PageResponse): void => {
+      if (response.request().resourceType() !== "font") return;
+      counts.push(
+        response.body().then((b) => {
+          fontBytes += b.length;
+        }),
+      );
+    };
+    page.on("response", onResponse);
+    await page.goto(`${env.console.base}/`, { waitUntil: "networkidle" });
+    await page.evaluate(() => document.fonts.ready);
+    await Promise.all(counts);
+    assert(requests <= 10, `cold /: ${requests} requests`);
+    assert(fontBytes <= FONT_BYTES_BOUND, `cold /: ${fontBytes} font bytes`);
+    ok(`cold / made ${requests} requests, ${fontBytes} font bytes`);
+    page.off("response", onResponse);
+    let warm = 0;
+    page.on("request", () => {
+      warm += 1;
+    });
+    await page.goto(`${env.console.base}/`, { waitUntil: "networkidle" });
+    ok(`warm / made ${warm} requests to the network layer`);
+  } finally {
+    await context.close();
+  }
+}
+
+/** Shell geometry (5), breakpoints (6) and the long data (11) at 390 px. */
+async function matrixGeometry(env: Env, page: Page, scheme: Scheme): Promise<void> {
+  const base = env.console.base;
+  await page.goto(`${base}/`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertShellGeometry(page, `${scheme} shell`);
+  await page.goto(`${base}/checks/check?id=web`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertSettingsBreakpoint(page, `${scheme} detail`);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${base}/checks/check?id=long-name`);
+  await assertNoSidewaysScroll(page, `${scheme} 300-character name detail`);
+  ok(
+    `matrix ${scheme}: sidebar 236px, topbar >= 64px, column at 720, full width at 719, main 20px 16px 40px at 390; settings 2 columns at 901, 1 at 900; 300-character name fits 390px`,
+  );
+}
+
+async function checkDesignMatrix(browser: Browser): Promise<void> {
+  const env = await startEnv(
+    0,
+    "a-seventy-character-address-for-the-design-matrix-check@example.com",
+  );
+  replyChecks(env.api, MATRIX_CHECKS);
+  env.target.current = { name: HOSTILE_NAME, revision: "rev-1" };
+  try {
+    for (const scheme of ["light", "dark"] as const) {
+      const violations: string[] = [];
+      const problems: string[] = [];
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        colorScheme: scheme,
+      });
+      watchCsp(context, violations);
+      const page = await newPage(context, violations);
+      watchRequests(page, env.console.base, problems);
+      let dialogs = 0;
+      page.on("dialog", (dialog) => {
+        dialogs += 1;
+        void dialog.dismiss();
+      });
+      try {
+        for (const [width, height] of MATRIX_WIDTHS) {
+          const signedOut = await browser.newContext({
+            viewport: { width, height },
+            colorScheme: scheme,
+          });
+          try {
+            const out = await newPage(signedOut, violations);
+            watchRequests(out, env.console.base, problems);
+            await matrixSignIn(env, out, scheme, width);
+          } finally {
+            await signedOut.close();
+          }
+        }
+        await signIn(page, env);
+        for (const [width, height] of MATRIX_WIDTHS) {
+          await page.setViewportSize({ width, height });
+          await matrixPages(env, page, scheme, width);
+          await matrixTeamAndAccount(env, page, scheme, width);
+        }
+        await matrixGeometry(env, page, scheme);
+      } finally {
+        await context.close();
+      }
+      assert(violations.length === 0, `${scheme}: CSP violations ${violations.join(" | ")}`);
+      assert(problems.length === 0, `${scheme}: requests ${problems.join(" | ")}`);
+      assert(dialogs === 0, `${scheme}: ${dialogs} dialogs opened`);
+      ok(
+        `matrix ${scheme}: 0 CSP violations, 0 other-origin requests, fonts only from the 7 routes as 200 font/woff2, 0 dialogs`,
+      );
+    }
+    await matrixCold(env, browser);
+  } finally {
+    await env.console.close();
+    env.api.stop();
+  }
+}
+
 async function runChecks(): Promise<void> {
   const env = await startEnv(0);
   const browser = await chromium.launch();
   try {
+    await checkDesignMatrix(browser);
     await checkLayout(env, browser, 390, 844);
     await checkLayout(env, browser, 1280, 800);
     await checkAxe(env, browser);
@@ -1956,6 +2536,7 @@ async function runChecks(): Promise<void> {
     try {
       await checkEmail(shellEnv, browser);
       await checkNotFound(shellEnv, browser);
+      await checkMobileNavFocus(shellEnv, browser);
       await checkGaps(shellEnv, browser);
       await checkLinks(shellEnv, browser);
     } finally {
@@ -1979,6 +2560,8 @@ async function runChecks(): Promise<void> {
 
 async function serve(): Promise<void> {
   const env = await startEnv(SERVE_WAIT_MS);
+  // The manual console shows the checks fixture, so /checks/edit?id=web has an editable check.
+  replyChecks(env.api, []);
   console.log(`url: ${env.console.base}`);
   console.log(`sign in: ${env.ownerEmail} / ${OWNER_PASSWORD}`);
   console.log(`fixture recovery codes: ${env.console.recoveryCodes.join(" ")}`);

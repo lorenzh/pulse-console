@@ -94,7 +94,9 @@ describe("GET / Overview summary", () => {
       expect(res.body).toContain(
         'Signed in as Owner <span class="account-email">(owner@example.com)</span>',
       );
-      expect(res.body).toContain('<a href="/" aria-current="page">Overview</a>');
+      expect(res.body).toContain(
+        '<a class="nav-item" href="/" aria-current="page"><svg class="icon"',
+      );
       expectClean(c, res.body);
     });
   }
@@ -106,7 +108,7 @@ describe("GET / Overview summary", () => {
     const c = await consoleFor(api.url);
     const res = await getPage(c, "/");
     expect(res.body).toContain(
-      "<li>Down: 2</li>\n<li>Degraded: 0</li>\n<li>Unknown: 0</li>\n<li>Maintenance: 0</li>\n<li>Up: 1</li>\n<li>Total: 3</li>",
+      '<li><span class="check-state check-state-down"><span class="dot" aria-hidden="true"></span></span>Down: 2</li>\n<li><span class="check-state check-state-degraded"><span class="dot" aria-hidden="true"></span></span>Degraded: 0</li>\n<li><span class="check-state check-state-unknown"><span class="dot" aria-hidden="true"></span></span>Unknown: 0</li>\n<li><span class="check-state check-state-maintenance"><span class="dot" aria-hidden="true"></span></span>Maintenance: 0</li>\n<li><span class="check-state check-state-up"><span class="dot" aria-hidden="true"></span></span>Up: 1</li>\n<li>Total: 3</li>',
     );
   });
 
@@ -121,7 +123,7 @@ describe("GET / Overview summary", () => {
     expect(res.body).toContain(
       "pulse-api has no active checks. Add a check in pulse-api, then reload this page.",
     );
-    expect(res.body).toContain('<a href="/">Reload</a>');
+    expect(res.body).toContain('<a class="button" href="/">Reload</a>');
   });
 
   test("authorization: Bearer on /admin/config, none on /checks", async () => {

@@ -71,6 +71,9 @@ const FAMILIES: Array<[string, string]> = [
   ...PLAIN.map((f): [string, string] => ["plain", f]),
 ];
 
+/** R3 and R11: Resolve and new recovery codes stay primary; every other confirmation is danger. */
+const SAFE_PLAIN = new Set(["resolve-incident", "new-recovery-codes"]);
+
 const TYPED_PATH = "/__test/confirm/typed/delete-check";
 
 async function openForm(c: SignedInConsole, path: string): Promise<string> {
@@ -100,8 +103,15 @@ describe("confirmation families", () => {
       expect(get.body).toMatch(
         /<input type="hidden" name="csrf" value="[^"]+">\n<input type="hidden" name="form_token" value="[^"]{43}">\n<input type="hidden" name="revision" value="rev-1">/,
       );
-      expect(get.body).toContain('<a class="cancel" href="/">Cancel</a>');
+      expect(get.body).toContain('<a class="button ghost cancel" href="/">Cancel</a>');
       expect(get.body).toContain("This cannot be undone.");
+      const tone = kind === "plain" && SAFE_PLAIN.has(family) ? "safe" : "danger";
+      expect(get.body).toContain(`class="panel confirm confirm-${tone}">`);
+      expect(get.body).toContain(
+        '<a class="button ghost cancel" href="/">Cancel</a> <button type="submit"',
+      );
+      expect(get.body.includes('<button type="submit" class="danger"')).toBe(tone === "danger");
+      expect(get.body).not.toContain("style=");
       if (kind === "typed") {
         expect(get.body).toContain('<label for="field-confirm_name">Type Checkout API to confirm');
       } else {
@@ -126,7 +136,7 @@ describe("confirmation families", () => {
 
       const replay = await postForm(c, path, body);
       expect(replay.status).toBe(409);
-      expect(replay.body).toContain("<h2>Already submitted</h2>");
+      expect(replay.body).toContain('<h2 class="callout-title">Already submitted</h2>');
       expect(recorder.actions).toHaveLength(1);
     });
   }
@@ -195,7 +205,7 @@ describe("target changes", () => {
       confirm_name: "Checkout API",
     });
     expect(res.status).toBe(409);
-    expect(res.body).toContain("<h2>Changed since you opened it</h2>");
+    expect(res.body).toContain('<h2 class="callout-title">Changed since you opened it</h2>');
     expect(res.body).toContain('value="Checkout API"');
     expect(res.body).toContain('name="revision" value="rev-2"');
     const fresh = formTokenOf(res.body, TYPED_PATH);

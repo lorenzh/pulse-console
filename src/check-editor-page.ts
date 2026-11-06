@@ -264,7 +264,7 @@ function radios(ctx: Ctx, legend: string, name: string, choices: readonly Choice
   const items = choices
     .map(
       (c) =>
-        `<label><input type="radio" name="${name}" value="${c.value}"${c.value === current ? " checked" : ""}> ${escapeHtml(c.label)}</label>`,
+        `<label class="choice"><input type="radio" name="${name}" value="${c.value}"${c.value === current ? " checked" : ""}><span>${escapeHtml(c.label)}</span></label>`,
     )
     .join("\n");
   return `<fieldset id="field-${name}"${err.attrs}>
@@ -523,7 +523,7 @@ const TYPE_EXPLANATIONS: Record<CheckType, string> = {
 export function checkTypeChoiceHtml(): string {
   const items = CHECK_TYPES.map(
     (type) =>
-      `<li><a href="/checks/new?type=${type}">${TYPE_LABELS[type]}</a>: ${escapeHtml(TYPE_EXPLANATIONS[type])}</li>`,
+      `<li class="panel"><a href="/checks/new?type=${type}">${TYPE_LABELS[type]}</a>: ${escapeHtml(TYPE_EXPLANATIONS[type])}</li>`,
   ).join("\n");
   return `<p>Choose the type of the new check.</p>
 <ul class="type-choice">

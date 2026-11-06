@@ -40,7 +40,7 @@ import {
 const TEST_SECRET_KEY = Uint8Array.from(Buffer.from("0123456789abcdef".repeat(4), "hex"));
 
 const CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 const TOKEN = "console-test-sentinel-token-0123456789abcdef";
 const PASSWORD = "console-test-password-sentinel-42";
 const CSRF = "csrf-token-of-client-a-0123456789abcdef0123";
@@ -181,7 +181,14 @@ function formHeaders(port: number, extra: Record<string, string> = {}): Record<s
 describe("headers and pages", () => {
   test("the CSP is exactly the spec literal on pages, errors and ops routes", async () => {
     const c = await startConsole();
-    for (const path of ["/setup", "/nope", "/healthz", "/console.css", "/"]) {
+    for (const path of [
+      "/setup",
+      "/nope",
+      "/healthz",
+      "/console.css",
+      "/fonts/jetbrains-mono-latin-400-normal.woff2",
+      "/",
+    ]) {
       const res = await send(c.port, "GET", path, { host: `localhost:${c.port}` });
       expect(res.headers["content-security-policy"]).toBe(CSP);
       expect(res.headers["x-frame-options"]).toBe("DENY");
@@ -571,7 +578,7 @@ describe("leak scan of the two-factor flows", () => {
 
 describe("signed-in unknown paths and the Overview", () => {
   const CSP =
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
 
   async function signedIn(): Promise<SignedInConsole> {
     const c = await startSignedInConsole({
@@ -598,7 +605,10 @@ describe("signed-in unknown paths and the Overview", () => {
     const c = await signedIn();
     const res = await getPage(c, "/no-such-page");
     expect(res.status).toBe(404);
-    expect(res.body.split("Page not found")).toHaveLength(3);
+    // Title, breadcrumb and h1.
+    expect(res.body.split("Page not found")).toHaveLength(4);
+    expect(res.body).toContain('<li aria-current="page">Page not found</li>');
+    expect(res.body).toContain('<section class="callout callout-neutral">');
     expect(res.body).toContain("<title>Page not found");
     expect(res.body).toContain("<h1>Page not found</h1>");
     expect(res.body).not.toContain("<h2>Page not found</h2>");

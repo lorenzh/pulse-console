@@ -2,6 +2,7 @@ import type {
   AdminCheckView,
   CheckLatency,
   CheckLocationUptime,
+  CheckState,
   CheckWithState,
   Result,
   ResultsResponse,
@@ -14,10 +15,11 @@ import { budgetText, formatPercent, utcTime } from "./check-format.ts";
 import {
   type CheckView,
   checkProblemView,
+  checkStateHtml,
   idQuery,
   link,
   SHADOWED_TEXT,
-  STATE_LABELS,
+  sourceTag,
   TYPE_LABELS,
   UNADDRESSABLE,
 } from "./check-pages.ts";
@@ -26,7 +28,7 @@ import { paragraph } from "./html.ts";
 import { isAllowed } from "./permissions.ts";
 import type { ConsoleRole } from "./roles.ts";
 import { type HostBinding, heartbeatLine, hostBindingLine } from "./shell-line.ts";
-import { apiUnavailableState } from "./states.ts";
+import { apiUnavailableState, callout } from "./states.ts";
 
 /** Decision 14: the panel text for an id that no api path can carry. */
 export function unaddressableText(id: string): string {
@@ -52,17 +54,38 @@ const RESULTS_PAGE_ROWS = 20;
 
 function section(heading: string, inner: string): string {
   return `<section class="panel">
-<h2>${escapeHtml(heading)}</h2>
-${inner}</section>
+<div class="panel-head"><h2 class="eyebrow">${escapeHtml(heading)}</h2></div>
+<div class="panel-body">
+${inner}</div>
+</section>
 `;
 }
 
-function tableHtml(heads: readonly string[], rows: ReadonlyArray<readonly string[]>): string {
-  const head = heads.map((h) => `<th scope="col">${escapeHtml(h)}</th>`).join("");
-  const cellsOf = (row: readonly string[]): string =>
-    row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("");
+/** A table column: its head and how its cells look (R6 `num`, R2 `mono`). */
+type Column = { head: string; kind?: "num" | "mono" };
+/** A cell: escaped text, or a check state rendered dense (R7). */
+type Cell = string | { state: CheckState };
+
+function cellHtml(cell: Cell, column: Column | undefined): string {
+  const cls = column?.kind === undefined ? "" : ` class="${column.kind}"`;
+  const inner = typeof cell === "string" ? escapeHtml(cell) : checkStateHtml(cell.state, true);
+  return `<td${cls}>${inner}</td>`;
+}
+
+function tableHtml(
+  name: string,
+  columns: readonly Column[],
+  rows: ReadonlyArray<readonly Cell[]>,
+): string {
+  const head = columns
+    .map(
+      (c) => `<th scope="col"${c.kind === "num" ? ' class="num"' : ""}>${escapeHtml(c.head)}</th>`,
+    )
+    .join("");
+  const cellsOf = (row: readonly Cell[]): string =>
+    row.map((cell, i) => cellHtml(cell, columns[i])).join("");
   const body = rows.map((row) => `<tr>${cellsOf(row)}</tr>`).join("\n");
-  return `<div class="table-wrap table-scroll">
+  return `<div class="table-scroll" tabindex="0" role="region" aria-label="${escapeHtml(name)} table">
 <table>
 <thead><tr>${head}</tr></thead>
 <tbody>
@@ -73,9 +96,15 @@ ${body}
 `;
 }
 
-function definitionList(entries: ReadonlyArray<readonly [string, string]>): string {
+/** A settings value: escaped text, or HTML the caller built from escaped parts. */
+type Value = string | { html: string };
+
+function definitionList(entries: ReadonlyArray<readonly [string, Value]>): string {
   const items = entries
-    .map(([term, value]) => `<dt>${escapeHtml(term)}</dt><dd>${escapeHtml(value)}</dd>`)
+    .map(([term, value]) => {
+      const dd = typeof value === "string" ? escapeHtml(value) : value.html;
+      return `<dt>${escapeHtml(term)}</dt><dd>${dd}</dd>`;
+    })
     .join("\n");
   return `<dl class="settings">
 ${items}
@@ -112,12 +141,12 @@ function headerText(value: unknown): string {
 }
 
 /** R2 settings: every stored field of the view, never a write-only value. */
-function settingsEntries(view: AdminCheckView): Array<readonly [string, string]> {
-  const entries: Array<readonly [string, string]> = [
+function settingsEntries(view: AdminCheckView): Array<readonly [string, Value]> {
+  const entries: Array<readonly [string, Value]> = [
     ["Name", view.name],
-    ["Id", view.id],
+    ["Id", { html: `<span class="mono">${escapeHtml(view.id)}</span>` }],
     ["Type", TYPE_LABELS[view.type ?? "http"]],
-    ["Source", view.source === "file" ? "checks.json (read-only)" : "Console"],
+    ["Source", { html: sourceTag(view.source) }],
   ];
   for (const [key, value] of Object.entries(view)) {
     if (!SKIPPED_FIELDS.has(key)) entries.push([key, valueText(value)]);
@@ -199,18 +228,24 @@ function panelProblem<T>(read: PanelRead<T>, id: string, retryHref: string): str
   }
 }
 
+function mono(text: string): Value {
+  return { html: `<span class="mono">${escapeHtml(text)}</span>` };
+}
+
 function stateEntries(view: AdminCheckView, state: CheckWithState | undefined) {
-  const entries: Array<readonly [string, string]> = [
-    ["State", STATE_LABELS[state?.state ?? "unknown"]],
-    ["Consecutive down", String(state?.consecutiveDown ?? 0)],
-    ["Last result", utcTime(state?.lastResultAt ?? null)],
+  const entries: Array<readonly [string, Value]> = [
+    ["State", { html: checkStateHtml(state?.state ?? "unknown", false) }],
+    ["Consecutive down", mono(String(state?.consecutiveDown ?? 0))],
+    ["Last result", mono(utcTime(state?.lastResultAt ?? null))],
     ["Last reason", state?.lastReason ?? "None"],
   ];
   const window = state?.maintenance;
   if (window !== undefined) {
     entries.push([
       "Maintenance",
-      `${utcTime(window.start)} to ${utcTime(window.end)}: ${window.note}`,
+      {
+        html: `<span class="mono">${escapeHtml(utcTime(window.start))}</span> to <span class="mono">${escapeHtml(utcTime(window.end))}</span>: ${escapeHtml(window.note)}`,
+      },
     ]);
   }
   const isCertType = view.type === "tls" || view.type === "domain";
@@ -218,7 +253,7 @@ function stateEntries(view: AdminCheckView, state: CheckWithState | undefined) {
   if (isCertType) {
     entries.push([
       "Certificate days left",
-      days === undefined || days === null ? "Unknown" : String(days),
+      days === undefined || days === null ? "Unknown" : mono(String(days)),
     ]);
   }
   return entries;
@@ -272,7 +307,7 @@ function locationUptimeText(row: LocationRow, isRead: boolean): string {
   return `${formatPercent(row.uptime.uptime)} with ${row.uptime.good} of ${row.uptime.results} results`;
 }
 
-function locationCells(row: LocationRow, isHeartbeat: boolean, isRead: boolean): string[] {
+function locationCells(row: LocationRow, isHeartbeat: boolean, isRead: boolean): Cell[] {
   const name = isHeartbeat && row.name === "heartbeat" ? "Heartbeat pings" : row.name;
   const result = row.latest?.result;
   if (result === undefined) {
@@ -280,7 +315,7 @@ function locationCells(row: LocationRow, isHeartbeat: boolean, isRead: boolean):
   }
   return [
     name,
-    STATE_LABELS[result.status],
+    { state: result.status },
     utcTime(result.timestamp),
     isHeartbeat ? "Not applicable" : `${result.latencyMs} ms`,
     String(result.attempts),
@@ -297,20 +332,21 @@ function locationsSection(detail: CheckDetail, retryHref: string): string {
   const rule = paragraph(isHeartbeat ? HEARTBEAT_RULE_TEXT : PROBE_RULE_TEXT);
   const problem = panelProblem(read, detail.view.id, retryHref) ?? "";
   const rows = locationRows(detail.state, uptime);
-  const heads = [
-    "Location",
-    "Status",
-    "Time",
-    "Latency",
-    "Attempts",
-    "Reason",
-    "Fresh",
-    "Uptime 90 days",
+  const heads: Column[] = [
+    { head: "Location" },
+    { head: "Status" },
+    { head: "Time", kind: "mono" },
+    { head: "Latency", kind: "num" },
+    { head: "Attempts", kind: "num" },
+    { head: "Reason" },
+    { head: "Fresh" },
+    { head: "Uptime 90 days", kind: "num" },
   ];
   const table =
     rows.length === 0
       ? paragraph("No location has reported yet.")
       : tableHtml(
+          "Locations",
           heads,
           rows.map((row) => locationCells(row, isHeartbeat, uptime !== undefined)),
         );
@@ -332,7 +368,15 @@ function uptimeSection(read: PanelRead<UptimeResponse>, id: string, retryHref: s
     "Uptime",
     `${paragraph(aggregate)}<details>
 <summary>Every day</summary>
-${tableHtml(["Date", "Uptime", "Results"], rows)}</details>
+${tableHtml(
+  "Uptime",
+  [
+    { head: "Date", kind: "mono" },
+    { head: "Uptime", kind: "num" },
+    { head: "Results", kind: "num" },
+  ],
+  rows,
+)}</details>
 `,
   );
 }
@@ -341,7 +385,12 @@ function latencySection(read: PanelRead<CheckLatency>, id: string, retryHref: st
   if (read.kind === "absent") return "";
   const problem = panelProblem(read, id, retryHref);
   if (problem !== undefined || read.kind !== "ok") return section("Latency", problem ?? "");
-  const heads = ["Date", "p50", "p95", "Count"];
+  const heads: Column[] = [
+    { head: "Date", kind: "mono" },
+    { head: "p50", kind: "num" },
+    { head: "p95", kind: "num" },
+    { head: "Count", kind: "num" },
+  ];
   const rows = [...read.value.days]
     .reverse()
     .map((day) =>
@@ -349,23 +398,23 @@ function latencySection(read: PanelRead<CheckLatency>, id: string, retryHref: st
         ? [day.date, "No results", "No results", "0"]
         : [day.date, `${day.p50Ms} ms`, `${day.p95Ms} ms`, String(day.count)],
     );
-  const recent = tableHtml(heads, rows.slice(0, LATENCY_VISIBLE_DAYS));
+  const recent = tableHtml("Latency", heads, rows.slice(0, LATENCY_VISIBLE_DAYS));
   const older = rows.slice(LATENCY_VISIBLE_DAYS);
   const rest =
     older.length === 0
       ? ""
       : `<details>
 <summary>Older days</summary>
-${tableHtml(heads, older)}</details>
+${tableHtml("Latency", heads, older)}</details>
 `;
   return section("Latency", `${recent}${rest}`);
 }
 
-function resultCells(result: Result): string[] {
+function resultCells(result: Result): Cell[] {
   return [
     utcTime(result.timestamp),
     result.location,
-    STATE_LABELS[result.status],
+    { state: result.status },
     result.statusCode === null ? "" : String(result.statusCode),
     `${result.latencyMs} ms`,
     String(result.attempts),
@@ -391,11 +440,19 @@ function resultsSection(
   const read = detail.results;
   const problem = panelProblem(read, detail.view.id, retryHref);
   if (problem !== undefined || read.kind !== "ok") return section("Recent results", problem ?? "");
-  const heads = ["Time", "Location", "Status", "Status code", "Latency", "Attempts", "Reason"];
+  const heads: Column[] = [
+    { head: "Time", kind: "mono" },
+    { head: "Location" },
+    { head: "Status" },
+    { head: "Status code", kind: "num" },
+    { head: "Latency", kind: "num" },
+    { head: "Attempts", kind: "num" },
+    { head: "Reason" },
+  ];
   const table =
     read.value.length === 0
       ? paragraph("No results yet")
-      : tableHtml(heads, read.value.map(resultCells));
+      : tableHtml("Recent results", heads, read.value.map(resultCells));
   return section("Recent results", `${table}${pagingLinks(read.value, detail.view.id, before)}`);
 }
 
@@ -466,6 +523,6 @@ export function shadowedPage(
     };
   }
   if (read.view === undefined) return { kind: "not-found" };
-  const body = `${paragraph(SHADOWED_PAGE_TEXT, ' role="status"')}${actions(read.view, role, true)}${settingsSection(read.view)}`;
+  const body = `${callout({ kind: "info", body: paragraph(SHADOWED_PAGE_TEXT), role: "status" })}${actions(read.view, role, true)}${settingsSection(read.view)}`;
   return { kind: "view", title: read.view.name, view: { banner: "", body } };
 }
