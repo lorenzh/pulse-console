@@ -132,13 +132,14 @@ describe("GET /tokens", () => {
       expect(active.indexOf(OPS_ID)).toBeLessThan(active.indexOf(OTHER_ID));
       expect(active).not.toContain("probe eu");
       const inactive = body.slice(body.indexOf("<h2>Revoked or expired</h2>"));
-      expect(inactive).toContain("Revoked 1970-01-01 02:29:55 UTC");
-      expect(inactive).toContain("Expired 1970-01-01 02:29:59 UTC");
+      expect(inactive).toContain("<td><span>Revoked</span> 1970-01-01 02:29:55 UTC</td>");
+      expect(inactive).toContain("<td><span>Expired</span> 1970-01-01 02:29:59 UTC</td>");
       expect(inactive).not.toContain('href="/tokens/revoke');
       expect(body).toContain("<td>Manage checks</td>");
       expect(body).toContain("<td>Imported from a token file</td>");
       expect(body).toContain("<td>Created in pulse-api</td>");
-      expect(body).toContain("<td>Never</td>");
+      expect(body).toContain('<td class="cell-nowrap">Never</td>');
+      expect(body).toContain(`<td class="cell-nowrap"><code>${SELF_ID}</code></td>`);
       expect(body).toContain("<td>Active</td>");
       expect(body).toContain('Probe tokens are on the <a href="/probes">Probes page</a> (1).');
       expect(body).toContain("<strong>This console</strong>");

@@ -154,7 +154,9 @@ describe("GET /probes", () => {
     for (const text of [
       "probe c-sil",
       "tok_c30000000000000000000003",
-      "<td>Never</td>",
+      '<td class="cell-nowrap">Never</td>',
+      '<td class="cell-nowrap"><code>tok_c30000000000000000000003</code></td>',
+      '<td class="cell-nowrap">2025-12-31 00:00:00 UTC</td>',
       '<td class="actions-cell"><a href="/probes/rotate?id=tok_c30000000000000000000003">Rotate this token</a> <a href="/probes/revoke?id=tok_c30000000000000000000003">Revoke this token</a></td>',
       'href="/probes/rotate?id=tok_c30000000000000000000003">Rotate this token',
       'href="/probes/revoke?id=tok_c30000000000000000000003">Revoke this token',

@@ -52,13 +52,15 @@ const MEMBER_ACTIONS = [
   { kind: "transfer", path: "/team/transfer", label: "Make owner" },
 ] as const;
 
+const EMPTY_ACTIONS = `<span class="cell-empty"><span aria-hidden="true">—</span><span class="visually-hidden">No actions</span></span>`;
+
 /** Decision 9: each action is a link to its own page, never a form in the row. */
 function memberActions(m: TeamMember, actor: ConsoleRole): string {
   const links = MEMBER_ACTIONS.filter((a) => targetDecision(actor, a.kind, m.role).isAllowed).map(
     (a) =>
       `<a href="${a.path}?user=${m.id}">${a.label}<span class="visually-hidden"> for ${escapeHtml(m.name)}</span></a>`,
   );
-  return links.length === 0 ? "" : `<span class="row-actions">${links.join(" ")}</span>`;
+  return links.length === 0 ? EMPTY_ACTIONS : `<span class="row-actions">${links.join(" ")}</span>`;
 }
 
 function memberRow(m: TeamMember, actor: ConsoleRole): string {
@@ -66,7 +68,7 @@ function memberRow(m: TeamMember, actor: ConsoleRole): string {
 <td>${escapeHtml(m.name)}</td>
 <td>${escapeHtml(m.email)}</td>
 <td>${roleTag(m.role)}</td>
-<td>${m.hasAuthenticator ? "2FA: on" : "2FA: off"}</td>
+<td class="cell-nowrap">${m.hasAuthenticator ? "On" : "Off"}</td>
 <td class="actions-cell">${memberActions(m, actor)}</td>
 </tr>`;
 }
@@ -76,13 +78,13 @@ function inviteRow(invite: PendingInvite, view: TeamView): string {
   const canRevoke = targetDecision(view.role, "invite", invite.role).isAllowed;
   const action = canRevoke
     ? `<a href="/team/invites/revoke?invite=${invite.id}">Revoke<span class="visually-hidden"> the invite for ${escapeHtml(invite.email)}</span></a>`
-    : "";
+    : EMPTY_ACTIONS;
   return `<tr>
 <td>${escapeHtml(invite.email)}</td>
 <td>${roleTag(invite.role)}</td>
 <td>${escapeHtml(invite.createdByName ?? "removed")}</td>
-<td class="mono">${escapeHtml(utcMinute(invite.expiresAt))}</td>
-<td>${state}</td>
+<td class="mono cell-nowrap">${escapeHtml(utcMinute(invite.expiresAt))}</td>
+<td class="cell-nowrap">${state}</td>
 <td class="actions-cell">${action}</td>
 </tr>`;
 }

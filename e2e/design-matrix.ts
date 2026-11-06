@@ -371,7 +371,7 @@ export async function assertFontsUsed(page: Page, monoSelector: string | undefin
 
 /** The literal header lists of R4 (spec 777), in page order. */
 export const HEADERS = {
-  checks: ["Name", "Id", "Type", "Target", "Source", "State", "Last result", "Actions"],
+  checks: ["Check", "Target", "State", "Actions"],
   members: ["Name", "Email", "Role", "2FA", "Actions"],
   invites: ["Email", "Role", "Created by", "Expires", "State", "Actions"],
   sessions: ["Signed in", "Last used", ""],
@@ -455,7 +455,7 @@ export async function assertActionLines(
 
 /** R2 on /checks: the long-url row shows View, Edit, Export, Delete, each on 1 line. */
 export async function assertChecksActions(page: Page, width: number, label: string) {
-  const cell = 'table.checks tr:has(td:text-is("long-url")) td.actions-cell';
+  const cell = 'table.checks tr:has(td code:text-is("long-url")) td.actions-cell';
   const links = await measure(page, `${cell} a`);
   const want = ["View", "Edit", "Export", "Delete"];
   const got = links.map((l) => l.text);
@@ -509,4 +509,236 @@ export async function assertTypeScale(page: Page, width: number, label: string):
   near(got.h1.letterSpacing, want.h1Spacing, 0.05, `${label}: h1 letter spacing`);
   check(got.h1.weight === "700", `${label}: h1 weight ${got.h1.weight}, want 700`);
   check(got.h2.weight === "500", `${label}: h2 weight ${got.h2.weight}, want 500`);
+}
+
+/** R1 at 1280: the Checks box does not scroll, its table and last action end inside it. */
+export async function assertChecksFit(page: Page, label: string): Promise<void> {
+  await page.evaluate(() => document.fonts.ready);
+  const got = await page.locator("main .table-scroll:has(table.checks)").evaluate((box) => {
+    box.scrollLeft = 0;
+    const table = box.querySelector("table.checks");
+    const links = Array.from(box.querySelectorAll("td.actions-cell a"));
+    const last = links.reduce<Element | undefined>(
+      (best, a) =>
+        best === undefined || a.getBoundingClientRect().right > best.getBoundingClientRect().right
+          ? a
+          : best,
+      undefined,
+    );
+    const td = last?.closest("td");
+    return {
+      overflowX: getComputedStyle(box).overflowX,
+      scrollWidth: box.scrollWidth,
+      clientWidth: box.clientWidth,
+      boxRight: box.getBoundingClientRect().right,
+      tableRight: table?.getBoundingClientRect().right ?? Number.NaN,
+      linkText: last?.textContent ?? "",
+      linkRight: last?.getBoundingClientRect().right ?? Number.NaN,
+      linkFont: last === undefined ? "" : getComputedStyle(last).fontSize,
+      cellEnd:
+        td === null || td === undefined
+          ? Number.NaN
+          : td.getBoundingClientRect().right - Number.parseFloat(getComputedStyle(td).paddingRight),
+    };
+  });
+  check(got.overflowX === "auto", `${label}: Checks box overflow-x ${got.overflowX}, want auto`);
+  check(
+    got.scrollWidth <= got.clientWidth,
+    `${label}: Checks box scrollWidth ${got.scrollWidth} > ${got.clientWidth}`,
+  );
+  check(
+    got.tableRight <= got.boxRight + 0.5,
+    `${label}: Checks table right ${got.tableRight} > box right ${got.boxRight} + 0.5`,
+  );
+  check(
+    got.linkRight <= got.cellEnd + 0.5,
+    `${label}: action "${got.linkText}" right ${got.linkRight} > cell content right ${got.cellEnd} + 0.5`,
+  );
+  near(got.linkFont, 15, 0.01, `${label}: action "${got.linkText}" font size`);
+}
+
+type Unit = { text: string; lines: number };
+type WordsReport = { texts: string[]; units: Unit[]; nowrap: Measured[] };
+
+/** Splits every visible td text node into units (non-space runs, also after - and /). */
+function measureWords(table: Element): WordsReport {
+  const tops = (range: Range): number => {
+    const set = new Set<number>();
+    for (const r of Array.from(range.getClientRects())) {
+      if (r.width > 0) set.add(Math.round(r.top));
+    }
+    return set.size;
+  };
+  // Units are runs of non-space characters, each also ended after "-" or "/".
+  const spansOf = (text: string): [number, number][] => {
+    const spans: [number, number][] = [];
+    let start = -1;
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text.charAt(i);
+      const isSpace = /\s/.test(ch);
+      if (start < 0 && !isSpace) start = i;
+      if (start >= 0 && isSpace) {
+        spans.push([start, i]);
+        start = -1;
+      } else if (start >= 0 && (ch === "-" || ch === "/")) {
+        spans.push([start, i + 1]);
+        start = -1;
+      }
+    }
+    if (start >= 0) spans.push([start, text.length]);
+    return spans;
+  };
+  const texts: string[] = [];
+  const units: Unit[] = [];
+  const cells = Array.from(table.querySelectorAll("td"));
+  for (const td of cells) {
+    texts.push((td.textContent ?? "").trim());
+    for (const el of Array.from(td.querySelectorAll("*")))
+      texts.push((el.textContent ?? "").trim());
+    const walker = document.createTreeWalker(td, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      if (node.parentElement?.closest(".visually-hidden")) continue;
+      const text = node.textContent ?? "";
+      for (const span of spansOf(text)) {
+        const range = document.createRange();
+        range.setStart(node, span[0]);
+        range.setEnd(node, span[1]);
+        units.push({ text: text.slice(span[0], span[1]), lines: tops(range) });
+      }
+    }
+  }
+  const nowrap = Array.from(table.querySelectorAll("td.cell-nowrap")).map((td) => {
+    const range = document.createRange();
+    range.selectNodeContents(td);
+    return { text: (td.textContent ?? "").trim(), lines: tops(range) };
+  });
+  return { texts, units, nowrap };
+}
+
+/** R2: the required texts exist in a td or its descendant, and no word breaks inside. */
+export async function assertWordsIntact(
+  page: Page,
+  tableSelector: string,
+  required: readonly (string | RegExp)[],
+  label: string,
+): Promise<number> {
+  await page.evaluate(() => document.fonts.ready);
+  const reports = await page
+    .locator(tableSelector)
+    .evaluateAll((tables) => tables.map(measureWords));
+  check(reports.length > 0, `${label}: no table ${tableSelector}`);
+  const texts = reports.flatMap((r) => r.texts);
+  for (const want of required) {
+    const isFound = texts.some((t) =>
+      typeof want === "string" ? t === want : new RegExp(`^(?:${want.source})$`).test(t),
+    );
+    check(isFound, `${label}: no cell text ${String(want)} in ${tableSelector}`);
+  }
+  const units = reports.flatMap((r) => r.units);
+  for (const unit of units) {
+    check(unit.lines === 1, `${label}: unit "${unit.text}" has ${unit.lines} lines, want 1`);
+  }
+  for (const cell of reports.flatMap((r) => r.nowrap)) {
+    check(cell.lines === 1, `${label}: nowrap cell "${cell.text}" has ${cell.lines} lines, want 1`);
+  }
+  return units.length;
+}
+
+/** R1 fallback: the unbroken name and id keep their text and end inside the cell, cut. */
+export async function assertUnbrokenRow(
+  page: Page,
+  name: string,
+  id: string,
+  label: string,
+): Promise<void> {
+  const row = page.locator(`table.checks tr:has(td code:text-is("${id}"))`);
+  check((await row.count()) === 1, `${label}: no Checks row with code ${id}`);
+  const got = await row
+    .locator("td")
+    .first()
+    .evaluate((td) => {
+      const end =
+        td.getBoundingClientRect().right - Number.parseFloat(getComputedStyle(td).paddingRight);
+      return [".cell-title", ".cell-sub"].map((sel) => {
+        const el = td.querySelector(sel);
+        if (el === null)
+          return { sel, missing: true, overflowX: "", ellipsis: "", sw: 0, cw: 0, right: 0, end };
+        const style = getComputedStyle(el);
+        return {
+          sel,
+          missing: false,
+          overflowX: style.overflowX,
+          ellipsis: style.textOverflow,
+          sw: el.scrollWidth,
+          cw: el.clientWidth,
+          right: el.getBoundingClientRect().right,
+          end,
+        };
+      });
+    });
+  for (const g of got) {
+    check(!g.missing, `${label}: unbroken row has no ${g.sel}`);
+    check(g.overflowX === "hidden", `${label}: unbroken ${g.sel} overflow-x ${g.overflowX}`);
+    check(g.ellipsis === "ellipsis", `${label}: unbroken ${g.sel} text-overflow ${g.ellipsis}`);
+    check(g.sw > g.cw, `${label}: unbroken ${g.sel} scrollWidth ${g.sw} <= clientWidth ${g.cw}`);
+    check(g.right <= g.end + 0.5, `${label}: unbroken ${g.sel} right ${g.right} > ${g.end} + 0.5`);
+  }
+  const title = await row.locator(".cell-title").textContent();
+  const code = await row.locator("td code").first().textContent();
+  check(title === name, `${label}: unbroken .cell-title text ${title?.length} chars, want ${name}`);
+  check(code === id, `${label}: unbroken code text ${code}, want ${id}`);
+}
+
+/** R9: the owner row shows On/Off and —, no 2FA: text; action cells have only the row divider. */
+export async function assertTeamTable(page: Page, ownerName: string, label: string) {
+  const table = page.locator('[aria-label="Team table"] table');
+  const owner = table.locator(`tr:has(td:text-is("${ownerName}"))`);
+  check((await owner.count()) === 1, `${label}: no Team row for ${ownerName}`);
+  const twoFactor = ((await owner.locator("td").nth(3).textContent()) ?? "").trim();
+  check(/^(On|Off)$/.test(twoFactor), `${label}: owner 2FA cell "${twoFactor}", want On or Off`);
+  const empty = (
+    (await owner.locator("td.actions-cell .cell-empty [aria-hidden]").textContent()) ?? ""
+  ).trim();
+  check(empty === "—", `${label}: owner action cell "${empty}", want —`);
+  const prefixed = await page
+    .locator("main td")
+    .evaluateAll((tds) =>
+      tds.map((td) => (td.textContent ?? "").trim()).filter((t) => t.startsWith("2FA:")),
+    );
+  check(prefixed.length === 0, `${label}: cells start with 2FA: ${JSON.stringify(prefixed)}`);
+  const bad = await page.locator("main td.actions-cell").evaluateAll((cells) =>
+    cells.flatMap((td) => {
+      const out: string[] = [];
+      const cs = getComputedStyle(td);
+      const first = td.parentElement?.querySelector("td");
+      const rowBottom =
+        first === null || first === undefined ? "" : getComputedStyle(first).borderBottomWidth;
+      const text = (td.textContent ?? "").trim();
+      if (cs.borderLeftWidth !== "0px" || cs.borderRightWidth !== "0px")
+        out.push(`"${text}" cell side borders ${cs.borderLeftWidth}/${cs.borderRightWidth}`);
+      if (cs.borderBottomWidth !== rowBottom)
+        out.push(`"${text}" bottom ${cs.borderBottomWidth}, row ${rowBottom}`);
+      for (const el of Array.from(td.querySelectorAll("*"))) {
+        const s = getComputedStyle(el);
+        const widths = [
+          s.borderTopWidth,
+          s.borderRightWidth,
+          s.borderBottomWidth,
+          s.borderLeftWidth,
+        ];
+        if (widths.some((w) => w !== "0px"))
+          out.push(`"${text}" ${el.tagName} border ${widths.join(" ")}`);
+      }
+      const start = td.querySelector("a, .cell-empty");
+      const left =
+        td.getBoundingClientRect().left +
+        Number.parseFloat(cs.paddingLeft) +
+        Number.parseFloat(cs.borderLeftWidth);
+      const at = start?.getBoundingClientRect().left;
+      if (at === undefined || Math.abs(at - left) > 1)
+        out.push(`"${text}" first action left ${at}, content left ${left}`);
+      return out;
+    }),
+  );
+  check(bad.length === 0, `${label}: Team action cells ${bad.join(" | ")}`);
 }

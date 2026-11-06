@@ -78,6 +78,13 @@ function actionsCell(model: TokenListModel, token: TokenMetadata): string {
   return `${rotate} ${revoke}`;
 }
 
+/** The leading state word stands in its own span, so the table check can find it. */
+function stateHtml(text: string): string {
+  const match = /^(Revoked|Expired) (.+)$/.exec(text);
+  if (match === null) return escapeHtml(text);
+  return `<span>${match[1]}</span> ${escapeHtml(match[2] ?? "")}`;
+}
+
 function rowHtml(model: TokenListModel, token: TokenMetadata): string {
   const cells = [
     escapeHtml(token.name),
@@ -86,9 +93,12 @@ function rowHtml(model: TokenListModel, token: TokenMetadata): string {
     escapeHtml(sourceText(token.source)),
     escapeHtml(utcTime(token.createdAt)),
     escapeHtml(lastUsedText(token.lastUsedAt)),
-    escapeHtml(tokenStateText(token, model.now)),
+    stateHtml(tokenStateText(token, model.now)),
   ];
-  const tds = cells.map((cell) => `<td>${cell}</td>`).join("");
+  const nowrap = new Set([1, 4, 5]);
+  const tds = cells
+    .map((cell, i) => (nowrap.has(i) ? `<td class="cell-nowrap">${cell}</td>` : `<td>${cell}</td>`))
+    .join("");
   return `<tr>${tds}<td class="actions-cell">${actionsCell(model, token)}</td></tr>`;
 }
 

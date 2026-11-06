@@ -38,6 +38,7 @@ import {
   assertActionLines,
   assertChecksActions,
   assertChecksBoxEnd,
+  assertChecksFit,
   assertDanger,
   assertFontsUsed,
   assertForbidden,
@@ -52,7 +53,10 @@ import {
   assertRadio,
   assertSettingsBreakpoint,
   assertShellGeometry,
+  assertTeamTable,
   assertTypeScale,
+  assertUnbrokenRow,
+  assertWordsIntact,
   FONT_BYTES_BOUND,
   FONT_PATHS,
   HEADERS,
@@ -1124,6 +1128,24 @@ async function checkTeamActions(env: Env, browser: Browser): Promise<void> {
     ]);
     await page.goto(`${base}/team`);
     await assertFits(page, 390, "390px team with action links");
+    const remActions = await page
+      .locator('[aria-label="Team table"] tr:has(td:text-is("Rem Ovable")) td.actions-cell a')
+      .evaluateAll((links) =>
+        links.map((a) =>
+          Array.from(a.childNodes)
+            .filter((n) => n.nodeType === Node.TEXT_NODE)
+            .map((n) => n.textContent ?? "")
+            .join("")
+            .trim(),
+        ),
+      );
+    const wantRem = ["Change role", "Reset link", "Reset 2FA", "Remove"];
+    assert(
+      remActions.join("|") === wantRem.join("|"),
+      `390px /team Rem Ovable actions ${JSON.stringify(remActions)}, want ${JSON.stringify(wantRem)}`,
+    );
+    await assertTeamTable(page, "Owner", "390px /team with action links");
+    ok("390px /team: Rem Ovable actions Change role, Reset link, Reset 2FA, Remove; cells aligned");
     await assertTeamLines(page, "390px /team with member action links");
     for (const [name, label] of [
       ["Change role for Rem Ovable", "role form"],
@@ -1898,7 +1920,43 @@ async function checkTokenFocus(page: Page, base: string): Promise<void> {
   );
 }
 
-async function checkTokenLayout(page: Page, base: string): Promise<void> {
+const ID_PATTERN = /tok_[0-9a-f]{24}/;
+const TIME_PATTERN = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC/;
+const E2E_WORD_TOKENS = [
+  adminTokenRow({
+    id: "tok_c1de00000000000000000005",
+    name: "ci-deploy",
+    scopes: ["read"],
+    lastUsedAt: Date.UTC(2026, 0, 2, 3, 4, 5),
+  }),
+  adminTokenRow({
+    id: "tok_01dc00000000000000000006",
+    name: "old-ci",
+    revokedAt: Date.UTC(2026, 0, 3),
+  }),
+];
+
+/** R2 on /tokens with the word rows; the earlier rows come back afterwards. */
+async function checkTokenWords(page: Page, base: string, state: TokensApi, width: number) {
+  const earlier = state.rows();
+  state.setTokens([...earlier, ...E2E_WORD_TOKENS]);
+  try {
+    await page.goto(`${base}/tokens`);
+    const label = `/tokens at ${width}`;
+    const units = await assertWordsIntact(
+      page,
+      "main table.tokens",
+      ["ci-deploy", "Active", "Read", "Revoked", ID_PATTERN, TIME_PATTERN],
+      label,
+    );
+    await assertFits(page, width, `${label} with word rows`);
+    ok(`${label}: ci-deploy, Active, Read, Revoked, id and date found; ${units} units 1 line each`);
+  } finally {
+    state.setTokens(earlier);
+  }
+}
+
+async function checkTokenLayout(page: Page, base: string, state: TokensApi): Promise<void> {
   for (const width of [390, 1280]) {
     await page.setViewportSize({ width, height: 800 });
     await page.goto(`${base}/tokens`);
@@ -1908,6 +1966,7 @@ async function checkTokenLayout(page: Page, base: string): Promise<void> {
     assert(rotates > 0, `/tokens at ${width}: Rotate links ${rotates}, want more than 0`);
     const links = await assertActionLines(page, "td.actions-cell a", `/tokens at ${width}`);
     ok(`/tokens at ${width}: headers 1 line each; ${links.length} Rotate/Revoke links 1 line each`);
+    await checkTokenWords(page, base, state, width);
     await page.goto(`${base}/tokens/new`);
     await assertFits(page, width, `/tokens/new at ${width}`);
     await page.goto(`${base}/tokens/revoke?id=${E2E_OPS.id}`);
@@ -1950,7 +2009,7 @@ async function checkTokensWith(browser: Browser, hasScript: boolean): Promise<vo
       creates.length === 2,
       `${label}: 2 creates for 2 submits and 1 reload, got ${creates.length}`,
     );
-    await checkTokenLayout(page, server.base);
+    await checkTokenLayout(page, server.base, state);
     if (hasScript) {
       await checkTokenFocus(page, server.base);
       await axeOn(page, `${server.base}/tokens`, "/tokens");
@@ -2122,6 +2181,13 @@ async function checkProbeLayout(page: Page, base: string): Promise<void> {
       assert(links.length > 0, `${label}: ${name} links ${links.length}, want more than 0`);
     }
     ok(`${label}: headers 1 line each; Rotate this token and Revoke this token 1 line each`);
+    const units = await assertWordsIntact(
+      page,
+      "main table.tokens",
+      [ID_PATTERN, TIME_PATTERN, "Active"],
+      label,
+    );
+    ok(`${label}: probe id, date and Active found; ${units} units 1 line each`);
   }
 }
 
@@ -2194,10 +2260,13 @@ async function checkProbesWith(browser: Browser, hasScript: boolean): Promise<vo
 }
 
 const HOSTILE_NAME = "<img src=x onerror=alert(1)>";
+const UNBROKEN_NAME = `Unbroken${"n".repeat(92)}`;
+const UNBROKEN_ID = `unbroken${"x".repeat(56)}`;
 const MATRIX_CHECKS = [
   { id: "long-url", name: "Long URL", url: `https://example.com/${"p".repeat(100)}` },
   { id: "long-name", name: `Long-${"name-".repeat(59)}end`, url: "https://example.com/" },
   { id: "hostile", name: HOSTILE_NAME, url: "https://example.com/h" },
+  { id: UNBROKEN_ID, name: UNBROKEN_NAME, url: "https://example.com/u" },
 ];
 const MATRIX_WIDTHS: [number, number][] = [
   [1280, 800],
@@ -2246,6 +2315,20 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   await assertHostileText(page, HOSTILE_NAME, `${at} /checks`);
   if (width === 390) await assertChecksBoxEnd(page, `${at} /checks`);
   await assertChecksActions(page, width, `${at} /checks`);
+  if (width === 1280) {
+    await assertChecksFit(page, `${at} /checks`);
+    ok(`matrix ${at}: Checks box does not scroll, last action inside its cell, action font 15px`);
+  }
+  const checkUnits = await assertWordsIntact(
+    page,
+    "main table.checks",
+    ["long-url", "hostile", "Maintenance", "Console", UNBROKEN_NAME, UNBROKEN_ID],
+    `${at} /checks`,
+  );
+  await assertUnbrokenRow(page, UNBROKEN_NAME, UNBROKEN_ID, `${at} /checks`);
+  ok(
+    `matrix ${at}: /checks required texts found, ${checkUnits} units 1 line each; unbroken name and id clipped with an ellipsis inside the Check cell`,
+  );
   ok(
     `matrix ${at}: /checks headers ${HEADERS.checks.join(", ")} 1 line each; long-url View, Edit, Export, Delete 1 line each${width === 390 ? ", its Actions cell inside the box" : ""}`,
   );
@@ -2372,12 +2455,29 @@ async function matrixTeamAndAccount(env: Env, page: Page, scheme: Scheme, width:
   assert(linkFamily.startsWith('"JetBrains Mono"'), `${at}: link output not mono ${linkFamily}`);
   const linkAxe = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
   assert(linkAxe.violations.length === 0, `${at} axe on the invite link page`);
+  await page.goto(`${base}/team`);
+  await page.fill('input[name="email"]', `matrix-admin-${scheme}-${width}@example.com`);
+  await page.selectOption('select[name="role"]', "admin");
+  await Promise.all([
+    page.waitForURL(`${base}/team/invites`),
+    page.getByRole("button", { name: "Create invite link" }).click(),
+  ]);
   await axeOn(page, `${base}/team`, `${at} /team`);
   await assertTimestampsMono(page, `${at} /team pending invites`);
   await assertNoSidewaysScroll(page, `${at} /team`);
   await assertTypeScale(page, width, `${at} /team`);
   ok(`matrix ${at}: body, h1 and #people-heading sizes, h1 line height, spacing and weights`);
   await assertTeamLines(page, `${at} /team`);
+  const teamUnits = await assertWordsIntact(
+    page,
+    "main table",
+    ["Owner", "Admin", "Member", /On|Off/, /\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "pending"],
+    `${at} /team`,
+  );
+  await assertTeamTable(page, "Owner", `${at} /team`);
+  ok(
+    `matrix ${at}: /team required texts found, ${teamUnits} units 1 line each; owner 2FA On/Off and —, action cells only the row divider and aligned`,
+  );
   const revoke = await page
     .locator(`a[href^="/team/invites/revoke?invite="]`)
     .last()

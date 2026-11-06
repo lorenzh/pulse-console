@@ -205,9 +205,17 @@ describe("app routes", () => {
       "font-size: 0.9375rem",
       "h1 { font-size: clamp(2rem, 1.8rem + 0.8vw, 2.5rem); font-weight: 700; line-height: 1.1; letter-spacing: -0.02em;",
       "h2 { font-size: clamp(1.25rem, 1.15rem + 0.4vw, 1.5rem); font-weight: 500;",
+      "table-layout: fixed",
+      "td, td * { overflow-wrap: normal; word-break: normal; }",
+      "text-overflow: ellipsis",
+      "td.cell-nowrap",
+      ".row-actions { display: inline-flex; flex-wrap: nowrap; gap: 12px; }",
+      ".cell-empty {",
     ]) {
       expect(css).toContain(rule);
     }
+    expect(css).not.toContain(".table-scroll table.checks td { overflow-wrap: normal");
+    expect(css).not.toContain("break-word");
     expect(css).not.toContain("font-size: 1.75rem");
     expect(css).not.toContain(".sidebar nav .icon { display: none; }");
     expect(css).not.toContain("flex-direction: column; justify-content: center;");

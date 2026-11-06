@@ -78,7 +78,10 @@ function credentialRow(model: ProbeListModel, token: TokenMetadata): string {
     escapeHtml(lastUsedText(token.lastUsedAt)),
     escapeHtml(tokenStateText(token, model.now)),
   ];
-  const tds = cells.map((cell) => `<td>${cell}</td>`).join("");
+  const nowrap = new Set([1, 3, 4]);
+  const tds = cells
+    .map((cell, i) => (nowrap.has(i) ? `<td class="cell-nowrap">${cell}</td>` : `<td>${cell}</td>`))
+    .join("");
   return `<tr>${tds}<td class="actions-cell">${actions}</td></tr>`;
 }
 

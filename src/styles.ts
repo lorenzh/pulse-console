@@ -182,7 +182,17 @@ tbody tr:hover { background: color-mix(in srgb, var(--surface) 45%, transparent)
 .table-scroll table tbody tr:last-child td { border-bottom: 0; }
 .table-scroll table.checks { min-width: 56rem; }
 .table-scroll table.tokens { min-width: 60rem; }
-.table-scroll table.checks td { overflow-wrap: normal; word-break: normal; }
+td, td * { overflow-wrap: normal; word-break: normal; }
+td.cell-nowrap, td.cell-nowrap code { white-space: nowrap; }
+table.checks { table-layout: fixed; }
+col.col-state { width: 13rem; }
+col.col-actions { width: 15rem; }
+.cell-title, .cell-sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: normal; }
+.cell-sub { color: var(--muted); font-size: 0.8125rem; }
+.cell-sub.mono { font-size: 0.75rem; }
+.cell-target { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cell-empty { color: var(--muted); }
+.row-actions { display: inline-flex; flex-wrap: nowrap; gap: 12px; }
 .table-scroll-hint { display: none; font-size: 0.875rem; font-weight: 500; color: var(--lead); }
 .filters { display: flex; flex-flow: row wrap; gap: 8px 16px; align-items: flex-end; }
 .filters label { display: flex; flex-direction: column; }
