@@ -154,7 +154,12 @@ describe("app routes", () => {
     const css = await res.text();
     for (const rule of [
       ".type-choice li.panel { padding: 14px 16px; overflow-wrap: anywhere; }",
-      "ul.counts { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 4px; }",
+      ".state-tiles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 12px; }",
+      ".state-tile { display: block; padding: 16px; color: var(--text); text-decoration: none; }",
+      ".state-tile:hover { border-color: var(--accent); }",
+      "a.state-tile, a.state-tile:visited { color: var(--text); }",
+      "font-family: var(--font-sans); font-size: 0.875rem; }",
+      ".tile-count { display: block; font-family: var(--font-mono); font-size: 1.75rem; font-weight: 600; }",
       ".check-state-maintenance .dot {",
       ".tag-info { color: var(--accent2); background: var(--bg); }",
       "td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }",
@@ -183,7 +188,7 @@ describe("app routes", () => {
       '--font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
       "@media (max-width: 1180px) {\n  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }",
       "@media (max-width: 900px) {\n  dl.settings, .settings { grid-template-columns: minmax(0, 1fr); }\n  .grid-2, .grid-4, .form-grid { grid-template-columns: minmax(0, 1fr); }",
-      "@media (max-width: 719px) {\n  .shell { grid-template-columns: minmax(0, 1fr); }",
+      "@media (max-width: 719px) {\n  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }",
       "main.shell-main { padding: 20px 16px 40px; }",
       ".sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px; scroll-snap-type: x mandatory; gap: 0; background:",
       ".sidebar nav ul { flex-direction: row; flex-wrap: nowrap; flex: none;",
@@ -205,10 +210,44 @@ describe("app routes", () => {
       "font-size: 0.9375rem",
       "h1 { font-size: clamp(2rem, 1.8rem + 0.8vw, 2.5rem); font-weight: 700; line-height: 1.1; letter-spacing: -0.02em;",
       "h2 { font-size: clamp(1.25rem, 1.15rem + 0.4vw, 1.5rem); font-weight: 500;",
+      "table-layout: fixed",
+      "td, td * { overflow-wrap: normal; word-break: normal; }",
+      "text-overflow: ellipsis",
+      "td.cell-nowrap",
+      ".row-actions { display: inline-flex; flex-wrap: nowrap; gap: 12px; }",
+      ".cell-empty {",
+      "#recovery-codes code { white-space: nowrap; word-break: normal; overflow-wrap: normal; font-size: 0.8125rem; }",
+      "  #recovery-codes code { font-size: 0.75rem; }",
+      "textarea { width: 100%; max-width: 40rem;",
+      'input.input-narrow:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), select.input-narrow { max-width: 12rem; }',
+      'input.input-medium:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), select.input-medium { max-width: 24rem; }',
+      "button[data-copy] { align-self: flex-start; }",
+      "label.choice.option-card { align-items: flex-start; }",
+      ".choice-text { display: flex; flex-direction: column;",
+      ".sidebar { align-self: stretch; border-right: 1px solid var(--rule); min-width: 0; }",
+      ".sidebar-inner { position: sticky; top: 0; height: 100vh; overflow-y: auto;",
+      "  .sidebar-inner { position: static; height: auto; overflow-y: visible;",
+      "  .nav-strip { position: relative; timeline-scope: --main-nav; }",
+      "scroll-timeline: --main-nav x",
+      ".nav-edge { display: none; }",
+      "animation: nav-edge-start linear both; animation-timeline: --main-nav;",
+      "animation: nav-edge-end linear both; animation-timeline: --main-nav;",
+      "@keyframes nav-edge-start { 0% { opacity: 0; } 5%, 100% { opacity: 1; } }",
+      "@keyframes nav-edge-end { 0%, 95% { opacity: 1; } 100% { opacity: 0; } }",
+      "  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }",
+      "  .sidebar-foot { margin-top: 0; flex-wrap: nowrap; padding: 8px 12px; }",
+      "  .avatar { display: none; }",
+      "  .account { flex: 1 1 0; min-width: 0; line-height: 1.3; }",
+      "  .account-who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
+      "  .account-role { white-space: nowrap; }",
     ]) {
       expect(css).toContain(rule);
     }
-    expect(css).not.toContain("font-size: 1.75rem");
+    expect(css).not.toContain(".table-scroll table.checks td { overflow-wrap: normal");
+    expect(css).not.toContain("break-word");
+    expect(css).not.toContain(".sidebar { position: sticky; top: 0; height: 100vh;");
+    expect(css).not.toContain("h1 { font-size: 1.75rem");
+    expect(css).not.toContain("ul.counts");
     expect(css).not.toContain(".sidebar nav .icon { display: none; }");
     expect(css).not.toContain("flex-direction: column; justify-content: center;");
     expect(css.startsWith("[hidden] { display: none !important; }\n")).toBe(true);
@@ -255,6 +294,7 @@ describe("app routes", () => {
       ".nav-item:visited": "var(--lead)",
       '.nav-item[aria-current="page"]:visited': "var(--text)",
       ".breadcrumbs a:visited": "var(--muted)",
+      "a.state-tile:visited": "var(--text)",
     };
     const seen = new Map<string, string>();
     const tokens = css.match(/[{}]|[^{}]+/g) ?? [];

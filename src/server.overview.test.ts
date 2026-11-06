@@ -60,24 +60,29 @@ function expectClean(c: SignedInConsole, body: string): void {
 
 describe("GET / Overview summary", () => {
   const rows: Array<[string, string[], string, string]> = [
-    ["success", ["up", "up"], "Overall state: Up. All checks are up.", "Up: 2"],
+    [
+      "success",
+      ["up", "up"],
+      "Overall state: Up. All checks are up.",
+      'href="/checks?state=up"><span class="tile-label"><span class="check-state check-state-up"><span class="dot" aria-hidden="true"></span></span>Up</span><span class="tile-count">2</span>',
+    ],
     [
       "mixed",
       ["degraded", "down", "up"],
       "Overall state: Down. At least one check is down.",
-      "Down: 1",
+      'href="/checks?state=down"><span class="tile-label"><span class="check-state check-state-down"><span class="dot" aria-hidden="true"></span></span>Down</span><span class="tile-count">1</span>',
     ],
     [
       "all unknown",
       ["unknown", "unknown"],
       "Overall state: Unknown. At least one check has no result yet.",
-      "Unknown: 2",
+      'href="/checks?state=unknown"><span class="tile-label"><span class="check-state check-state-unknown"><span class="dot" aria-hidden="true"></span></span>Unknown</span><span class="tile-count">2</span>',
     ],
     [
       "all maintenance",
       ["maintenance"],
       "Overall state: Maintenance. Some checks are in maintenance, the others are up.",
-      "Maintenance: 1",
+      'href="/checks?state=maintenance"><span class="tile-label"><span class="check-state check-state-maintenance"><span class="dot" aria-hidden="true"></span></span>Maintenance</span><span class="tile-count">1</span>',
     ],
   ];
   for (const [name, states, overall, count] of rows) {
@@ -92,7 +97,7 @@ describe("GET / Overview summary", () => {
       expect(res.body).toContain(count);
       expect(res.body).toContain(`pulse-api: ${api.url}`);
       expect(res.body).toContain(
-        'Signed in as Owner <span class="account-email">(owner@example.com)</span>',
+        '<span class="account-prefix">Signed in as </span>Owner <span class="account-email">(owner@example.com)</span>',
       );
       expect(res.body).toContain(
         '<a class="nav-item" href="/" aria-current="page"><svg class="icon"',
@@ -108,7 +113,7 @@ describe("GET / Overview summary", () => {
     const c = await consoleFor(api.url);
     const res = await getPage(c, "/");
     expect(res.body).toContain(
-      '<li><span class="check-state check-state-down"><span class="dot" aria-hidden="true"></span></span>Down: 2</li>\n<li><span class="check-state check-state-degraded"><span class="dot" aria-hidden="true"></span></span>Degraded: 0</li>\n<li><span class="check-state check-state-unknown"><span class="dot" aria-hidden="true"></span></span>Unknown: 0</li>\n<li><span class="check-state check-state-maintenance"><span class="dot" aria-hidden="true"></span></span>Maintenance: 0</li>\n<li><span class="check-state check-state-up"><span class="dot" aria-hidden="true"></span></span>Up: 1</li>\n<li>Total: 3</li>',
+      '<li><a class="panel state-tile" href="/checks?state=down"><span class="tile-label"><span class="check-state check-state-down"><span class="dot" aria-hidden="true"></span></span>Down</span><span class="tile-count">2</span></a></li>\n<li><a class="panel state-tile" href="/checks?state=degraded"><span class="tile-label"><span class="check-state check-state-degraded"><span class="dot" aria-hidden="true"></span></span>Degraded</span><span class="tile-count">0</span></a></li>\n<li><a class="panel state-tile" href="/checks?state=unknown"><span class="tile-label"><span class="check-state check-state-unknown"><span class="dot" aria-hidden="true"></span></span>Unknown</span><span class="tile-count">0</span></a></li>\n<li><a class="panel state-tile" href="/checks?state=maintenance"><span class="tile-label"><span class="check-state check-state-maintenance"><span class="dot" aria-hidden="true"></span></span>Maintenance</span><span class="tile-count">0</span></a></li>\n<li><a class="panel state-tile" href="/checks?state=up"><span class="tile-label"><span class="check-state check-state-up"><span class="dot" aria-hidden="true"></span></span>Up</span><span class="tile-count">1</span></a></li>\n<li><a class="panel state-tile" href="/checks"><span class="tile-label">Total</span><span class="tile-count">3</span></a></li>',
     );
   });
 

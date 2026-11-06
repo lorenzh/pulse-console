@@ -45,6 +45,15 @@ test("submitButton renders the ghost and danger variants as classes", () => {
   );
 });
 
+test("submitButton adds the small size to its class", () => {
+  expect(submitButton({ label: "A", busyLabel: "B", variant: "secondary", size: "small" })).toBe(
+    '<button type="submit" class="secondary small" data-busy-label="B">A</button>',
+  );
+  expect(submitButton({ label: "A", busyLabel: "B", size: "small" })).toBe(
+    '<button type="submit" class="small" data-busy-label="B">A</button>',
+  );
+});
+
 test("plainDocument has the wordmark, one h1 in the plain panel and no script", () => {
   const html = plainDocument("Sign <in>", "<p>body</p>");
   expect(html).toContain('<body class="plain">');
@@ -78,6 +87,18 @@ test("field errors have labels, aria-invalid and aria-describedby", () => {
     'value="&lt;v&gt;" aria-describedby="field-name-error" aria-invalid="true"',
   );
   expect(html).toContain('<span class="error" id="field-name-error">Too &lt;long&gt;</span>');
+});
+
+test("a field width adds its class to the input only", () => {
+  const base = { label: "Name", name: "name", type: "text", autocomplete: "off" } as const;
+  expect(field({ ...base, width: "medium" })).toContain(
+    '<input id="field-name" class="input-medium" name="name" type="text"',
+  );
+  expect(field({ ...base, width: "narrow" })).toContain(
+    '<input id="field-name" class="input-narrow"',
+  );
+  expect(field(base)).toContain('<input id="field-name" name="name"');
+  expect(field({ ...base, width: "medium" })).toContain('<label for="field-name">Name\n<input');
 });
 
 test("textarea fields keep the value and show errors", () => {

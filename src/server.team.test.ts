@@ -42,14 +42,22 @@ describe("GET /team", () => {
     );
     expect(r.body).toContain("<h1");
     for (const row of [
-      '<td>Owner</td>\n<td>owner@example.com</td>\n<td><span class="tag tag-neutral">Owner</span></td>\n<td>2FA: on</td>',
-      '<td>Ada Admin</td>\n<td>admin@example.com</td>\n<td><span class="tag tag-neutral">Admin</span></td>\n<td>2FA: on</td>',
-      '<td>Mo Member</td>\n<td>member@example.com</td>\n<td><span class="tag tag-neutral">Member</span></td>\n<td>2FA: off</td>',
-      '<td>Vi Viewer</td>\n<td>viewer@example.com</td>\n<td><span class="tag tag-neutral">Viewer</span></td>\n<td>2FA: off</td>',
+      '<td>Owner</td>\n<td>owner@example.com</td>\n<td><span class="tag tag-neutral">Owner</span></td>\n<td class="cell-nowrap">On</td>',
+      '<td>Ada Admin</td>\n<td>admin@example.com</td>\n<td><span class="tag tag-neutral">Admin</span></td>\n<td class="cell-nowrap">On</td>',
+      '<td>Mo Member</td>\n<td>member@example.com</td>\n<td><span class="tag tag-neutral">Member</span></td>\n<td class="cell-nowrap">Off</td>',
+      '<td>Vi Viewer</td>\n<td>viewer@example.com</td>\n<td><span class="tag tag-neutral">Viewer</span></td>\n<td class="cell-nowrap">Off</td>',
     ]) {
       expect(r.body).toContain(row);
     }
     expect(r.body).toContain("<p>No pending invites.</p>");
+    expect(r.body).toContain(
+      '<td class="cell-nowrap">On</td>\n<td class="actions-cell"><span class="cell-empty"><span aria-hidden="true">—</span><span class="visually-hidden">No actions</span></span></td>',
+    );
+    expect(r.body).not.toContain("2FA: on");
+    expect(r.body).toContain(
+      '<input id="field-email" class="input-medium" name="email" type="email"',
+    );
+    expect(r.body).not.toContain("2FA: off");
     expect(r.body).toContain('<h2 id="org-2fa-heading">Organisation 2FA</h2>');
     expect(r.body).toContain("<p>Two-factor sign-in for everyone: off.</p>");
     expect(r.body.match(/<script/g)).toHaveLength(1);
@@ -112,10 +120,10 @@ describe("GET /team", () => {
     const r = await getPage(c, "/team", c.cookies.admin);
     expect(r.status).toBe(200);
     expect(r.body).toContain(
-      '<td>new@example.com</td>\n<td><span class="tag tag-neutral">Member</span></td>\n<td>Ada Admin</td>\n<td class="mono">2023-11-14 22:13 UTC</td>\n<td>pending</td>',
+      '<td>new@example.com</td>\n<td><span class="tag tag-neutral">Member</span></td>\n<td>Ada Admin</td>\n<td class="mono cell-nowrap">2023-11-14 22:13 UTC</td>\n<td class="cell-nowrap">pending</td>',
     );
     expect(r.body).toContain(
-      '<td>late@example.com</td>\n<td><span class="tag tag-neutral">Viewer</span></td>\n<td>removed</td>\n<td class="mono">1970-01-01 02:30 UTC</td>\n<td>expired</td>',
+      '<td>late@example.com</td>\n<td><span class="tag tag-neutral">Viewer</span></td>\n<td>removed</td>\n<td class="mono cell-nowrap">1970-01-01 02:30 UTC</td>\n<td class="cell-nowrap">expired</td>',
     );
     expect(r.body).not.toContain("used@example.com");
     expect(r.body).not.toContain("gone@example.com");

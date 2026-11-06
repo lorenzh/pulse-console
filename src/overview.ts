@@ -61,15 +61,16 @@ function summary(counts: CheckCounts): string {
       action: { href: "/", label: "Reload" },
     });
   }
-  const rows = COUNT_ROWS.map(([label, key]) => {
+  const tiles = COUNT_ROWS.map(([label, key]) => {
     const dot =
       key === "total"
         ? ""
         : `<span class="check-state check-state-${key}"><span class="dot" aria-hidden="true"></span></span>`;
-    return `<li>${dot}${escapeHtml(label)}: ${String(counts[key])}</li>`;
+    const href = key === "total" ? "/checks" : `/checks?state=${key}`;
+    return `<li><a class="panel state-tile" href="${href}"><span class="tile-label">${dot}${escapeHtml(label)}</span><span class="tile-count">${String(counts[key])}</span></a></li>`;
   }).join("\n");
-  return `${paragraph(OVERALL_TEXT[state])}<ul class="counts mono">
-${rows}
+  return `${paragraph(OVERALL_TEXT[state])}<ul class="state-tiles">
+${tiles}
 </ul>
 `;
 }

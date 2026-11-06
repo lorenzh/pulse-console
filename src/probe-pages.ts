@@ -2,7 +2,15 @@ import type { TokenMetadata, TokenSecretResponse } from "@lorenzh/pulse-contract
 import { escapeHtml } from "@lorenzh/pulse-kit";
 import { utcTime } from "./check-format.ts";
 import { plainConfirmPage, typedConfirmPage } from "./confirm.ts";
-import { csrfField, formErrorSummary, formTokenField, paragraph, submitButton } from "./html.ts";
+import {
+  csrfField,
+  type FieldWidth,
+  formErrorSummary,
+  formTokenField,
+  paragraph,
+  submitButton,
+  widthClass,
+} from "./html.ts";
 import {
   composeFile,
   composeRestartCommand,
@@ -78,7 +86,10 @@ function credentialRow(model: ProbeListModel, token: TokenMetadata): string {
     escapeHtml(lastUsedText(token.lastUsedAt)),
     escapeHtml(tokenStateText(token, model.now)),
   ];
-  const tds = cells.map((cell) => `<td>${cell}</td>`).join("");
+  const nowrap = new Set([1, 3, 4]);
+  const tds = cells
+    .map((cell, i) => (nowrap.has(i) ? `<td class="cell-nowrap">${cell}</td>` : `<td>${cell}</td>`))
+    .join("");
   return `<tr>${tds}<td class="actions-cell">${actions}</td></tr>`;
 }
 
@@ -142,6 +153,7 @@ function inputHtml(view: {
   isRequired: boolean;
   help?: string | undefined;
   error: string | undefined;
+  width?: FieldWidth | undefined;
 }): string {
   const id = `field-${view.name}`;
   const described = [
@@ -159,7 +171,7 @@ function inputHtml(view: {
       : `\n<span class="error" id="${id}-error">${escapeHtml(view.error)}</span>`;
   const required = view.isRequired ? " required" : "";
   return `<label for="${id}">${escapeHtml(view.label)}
-<input id="${id}" name="${view.name}" type="${view.type}" autocomplete="off"${required} value="${escapeHtml(view.value)}"${aria}>${help}${error}
+<input id="${id}"${widthClass(view.width)} name="${view.name}" type="${view.type}" autocomplete="off"${required} value="${escapeHtml(view.value)}"${aria}>${help}${error}
 </label>`;
 }
 
@@ -172,8 +184,8 @@ export function probeFormHtml(model: ProbeFormModel): string {
   return `${notice}${formErrorSummary(model.errors)}<form method="post" action="/probes/new">
 ${csrfField(model.csrf)}
 ${formTokenField(model.formToken)}
-${inputHtml({ label: "Location", name: "location", type: "text", value: input.location, isRequired: true, error: errorOf("location") })}
-${inputHtml({ label: "Name (optional)", name: "name", type: "text", value: input.name, isRequired: false, help: "Default: probe <location>.", error: errorOf("name") })}
+${inputHtml({ label: "Location", name: "location", type: "text", value: input.location, isRequired: true, error: errorOf("location"), width: "medium" })}
+${inputHtml({ label: "Name (optional)", name: "name", type: "text", value: input.name, isRequired: false, help: "Default: probe <location>.", error: errorOf("name"), width: "medium" })}
 ${inputHtml({ label: "API URL for the probe", name: "api_url", type: "url", value: input.apiUrl, isRequired: true, help: apiUrlHelpText(model.consoleApiUrl), error: errorOf("api_url") })}
 ${inputHtml({ label: "Probe image", name: "image", type: "text", value: input.image, isRequired: true, error: errorOf("image") })}
 ${inputHtml({ label: "Docker network (optional)", name: "network", type: "text", value: input.network, isRequired: false, help: NETWORK_HELP_TEXT, error: errorOf("network") })}
@@ -186,7 +198,7 @@ ${inputHtml({ label: "Docker network (optional)", name: "network", type: "text",
 function preBlock(id: string, text: string, isSecret: boolean): string {
   const secret = isSecret ? " data-secret" : "";
   return `<pre id="${id}"${secret}>${escapeHtml(text)}</pre>
-<button type="button" data-copy="${id}" hidden>Copy</button>
+<button type="button" class="secondary small" data-copy="${id}" hidden>Copy</button>
 `;
 }
 

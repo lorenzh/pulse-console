@@ -14,9 +14,17 @@ export const TOKEN_PRESETS = [
 export type TokenPreset = (typeof TOKEN_PRESETS)[number];
 export type TokenPresetId = TokenPreset["id"];
 
-/** Shown under every preset that holds `admin`. */
+/** One line per preset card, under its label. */
+export const PRESET_DESCRIPTIONS: Record<TokenPresetId, string> = {
+  read: "Reads the checks and their configuration. Changes nothing.",
+  checks: "Reads checks and creates, changes and deletes them.",
+  incidents: "Reads checks and posts incidents.",
+  full: "Reads and changes checks and posts incidents.",
+};
+
+/** Shown once above the presets: every preset but Read holds `admin`. */
 export const ADMIN_PRESET_TEXT =
-  "Can also create, rotate and revoke tokens with the same or fewer scopes, and read the audit log.";
+  "Manage checks, Post incidents and Full access can also create, rotate and revoke tokens with the same or fewer scopes, and read the audit log.";
 
 /** The preset of a form value; `undefined` for anything else. */
 export function presetOf(value: string | undefined): TokenPreset | undefined {

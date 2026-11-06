@@ -43,9 +43,13 @@ function navigationHtml(view: ShellView): string {
     groups.instance.length === 0
       ? ""
       : `\n<p class="eyebrow nav-group" id="nav-instance">Instance</p>\n${navList(groups.instance, view.current, ' aria-labelledby="nav-instance"')}`;
-  return `<nav aria-label="Main">
+  return `<div class="nav-strip">
+<nav aria-label="Main">
 ${navList(groups.main, view.current)}${instance}
-</nav>`;
+</nav>
+<span class="nav-edge nav-edge-start" aria-hidden="true"></span>
+<span class="nav-edge nav-edge-end" aria-hidden="true"></span>
+</div>`;
 }
 
 function firstCodePoint(text: string): string {
@@ -89,18 +93,20 @@ ${documentHead({ title: view.title, instanceName: view.instanceName, hasScript: 
 <a class="skip-link" href="#main">Skip to content</a>
 <div class="shell">
 <header class="sidebar">
+<div class="sidebar-inner">
 ${wordmark()}
 <p class="instance">${escapeHtml(view.instanceName)}</p>
 ${navigationHtml(view)}
 <div class="sidebar-foot">
 <span class="avatar" aria-hidden="true">${escapeHtml(initials(view.user))}</span>
-<p class="account">Signed in as ${escapeHtml(view.user.name)} <span class="account-email">(${escapeHtml(view.user.email)})</span><br>Role: ${roleLabel(view.role)}</p>
+<p class="account"><span class="account-who"><span class="account-prefix">Signed in as </span>${escapeHtml(view.user.name)} <span class="account-email">(${escapeHtml(view.user.email)})</span></span> <span class="account-role">Role: ${roleLabel(view.role)}</span></p>
 <a href="/account/security">Account security</a>
 <form method="post" action="/sign-out" class="sign-out">
 ${csrfField(view.csrf)}
 ${formTokenField(view.signOutToken)}
-${submitButton({ label: "Sign out", busyLabel: "Signing out…", variant: "secondary" })}
+${submitButton({ label: "Sign out", busyLabel: "Signing out…", variant: "secondary", size: "small" })}
 </form>
+</div>
 </div>
 </header>
 <div class="shell-column">
