@@ -169,10 +169,17 @@ an env value.
 JSON assertion row `i` (0 to 9) has `assert_<i>_pointer`, `assert_<i>_mode` (`none`, `exists`
 or `equals`) and `assert_<i>_equals`, which must be JSON (`"ok"`, `200`, `true`).
 
+The pointer is sent exactly as entered. A space belongs to the key name and is never removed,
+so an edit keeps a stored pointer such as `/status ` as it is. A pointer that is not empty must
+start with `/`; a leading space or only spaces is a field error.
+
 ## Editor pages
 
 `src/check-editor-page.ts` renders the create and edit forms. Create is served at `/checks/new`, edit at `/checks/edit?id=<id>`.
 
+- Tab moves through every control of an editor in page order. Each focused control shows a
+  2 px solid outline. Every create and edit form fits a 1280 px wide window without sideways
+  scroll.
 - Create shows an `id` input and a hidden `type`. Edit shows the id and the type as text and
   has neither input: both come from the stored view.
 - Durations are whole milliseconds; each such label ends in `(ms)`. Defaults: method GET, TLS
