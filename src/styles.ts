@@ -198,7 +198,7 @@ dl.settings, .settings { display: grid; grid-template-columns: 150px minmax(0, 1
 @media (max-width: 719px) {
   .shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar { position: static; height: auto; overflow-y: visible; width: 100%; gap: 8px; border-right: 0; border-bottom: 1px solid var(--rule); }
-  .sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px; gap: 0; }
+  .sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px; gap: 0; background: linear-gradient(to right, var(--bg) 30%, transparent), linear-gradient(to left, var(--bg) 30%, transparent) 100% 0, radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / 0.18), transparent), radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 0.18), transparent) 100% 0; background-repeat: no-repeat; background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%; background-attachment: local, local, scroll, scroll; }
   .sidebar nav ul { flex-direction: row; flex-wrap: nowrap; flex: none; gap: 0; }
   .sidebar nav .nav-item { padding: 0 3px; gap: 3px; font-size: 13px; }
   .nav-group { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
@@ -208,5 +208,8 @@ dl.settings, .settings { display: grid; grid-template-columns: 150px minmax(0, 1
   main.shell-main { padding: 20px 16px 40px; }
   .plain-panel { padding: 20px; }
   .table-scroll-hint { display: block; }
+}
+@media (max-width: 419px) {
+  .sidebar nav .nav-item { flex-direction: column; justify-content: center; gap: 2px; padding: 0 4px; font-size: 12px; }
 }
 `;

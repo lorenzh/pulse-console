@@ -637,10 +637,18 @@ async function checkMobileNavIcons(env: Env, browser: Browser): Promise<void> {
 
 async function checkMobileNavFocus(env: Env, browser: Browser): Promise<void> {
   await checkMobileNavIcons(env, browser);
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  for (const width of [390, 375, 360, 320]) await checkMobileNavFocusAt(env, browser, width);
+  ok(
+    "mobile nav: every focused item keeps its 2px outline at offset 3px inside the row at 390, 375, 360 and 320 px",
+  );
+}
+
+async function checkMobileNavFocusAt(env: Env, browser: Browser, width: number): Promise<void> {
+  const context = await browser.newContext({ viewport: { width, height: 844 } });
   const page = await context.newPage();
   await signIn(page, env);
   await page.goto(`${env.console.base}/`);
+  await page.evaluate(() => document.fonts.ready);
   const tops = await page.evaluate(() =>
     [...document.querySelectorAll(".sidebar nav .nav-item")].map((el) =>
       Math.round(el.getBoundingClientRect().top),
@@ -670,10 +678,9 @@ async function checkMobileNavFocus(env: Env, browser: Browser): Promise<void> {
       throw new CheckError(`mobile nav: Tab reached ${got?.text}`);
     }
     assert(got.outline === "solid 2px 3px", `mobile nav ${text}: outline ${got.outline}`);
-    assert(got.inside, `mobile nav ${text}: outline clipped (${got.where})`);
+    assert(got.inside, `mobile nav ${width}px ${text}: outline clipped (${got.where})`);
   }
   await context.close();
-  ok("mobile nav: every focused item keeps its 2px outline at offset 3px inside the row");
 }
 
 async function checkNoScript(env: Env, browser: Browser): Promise<void> {
