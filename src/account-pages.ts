@@ -121,7 +121,7 @@ function authenticatorBody(view: AuthenticatorView): string {
     case "new":
       return `<p>Your account needs an authenticator app. Create a setup key to start.</p>\n${newForm(view, false)}`;
     case "replace":
-      return `<p>Authenticator added ${escapeHtml(utcMinute(view.confirmedAt))}.</p>
+      return `<p>Authenticator added <span class="mono">${escapeHtml(utcMinute(view.confirmedAt))}</span>.</p>
 <p>Replacing it ends every other session and makes new recovery codes.</p>
 ${newForm(view, true)}`;
     default: {
@@ -157,7 +157,7 @@ export function securityPage(view: {
   const added =
     view.confirmedAt === undefined
       ? "<p>No authenticator app is set up.</p>"
-      : `<p>Authenticator added ${escapeHtml(utcMinute(view.confirmedAt))}.</p>`;
+      : `<p>Authenticator added <span class="mono">${escapeHtml(utcMinute(view.confirmedAt))}</span>.</p>`;
   return {
     title: "Account security",
     body: `${added}
@@ -209,7 +209,7 @@ export function sessionsPage(
   const rows = view.rows
     .map(
       (row) =>
-        `<tr><td>${escapeHtml(utcMinute(row.createdAt))}</td><td>${escapeHtml(utcMinute(row.lastSeenAt))}</td><td>${row.isCurrent ? "This browser" : ""}</td></tr>`,
+        `<tr><td class="mono">${escapeHtml(utcMinute(row.createdAt))}</td><td class="mono">${escapeHtml(utcMinute(row.lastSeenAt))}</td><td>${row.isCurrent ? "This browser" : ""}</td></tr>`,
     )
     .join("\n");
   return {

@@ -81,7 +81,7 @@ function inviteRow(invite: PendingInvite, view: TeamView): string {
 <td>${escapeHtml(invite.email)}</td>
 <td>${roleTag(invite.role)}</td>
 <td>${escapeHtml(invite.createdByName ?? "removed")}</td>
-<td>${escapeHtml(utcMinute(invite.expiresAt))}</td>
+<td class="mono">${escapeHtml(utcMinute(invite.expiresAt))}</td>
 <td>${state}</td>
 <td>${action}</td>
 </tr>`;
@@ -220,7 +220,8 @@ export function inviteLinkBody(view: {
 <input id="invite-link" class="link-output" type="text" readonly value="${escapeHtml(view.link)}">
 </label>
 <p><code>${escapeHtml(view.link)}</code></p>
-${paragraph(`It works once and expires on ${utcMinute(view.expiresAt)}. It is shown only now.`)}<p class="plain-foot"><a href="/team">Back to the team</a></p>
+<p>It works once and expires on <span class="mono">${escapeHtml(utcMinute(view.expiresAt))}</span>. It is shown only now.</p>
+<p class="plain-foot"><a href="/team">Back to the team</a></p>
 </section>`;
 }
 
@@ -421,7 +422,8 @@ export function resetLinkBody(view: { link: string; name: string; expiresAt: num
 <input id="reset-link" class="link-output" type="text" readonly value="${escapeHtml(view.link)}">
 </label>
 <p><code>${escapeHtml(view.link)}</code></p>
-${paragraph(`It works once and expires on ${utcMinute(view.expiresAt)}. Using it signs ${view.name} out everywhere.`)}<p class="plain-foot"><a href="/team">Back to the team</a></p>
+<p>It works once and expires on <span class="mono">${escapeHtml(utcMinute(view.expiresAt))}</span>. Using it signs ${escapeHtml(view.name)} out everywhere.</p>
+<p class="plain-foot"><a href="/team">Back to the team</a></p>
 </section>`;
 }
 

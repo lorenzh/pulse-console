@@ -120,7 +120,7 @@ describe("create and the link page", () => {
     expect(reply.body).toContain("<p>Email: new@example.com</p>");
     expect(reply.body).toContain("<p>Role: Member</p>");
     expect(reply.body).toContain(
-      "<p>It works once and expires on 1970-01-08 02:30 UTC. It is shown only now.</p>",
+      '<p>It works once and expires on <span class="mono">1970-01-08 02:30 UTC</span>. It is shown only now.</p>',
     );
     expect(reply.body).not.toContain("SMTP");
     const expected = createHash("sha256").update(token).digest("hex");

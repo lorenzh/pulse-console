@@ -2218,6 +2218,7 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   if (width === 390) await assertAccountVisible(page, `${at} /`);
   await assertFontsUsed(page, "main .mono", `${at} /`);
   page.off("response", onFont);
+  await axeOn(page, `${base}/`, `${at} Overview`);
   ok(`matrix ${at}: overview body, current and other nav colors, fonts used, no sideways scroll`);
 
   await page.goto(`${base}/checks`);
@@ -2278,6 +2279,7 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   await assertNotFound(page, base);
   env.role.current = "member";
   await assertForbidden(page, base, scheme);
+  await axeOn(page, `${base}/__test/states/forbidden`, `${at} 403`);
   env.role.current = "owner";
   await axeOn(page, `${base}/does-not-exist`, `${at} 404`);
   ok(
@@ -2292,13 +2294,94 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   }
 }
 
-async function matrixSignIn(env: Env, page: Page, scheme: Scheme): Promise<void> {
+/** R2: every UTC timestamp on a page is set in JetBrains Mono. */
+async function assertTimestampsMono(page: Page, label: string): Promise<void> {
+  await page.evaluate(() => document.fonts.ready);
+  const found = await page.evaluate(() => {
+    const out: { text: string; family: string }[] = [];
+    const walker = document.createTreeWalker(
+      document.querySelector("main") ?? document.body,
+      NodeFilter.SHOW_TEXT,
+    );
+    for (let n = walker.nextNode(); n !== null; n = walker.nextNode()) {
+      const text = n.textContent ?? "";
+      const parent = n.parentElement;
+      if (parent === null || !/\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})? UTC/.test(text)) continue;
+      out.push({ text: text.trim(), family: getComputedStyle(parent).fontFamily });
+    }
+    return out;
+  });
+  assert(found.length > 0, `${label}: no UTC timestamp found`);
+  const bad = found.filter((f) => !f.family.startsWith('"JetBrains Mono"'));
+  assert(bad.length === 0, `${label}: timestamps not mono ${JSON.stringify(bad)}`);
+}
+
+/** Team, account, invite and the danger confirmations in each scheme and width. */
+async function matrixTeamAndAccount(env: Env, page: Page, scheme: Scheme, width: number) {
+  const base = env.console.base;
+  const at = `${scheme} ${width}px`;
+  await page.goto(`${base}/team`);
+  await page.fill('input[name="email"]', `matrix-${scheme}-${width}@example.com`);
+  await Promise.all([
+    page.waitForURL(`${base}/team/invites`),
+    page.getByRole("button", { name: "Create invite link" }).click(),
+  ]);
+  await assertTimestampsMono(page, `${at} invite link page`);
+  const link = await page.inputValue("#invite-link");
+  const linkAxe = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
+  assert(linkAxe.violations.length === 0, `${at} axe on the invite link page`);
+  await axeOn(page, `${base}/team`, `${at} /team`);
+  await assertTimestampsMono(page, `${at} /team pending invites`);
+  await assertNoSidewaysScroll(page, `${at} /team`);
+  const revoke = await page
+    .locator(`a[href^="/team/invites/revoke?invite="]`)
+    .last()
+    .getAttribute("href");
+  assert(revoke !== null, `${at}: revoke link`);
+  await axeOn(page, base + revoke, `${at} revoke invite`);
+  await assertDanger(page, 'main button[type="submit"]', scheme, `${at} Revoke invite`);
+  await axeOn(page, link, `${at} invite page`);
+  await axeOn(page, `${base}/invite/${"A".repeat(43)}`, `${at} invalid invite link`);
+  for (const path of ACCOUNT_ROUTES) {
+    await axeOn(page, base + path, `${at} ${path}`);
+    await assertNoSidewaysScroll(page, `${at} ${path}`);
+  }
+  for (const path of ["/account/sessions", "/account/security", "/account/authenticator"]) {
+    await page.goto(base + path);
+    await assertTimestampsMono(page, `${at} ${path}`);
+  }
+  for (const path of [
+    "/__test/confirm/typed/remove-member",
+    "/__test/confirm/typed/transfer-ownership",
+    "/__test/confirm/plain/reset-2fa",
+    "/__test/confirm/plain/delete-maintenance",
+  ]) {
+    await axeOn(page, base + path, `${at} ${path}`);
+    await assertDanger(page, 'main button[type="submit"]', scheme, `${at} ${path}`);
+  }
+  for (const path of [
+    "/__test/confirm/plain/resolve-incident",
+    "/__test/confirm/plain/new-recovery-codes",
+  ]) {
+    await axeOn(page, base + path, `${at} ${path}`);
+    await assertPrimary(page, 'main button[type="submit"]', scheme, `${at} ${path}`);
+  }
+  ok(
+    `matrix ${at}: axe 0 on team, invite link, revoke invite, invite and invalid link, account pages and plain/typed confirmations; revoke, remove, transfer, reset 2FA and delete maintenance danger; timestamps mono`,
+  );
+}
+
+/** The signed-out sign-in page in a context of its own, so no recovery code is spent. */
+async function matrixSignIn(env: Env, page: Page, scheme: Scheme, width: number): Promise<void> {
+  const at = `${scheme} ${width}px`;
   await page.goto(`${env.console.base}/sign-in`);
   await page.evaluate(() => document.fonts.ready);
-  await assertPrimary(page, 'button[type="submit"]', scheme, `${scheme} Sign in`);
-  await assertInput(page, 'input[name="email"]', scheme, `${scheme} sign-in Email`);
-  await assertFontsUsed(page, undefined, `${scheme} sign-in`);
-  await axeOn(page, `${env.console.base}/sign-in`, `${scheme} /sign-in`);
+  await assertPrimary(page, 'button[type="submit"]', scheme, `${at} Sign in`);
+  await assertInput(page, 'input[name="email"]', scheme, `${at} sign-in Email`);
+  await assertFontsUsed(page, undefined, `${at} sign-in`);
+  await assertNoSidewaysScroll(page, `${at} /sign-in`);
+  await axeOn(page, `${env.console.base}/sign-in`, `${at} /sign-in`);
+  ok(`matrix ${at}: sign-in primary, input and focus colors, fonts used, axe 0`);
 }
 
 /** Check 10 cold numbers: a new context, an empty cache, the load of / after sign-in. */
@@ -2383,11 +2466,24 @@ async function checkDesignMatrix(browser: Browser): Promise<void> {
         void dialog.dismiss();
       });
       try {
-        await matrixSignIn(env, page, scheme);
+        for (const [width, height] of MATRIX_WIDTHS) {
+          const signedOut = await browser.newContext({
+            viewport: { width, height },
+            colorScheme: scheme,
+          });
+          try {
+            const out = await newPage(signedOut, violations);
+            watchRequests(out, env.console.base, problems);
+            await matrixSignIn(env, out, scheme, width);
+          } finally {
+            await signedOut.close();
+          }
+        }
         await signIn(page, env);
         for (const [width, height] of MATRIX_WIDTHS) {
           await page.setViewportSize({ width, height });
           await matrixPages(env, page, scheme, width);
+          await matrixTeamAndAccount(env, page, scheme, width);
         }
         await matrixGeometry(env, page, scheme);
       } finally {

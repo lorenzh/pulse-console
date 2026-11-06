@@ -112,10 +112,10 @@ describe("GET /team", () => {
     const r = await getPage(c, "/team", c.cookies.admin);
     expect(r.status).toBe(200);
     expect(r.body).toContain(
-      '<td>new@example.com</td>\n<td><span class="tag tag-neutral">Member</span></td>\n<td>Ada Admin</td>\n<td>2023-11-14 22:13 UTC</td>\n<td>pending</td>',
+      '<td>new@example.com</td>\n<td><span class="tag tag-neutral">Member</span></td>\n<td>Ada Admin</td>\n<td class="mono">2023-11-14 22:13 UTC</td>\n<td>pending</td>',
     );
     expect(r.body).toContain(
-      '<td>late@example.com</td>\n<td><span class="tag tag-neutral">Viewer</span></td>\n<td>removed</td>\n<td>1970-01-01 02:30 UTC</td>\n<td>expired</td>',
+      '<td>late@example.com</td>\n<td><span class="tag tag-neutral">Viewer</span></td>\n<td>removed</td>\n<td class="mono">1970-01-01 02:30 UTC</td>\n<td>expired</td>',
     );
     expect(r.body).not.toContain("used@example.com");
     expect(r.body).not.toContain("gone@example.com");

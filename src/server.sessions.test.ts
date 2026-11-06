@@ -71,7 +71,7 @@ function addSecondUser(dbPath: string, now: number): string {
 }
 
 function tableRows(body: string): string[] {
-  return [...body.matchAll(/<tr><td>[^\n]*?<\/tr>/g)].map((m) => m[0]);
+  return [...body.matchAll(/<tr><td class="mono">[^\n]*?<\/tr>/g)].map((m) => m[0]);
 }
 
 describe("sign out all other sessions", () => {
@@ -203,7 +203,9 @@ describe("sign out all other sessions", () => {
     const page = await a.get("/account/security");
     expect(page.status).toBe(200);
     expect(page.body).toContain("10 of 10 recovery codes left");
-    expect(page.body).toContain("Authenticator added 2023-11-14 22:13 UTC");
+    expect(page.body).toContain(
+      'Authenticator added <span class="mono">2023-11-14 22:13 UTC</span>.',
+    );
     for (const link of [
       '<a href="/account/authenticator">Replace authenticator</a>',
       '<a href="/account/recovery-codes">New recovery codes</a>',

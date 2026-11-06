@@ -112,7 +112,7 @@ describe("making a reset link", () => {
     expect(reply.status).toBe(200);
     expect(reply.body).toContain(`value="${c.base}/reset/${token}"`);
     expect(reply.body).toContain(
-      "It works once and expires on 1970-01-02 02:30 UTC. Using it signs Mo Member out everywhere.",
+      'It works once and expires on <span class="mono">1970-01-02 02:30 UTC</span>. Using it signs Mo Member out everywhere.',
     );
     const digest = createHash("sha256").update(token).digest("hex");
     expect(
