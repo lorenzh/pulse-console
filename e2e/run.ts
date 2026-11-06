@@ -2374,17 +2374,54 @@ async function incidentLayout(page: Page, base: string, label: string): Promise<
     for (const path of INCIDENT_PAGES) {
       await page.goto(base + path);
       await assertFits(page, width, `${label} ${width}px ${path}`);
+      await axeOn(page, base + path, `${label} ${width}px ${path}`);
+      const alert = await page.locator(".callout-error, [role=alert]").count();
+      assert(alert === 0, `${label} ${width}px ${path}: shows an error state`);
     }
   }
-  for (const path of INCIDENT_PAGES) {
-    await axeOn(page, base + path, `${label} ${path}`);
-    const alert = await page.locator(".callout-error, [role=alert]").count();
-    assert(alert === 0, `${label} ${path}: shows an error state`);
-  }
+  await incidentFocusOrder(page, base);
   await page.goto(`${base}/incidents`);
   const untitled = page.getByRole("link", { name: "Untitled incident #12", exact: true });
   assert((await untitled.count()) === 1, `${label}: untitled #12 has a named link`);
   ok(`incidents, ${label}: 10 pages fit 390 and 1280 px with 300-character text, 0 axe violations`);
+}
+
+/** The composer controls take focus in reading order. */
+async function incidentFocusOrder(page: Page, base: string): Promise<void> {
+  await page.goto(`${base}/incidents/new`);
+  await page.focus('input[name="title"]');
+  const reached: string[] = [];
+  for (let i = 0; i < 9; i += 1) {
+    reached.push(
+      await page.evaluate(() => {
+        const el = document.activeElement;
+        if (!(el instanceof HTMLElement)) return "";
+        const name = el.getAttribute("name") ?? "";
+        const value = el.getAttribute("value") ?? "";
+        if (el.tagName === "A" || el.tagName === "BUTTON") return el.textContent?.trim() ?? "";
+        return name === "component" ? `component=${value}` : name;
+      }),
+    );
+    await page.keyboard.press("Tab");
+  }
+  const expected = [
+    "title",
+    "impact",
+    "status",
+    "component=web",
+    "component=public-api",
+    "message",
+    "Cancel",
+    "Update preview",
+    "Publish incident",
+  ];
+  assert(
+    JSON.stringify(reached) === JSON.stringify(expected),
+    `incident composer focus order: ${reached.join(", ")}`,
+  );
+  ok(
+    "incident composer: Tab moves through title, impact, status, components, message, Cancel, Update preview, Publish incident",
+  );
 }
 
 /** Live changes write nothing and equal the server preview after Update preview. */

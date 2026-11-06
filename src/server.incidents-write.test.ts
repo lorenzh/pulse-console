@@ -747,3 +747,190 @@ describe("request counting", () => {
     });
   }
 });
+
+describe("incident review follow-ups", () => {
+  test("a component removed after the composer GET stays checked in the 422 form", async () => {
+    const config = { ...incidentConfig, components: [...incidentConfig.components] };
+    const a = startIncidentApi({ token: TOKEN, config, manual: seedManual(), now: () => NOW });
+    cleanups.push(() => a.stop());
+    const c = await team(a);
+    const opened = await getPage(c, "/incidents/new", c.cookies.member);
+    const token = formTokenOf(opened.body, "/incidents/new");
+    config.components = [{ id: "web", name: "Web", checkIds: ["web"] }];
+    a.seen.length = 0;
+    const res = await post(
+      c,
+      "/incidents/new",
+      [["csrf", c.csrfs.member], ["form_token", token], ...PUBLISH],
+      "member",
+    );
+    expect(res.status).toBe(422);
+    expect(res.body).toContain("Component public-api is not configured any more.");
+    expect(res.body).toMatch(/name="component" value="public-api"[^>]*checked/);
+    expect(res.body).toMatch(/name="component" value="web"[^>]*checked/);
+    expect([a.reads(), a.writes()]).toEqual([1, 0]);
+  });
+
+  const accepted = [`${"😀".repeat(1000)}x`, `${"a".repeat(1999)}😀`, "😀".repeat(2000)];
+  for (const message of accepted) {
+    test(`message of ${[...message].length} code points is sent`, async () => {
+      const a = api();
+      const c = await team(a);
+      const entries = PUBLISH.map(([k, v]) => [k, k === "message" ? message : v] as const);
+      const res = await submit(c, a, composer(entries));
+      expect(res.status).toBe(303);
+      expect([a.reads(), a.writes()]).toEqual([1, 1]);
+      expect(writeBodies(a)[0]).toMatchObject({ message });
+    });
+  }
+  const refused = ["x".repeat(2001), `${"a".repeat(2000)}😀`, "😀".repeat(2001)];
+  for (const message of refused) {
+    test(`message of ${[...message].length} code points is refused with 422`, async () => {
+      const a = api();
+      const c = await team(a);
+      const entries = PUBLISH.map(([k, v]) => [k, k === "message" ? message : v] as const);
+      const res = await submit(c, a, composer(entries));
+      expect(res.status).toBe(422);
+      expect(res.body).toContain("must be 1..2000 characters");
+      expect(res.body).toContain(`${message.slice(0, 40)}`);
+      expect([a.reads(), a.writes()]).toEqual([1, 0]);
+    });
+  }
+
+  function seedTitle(a: IncidentApi, title: string): void {
+    a.manual.push({
+      id: 12,
+      title,
+      componentIds: [],
+      impact: "minor",
+      status: "investigating",
+      createdAt: NOW - 3_600_000,
+      resolvedAt: null,
+      updates: [{ at: NOW - 3_600_000, status: "investigating", message: "Seeded." }],
+    });
+  }
+
+  for (const title of ["   ", "​"]) {
+    describe(`untitled #12 with title ${JSON.stringify(title)}`, () => {
+      test("pages name it Untitled incident #12", async () => {
+        const a = api();
+        seedTitle(a, title);
+        const c = await team(a);
+        for (const path of ["/incidents", "/incidents/manual?id=12", "/incidents/resolve?id=12"]) {
+          expect((await getPage(c, path, c.cookies.admin)).body).toContain("Untitled incident #12");
+        }
+        const del = await getPage(c, "/incidents/delete?id=12", c.cookies.admin);
+        expect(del.body).toContain("Untitled incident #12");
+        expect(del.body).toContain("Type Incident 12 to confirm");
+      });
+      for (const typed of ["Incident 12", " Incident 12 "]) {
+        test(`typed ${JSON.stringify(typed)} deletes with one read and one write`, async () => {
+          const a = api();
+          seedTitle(a, title);
+          const c = await team(a);
+          const res = await submit(c, a, deletion(12, typed));
+          expect(res.status).toBe(303);
+          expect([a.reads(), a.writes()]).toEqual([1, 1]);
+        });
+      }
+      for (const [typed, text] of [
+        ["", "Type the name to confirm."],
+        ["incident 12", "The name does not match. Type Incident 12 exactly."],
+      ] as const) {
+        test(`typed ${JSON.stringify(typed)} is refused`, async () => {
+          const a = api();
+          seedTitle(a, title);
+          const c = await team(a);
+          const res = await submit(c, a, deletion(12, typed));
+          expect(res.status).toBe(422);
+          expect(res.body).toContain(text);
+          expect([a.reads(), a.writes()]).toEqual([1, 0]);
+        });
+      }
+    });
+  }
+
+  for (const [title, typed, isDeleted] of [
+    ["Slow checkout", "Incident 12", false],
+    ["Slow checkout", "slow checkout", false],
+    ["Slow checkout", "Slow  checkout", false],
+    ["Slow checkout", "Slow checkout ", true],
+    ["Café", "Café", true],
+  ] as const) {
+    test(`title ${JSON.stringify(title)} typed ${JSON.stringify(typed)}`, async () => {
+      const a = api();
+      seedTitle(a, title);
+      const c = await team(a);
+      const res = await submit(c, a, deletion(12, typed));
+      if (isDeleted) {
+        expect(res.status).toBe(303);
+        expect([a.reads(), a.writes()]).toEqual([1, 1]);
+      } else {
+        expect(res.status).toBe(422);
+        expect(res.body).toContain("The name does not match. Type Slow checkout exactly.");
+        expect([a.reads(), a.writes()]).toEqual([1, 0]);
+        expect(a.seen.map((s) => s.path)).toEqual(["/manual-incidents/12"]);
+      }
+    });
+  }
+
+  test("a wrong csrf value stops in the dispatcher with zero api requests", async () => {
+    const a = api();
+    const c = await team(a);
+    const opened = await getPage(c, "/incidents/new", c.cookies.member);
+    const token = formTokenOf(opened.body, "/incidents/new");
+    a.seen.length = 0;
+    const res = await post(
+      c,
+      "/incidents/new",
+      [["csrf", "wrong"], ["form_token", token], ...PUBLISH],
+      "member",
+    );
+    expect(res.status).toBe(403);
+    expect(a.seen).toHaveLength(0);
+  });
+
+  test("a Member's forged delete answers 403 with zero api requests", async () => {
+    const a = api();
+    const c = await team(a);
+    a.seen.length = 0;
+    const res = await post(
+      c,
+      "/incidents/delete?id=1",
+      [["csrf", c.csrfs.member], ["form_token", "x"], ...deletion(1, "Checkout slow").entries],
+      "member",
+    );
+    expect(res.status).toBe(403);
+    expect(a.seen).toHaveLength(0);
+    expect(a.manual.some((m) => m.id === 1)).toBe(true);
+  });
+
+  for (const path of ["/incidents/new", "/incidents/update", "/incidents/resolve?id=1"]) {
+    for (const [size, isTooLarge] of [
+      [32768, false],
+      [32769, true],
+    ] as const) {
+      test(`${path} with a ${size}-byte body ${isTooLarge ? "answers" : "is not"} 413`, async () => {
+        const a = api();
+        const c = await team(a);
+        const head = `csrf=${c.csrfs.member}&form_token=x&incident=1&message=`;
+        const body = head + "a".repeat(size - head.length);
+        expect(Buffer.byteLength(body)).toBe(size);
+        const res = await fetch(c.base + path, {
+          method: "POST",
+          redirect: "manual",
+          headers: {
+            cookie: c.cookies.member,
+            origin: c.base,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body,
+        });
+        await res.text();
+        if (isTooLarge) expect(res.status).toBe(413);
+        else expect(res.status).not.toBe(413);
+        expect(a.writes()).toBe(0);
+      });
+    }
+  }
+});

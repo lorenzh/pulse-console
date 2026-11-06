@@ -231,8 +231,15 @@ function componentChoices(
     error === undefined
       ? ""
       : `<span class="error" id="field-component-error">${escapeHtml(error)}</span>`;
-  if (components.length === 0) return `${paragraph(NO_COMPONENTS_TEXT)}${errorHtml}`;
-  const boxes = components
+  // A selected id that is no longer configured stays as a checked box, so the
+  // re-rendered form keeps every input and the refusal names it.
+  const known = new Set(components.map((c) => c.id));
+  const removed = selected
+    .filter((id) => !known.has(id))
+    .map((id) => ({ id, name: id, checkIds: [] }));
+  const shown: readonly AdminComponent[] = [...components, ...removed];
+  if (shown.length === 0) return `${paragraph(NO_COMPONENTS_TEXT)}${errorHtml}`;
+  const boxes = shown
     .map((c, index) => {
       const id = index === 0 ? ` id="field-component"` : "";
       const isChecked = selected.includes(c.id) ? " checked" : "";
