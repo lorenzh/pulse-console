@@ -4,7 +4,13 @@
 import { randomBytes } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import type { TokenMetadata } from "@lorenzh/pulse-contract";
-import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
+import {
+  type Browser,
+  type BrowserContext,
+  chromium,
+  type Page,
+  type Response as PageResponse,
+} from "playwright";
 import type { ConsoleRole } from "../src/roles.ts";
 import {
   checkConfig,
@@ -27,6 +33,27 @@ import {
   type SignedInConsole,
   startSignedInConsole,
 } from "../test/signed-in-console.ts";
+import {
+  assertAccountVisible,
+  assertChecksBoxEnd,
+  assertDanger,
+  assertFontsUsed,
+  assertForbidden,
+  assertHostileText,
+  assertInput,
+  assertLinkColor,
+  assertNoSidewaysScroll,
+  assertNotFound,
+  assertOverviewColors,
+  assertPrimary,
+  assertRadio,
+  assertSettingsBreakpoint,
+  assertShellGeometry,
+  FONT_BYTES_BOUND,
+  FONT_PATHS,
+  PALETTE,
+  type Scheme,
+} from "./design-matrix.ts";
 
 class CheckError extends Error {
   override name = "CheckError";
@@ -223,6 +250,12 @@ async function assertChecksTableBox(page: Page, label: string): Promise<void> {
   assert(await hint.isVisible(), `${label}: scroll hint visible at 390 px`);
   await box.focus();
   for (let i = 0; i < 5; i += 1) await page.keyboard.press("ArrowRight");
+  // Keyboard scrolling is animated; give it time before reading scrollLeft.
+  await page
+    .waitForFunction(() => (document.activeElement?.scrollLeft ?? 0) > 0, undefined, {
+      timeout: 2000,
+    })
+    .catch(() => undefined);
   const left = await box.evaluate((el) => el.scrollLeft);
   assert(left > 0, `${label}: ArrowRight scrolls the Checks table (scrollLeft ${left})`);
 }
@@ -1221,6 +1254,15 @@ async function assertQuorumText(page: Page, url: string, isHeartbeat: boolean): 
 
 function startChecksApi(): ReturnType<typeof startFakeApi> {
   const api = startFakeApi();
+  replyChecks(api, []);
+  return api;
+}
+
+/** The checks fixture, plus extra database HTTP checks for the design matrix. */
+function replyChecks(
+  api: ReturnType<typeof startFakeApi>,
+  extra: { id: string; name: string; url: string }[],
+): void {
   // The fixture's TCP and DNS checks come from checks.json; these database copies have an editor.
   const editable = checkConfig.checks
     .filter((c) => c.source === "file")
@@ -1231,15 +1273,26 @@ function startChecksApi(): ReturnType<typeof startFakeApi> {
     }));
   api.reply(
     "/admin/config",
-    jsonReply({ ...checkConfig, checks: [...checkConfig.checks, ...editable] }),
+    jsonReply({
+      ...checkConfig,
+      checks: [
+        ...checkConfig.checks,
+        ...editable,
+        ...extra.map((c) => ({ ...c, intervalMs: 60000, source: "database" })),
+      ],
+    }),
   );
-  api.reply("/checks", jsonReply([webState, ...checkStates.slice(1)]));
+  const extraStates = extra.map((c) => ({
+    ...checkWithState(c.id, "up"),
+    name: c.name,
+    url: c.url,
+  }));
+  api.reply("/checks", jsonReply([webState, ...checkStates.slice(1), ...extraStates]));
   api.reply("/admin/config/export", jsonReply(checkExport));
   api.reply("/uptime", jsonReply(checkUptime));
   api.reply("/checks/web/results", jsonReply(webResults));
   api.reply("/checks/web/location-uptime", jsonReply(webLocationUptime));
   api.reply("/checks/web/latency", jsonReply(webLatency));
-  return api;
 }
 
 async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<void> {
@@ -2121,10 +2174,244 @@ async function checkProbesWith(browser: Browser, hasScript: boolean): Promise<vo
   }
 }
 
+const HOSTILE_NAME = "<img src=x onerror=alert(1)>";
+const MATRIX_CHECKS = [
+  { id: "long-url", name: "Long URL", url: `https://example.com/${"p".repeat(100)}` },
+  { id: "long-name", name: `Long-${"name-".repeat(59)}end`, url: "https://example.com/" },
+  { id: "hostile", name: HOSTILE_NAME, url: "https://example.com/h" },
+];
+const MATRIX_WIDTHS: [number, number][] = [
+  [1280, 800],
+  [390, 844],
+];
+
+/** Check 10: fails on another origin and on a font outside the seven routes. */
+function watchRequests(page: Page, base: string, problems: string[]): void {
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.protocol === "data:") return;
+    if (url.origin !== base) problems.push(`other origin: ${url.origin}`);
+    if (request.resourceType() === "font" && !FONT_PATHS.includes(url.pathname))
+      problems.push(`font path: ${url.pathname}`);
+  });
+  page.on("response", (response) => {
+    if (response.request().resourceType() !== "font") return;
+    const type = response.headers()["content-type"];
+    if (response.status() !== 200 || type !== "font/woff2")
+      problems.push(`font answer ${response.status()} ${type ?? ""}`);
+  });
+}
+
+async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number): Promise<void> {
+  const base = env.console.base;
+  const at = `${scheme} ${width}px`;
+  const fonts: string[] = [];
+  const onFont = (r: { url: () => string; request: () => { resourceType: () => string } }) => {
+    if (r.request().resourceType() === "font") fonts.push(new URL(r.url()).pathname);
+  };
+  page.on("response", onFont);
+  await page.goto(`${base}/`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertOverviewColors(page, scheme);
+  await assertLinkColor(page, "Checks", PALETTE[scheme].lead, `${at} nav Checks`);
+  await assertNoSidewaysScroll(page, `${at} /`);
+  if (width === 390) await assertAccountVisible(page, `${at} /`);
+  await assertFontsUsed(page, "main .mono", `${at} /`);
+  page.off("response", onFont);
+  ok(`matrix ${at}: overview body, current and other nav colors, fonts used, no sideways scroll`);
+
+  await page.goto(`${base}/checks`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertNoSidewaysScroll(page, `${at} /checks`);
+  await assertHostileText(page, HOSTILE_NAME, `${at} /checks`);
+  if (width === 390) await assertChecksBoxEnd(page, `${at} /checks`);
+  await axeOn(page, `${base}/checks`, `${at} /checks`);
+  ok(
+    `matrix ${at}: checks list with ${MATRIX_CHECKS.length} long/hostile rows fits${width === 390 ? ", the named box scrolls to Actions" : ""}`,
+  );
+
+  await page.goto(`${base}/checks/edit?id=web`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertPrimary(
+    page,
+    'button[type="submit"]:has-text("Save check")',
+    scheme,
+    `${at} Save check`,
+  );
+  await assertInput(page, 'input[name="name"]', scheme, `${at} edit Name`);
+  await assertRadio(page, `${at} edit`);
+  await assertNoSidewaysScroll(page, `${at} edit`);
+  await axeOn(page, `${base}/checks/edit?id=web`, `${at} /checks/edit`);
+  ok(
+    `matrix ${at}: edit form primary, input and focus colors; 18px radio 12px from its text on a 44px row, arrow keys move it`,
+  );
+
+  await page.goto(`${base}/checks/delete?id=hostile`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertDanger(page, 'button[type="submit"].danger', scheme, `${at} Delete check`);
+  await assertInput(page, 'input[name="confirm_name"]', scheme, `${at} confirm name`);
+  await assertLinkColor(page, "Cancel", PALETTE[scheme].text, `${at} ghost Cancel`);
+  await assertHostileText(page, HOSTILE_NAME, `${at} delete`);
+  await assertNoSidewaysScroll(page, `${at} delete`);
+  await assertFontsUsed(page, ".confirm-target.mono", `${at} delete`);
+  await axeOn(page, `${base}/checks/delete?id=hostile`, `${at} /checks/delete`);
+  ok(
+    `matrix ${at}: typed delete danger and input colors, ghost Cancel ${PALETTE[scheme].text}, hostile name as text, fonts used`,
+  );
+
+  for (const path of ["/account/sessions/sign-out-all", "/__test/confirm/typed/delete-check"]) {
+    await page.goto(base + path);
+    await assertDanger(page, 'main button[type="submit"]', scheme, `${at} ${path}`);
+  }
+  for (const path of ["/account/recovery-codes", "/__test/confirm/plain/resolve-incident"]) {
+    await page.goto(base + path);
+    await assertPrimary(page, 'main button[type="submit"]', scheme, `${at} ${path}`);
+  }
+  await page.goto(`${base}/account/security`);
+  await assertLinkColor(page, "Sessions", PALETTE[scheme].link, `${at} Sessions link`);
+  const problems = await visitedProblems(page);
+  assert(problems.length === 0, `${at} visited rules: ${problems.join(", ")}`);
+  ok(
+    `matrix ${at}: sign out all and typed fixture danger, new codes and resolve incident primary, link ${PALETTE[scheme].link}, ${Object.keys(VISITED_RULES).length} visited rules match R3`,
+  );
+
+  await assertNotFound(page, base);
+  env.role.current = "member";
+  await assertForbidden(page, base, scheme);
+  env.role.current = "owner";
+  await axeOn(page, `${base}/does-not-exist`, `${at} 404`);
+  ok(
+    `matrix ${at}: 403 one heading, warning ${PALETTE[scheme].warning}, overview link works; 404 neutral with one h1`,
+  );
+  if (width === 1280) {
+    assert(
+      fonts.includes("/fonts/space-grotesk-latin-700-normal.woff2") &&
+        fonts.includes("/fonts/jetbrains-mono-latin-600-normal.woff2"),
+      `${at}: overview font responses ${fonts.join(",")}`,
+    );
+  }
+}
+
+async function matrixSignIn(env: Env, page: Page, scheme: Scheme): Promise<void> {
+  await page.goto(`${env.console.base}/sign-in`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertPrimary(page, 'button[type="submit"]', scheme, `${scheme} Sign in`);
+  await assertInput(page, 'input[name="email"]', scheme, `${scheme} sign-in Email`);
+  await assertFontsUsed(page, undefined, `${scheme} sign-in`);
+  await axeOn(page, `${env.console.base}/sign-in`, `${scheme} /sign-in`);
+}
+
+/** Check 10 cold numbers: a new context, an empty cache, the load of / after sign-in. */
+async function matrixCold(env: Env, browser: Browser): Promise<void> {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  try {
+    await signIn(page, env);
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Network.clearBrowserCache");
+    let requests = 0;
+    let fontBytes = 0;
+    const counts: Promise<void>[] = [];
+    page.on("request", () => {
+      requests += 1;
+    });
+    const onResponse = (response: PageResponse): void => {
+      if (response.request().resourceType() !== "font") return;
+      counts.push(
+        response.body().then((b) => {
+          fontBytes += b.length;
+        }),
+      );
+    };
+    page.on("response", onResponse);
+    await page.goto(`${env.console.base}/`, { waitUntil: "networkidle" });
+    await page.evaluate(() => document.fonts.ready);
+    await Promise.all(counts);
+    assert(requests <= 10, `cold /: ${requests} requests`);
+    assert(fontBytes <= FONT_BYTES_BOUND, `cold /: ${fontBytes} font bytes`);
+    ok(`cold / made ${requests} requests, ${fontBytes} font bytes`);
+    page.off("response", onResponse);
+    let warm = 0;
+    page.on("request", () => {
+      warm += 1;
+    });
+    await page.goto(`${env.console.base}/`, { waitUntil: "networkidle" });
+    ok(`warm / made ${warm} requests to the network layer`);
+  } finally {
+    await context.close();
+  }
+}
+
+/** Shell geometry (5), breakpoints (6) and the long data (11) at 390 px. */
+async function matrixGeometry(env: Env, page: Page, scheme: Scheme): Promise<void> {
+  const base = env.console.base;
+  await page.goto(`${base}/`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertShellGeometry(page, `${scheme} shell`);
+  await page.goto(`${base}/checks/check?id=web`);
+  await page.evaluate(() => document.fonts.ready);
+  await assertSettingsBreakpoint(page, `${scheme} detail`);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${base}/checks/check?id=long-name`);
+  await assertNoSidewaysScroll(page, `${scheme} 300-character name detail`);
+  ok(
+    `matrix ${scheme}: sidebar 236px, topbar >= 64px, column at 720, full width at 719, main 20px 16px 40px at 390; settings 2 columns at 901, 1 at 900; 300-character name fits 390px`,
+  );
+}
+
+async function checkDesignMatrix(browser: Browser): Promise<void> {
+  const env = await startEnv(
+    0,
+    "a-seventy-character-address-for-the-design-matrix-check@example.com",
+  );
+  replyChecks(env.api, MATRIX_CHECKS);
+  env.target.current = { name: HOSTILE_NAME, revision: "rev-1" };
+  try {
+    for (const scheme of ["light", "dark"] as const) {
+      const violations: string[] = [];
+      const problems: string[] = [];
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        colorScheme: scheme,
+      });
+      watchCsp(context, violations);
+      const page = await newPage(context, violations);
+      watchRequests(page, env.console.base, problems);
+      let dialogs = 0;
+      page.on("dialog", (dialog) => {
+        dialogs += 1;
+        void dialog.dismiss();
+      });
+      try {
+        await matrixSignIn(env, page, scheme);
+        await signIn(page, env);
+        for (const [width, height] of MATRIX_WIDTHS) {
+          await page.setViewportSize({ width, height });
+          await matrixPages(env, page, scheme, width);
+        }
+        await matrixGeometry(env, page, scheme);
+      } finally {
+        await context.close();
+      }
+      assert(violations.length === 0, `${scheme}: CSP violations ${violations.join(" | ")}`);
+      assert(problems.length === 0, `${scheme}: requests ${problems.join(" | ")}`);
+      assert(dialogs === 0, `${scheme}: ${dialogs} dialogs opened`);
+      ok(
+        `matrix ${scheme}: 0 CSP violations, 0 other-origin requests, fonts only from the 7 routes as 200 font/woff2, 0 dialogs`,
+      );
+    }
+    await matrixCold(env, browser);
+  } finally {
+    await env.console.close();
+    env.api.stop();
+  }
+}
+
 async function runChecks(): Promise<void> {
   const env = await startEnv(0);
   const browser = await chromium.launch();
   try {
+    await checkDesignMatrix(browser);
     await checkLayout(env, browser, 390, 844);
     await checkLayout(env, browser, 1280, 800);
     await checkAxe(env, browser);
