@@ -155,6 +155,9 @@ describe("app routes", () => {
     expect(css).toContain(
       ":focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }",
     );
+    expect(css).toContain(
+      '.confirm input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"])[name="confirm_name"] { font-family: var(--font-mono); }',
+    );
     for (const part of [
       "color-scheme: light dark",
       "@media (prefers-color-scheme: dark)",

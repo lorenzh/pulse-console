@@ -186,7 +186,7 @@ dl.settings, .settings { display: grid; grid-template-columns: 150px minmax(0, 1
 .confirm-title { font-weight: 600; }
 .confirm-target { font-family: var(--font-mono); overflow-wrap: anywhere; }
 .confirm-danger { border-color: var(--error); }
-.confirm input[name="confirm_name"] { font-family: var(--font-mono); }
+.confirm input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"])[name="confirm_name"] { font-family: var(--font-mono); }
 .quorum-rule, .invite-form { max-width: 40rem; }
 #recovery-codes { padding-left: 24px; font-family: var(--font-mono); }
 @media (max-width: 1180px) {

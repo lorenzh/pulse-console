@@ -723,6 +723,7 @@ describe("ownership transfer", () => {
     });
     expect(bare.status).toBe(409);
     expect(bare.body).toContain("Ada Admin has not set up two-factor sign-in yet.");
+    expect(bare.body).toContain('<p class="plain-foot"><a href="/team">Back to the team</a></p>');
     expect(everyRow(c)).toEqual(after);
   });
 

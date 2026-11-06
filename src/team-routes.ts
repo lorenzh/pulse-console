@@ -348,7 +348,7 @@ function precheck(
 /** An error callout with the escaped sentence and the way back to the team. */
 function refusedBody(sentence: string): string {
   const error = callout({ kind: "error", body: `<p>${sentence}</p>\n`, role: "alert" });
-  return `${error}<p><a href="/team">Back to the team</a></p>\n`;
+  return `${error}<p class="plain-foot"><a href="/team">Back to the team</a></p>\n`;
 }
 
 function fieldRefused(op: MemberOperation, error: string): PageResult {

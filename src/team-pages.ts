@@ -10,7 +10,6 @@ import {
   plainDocument,
   submitButton,
 } from "./html.ts";
-import { messagePage } from "./pages.ts";
 import { targetDecision } from "./permissions.ts";
 import { type ConsoleRole, roleLabel } from "./roles.ts";
 import { callout } from "./states.ts";
@@ -259,7 +258,10 @@ export function revokeInviteBody(view: {
 
 /** The plain `404` page of an unknown, expired, revoked or used link; it names no case. */
 export function linkNotValidPage(): string {
-  return messagePage("Link not valid", LINK_NOT_VALID_TEXT);
+  return plainDocument(
+    "Link not valid",
+    `<p class="plain-foot">${escapeHtml(LINK_NOT_VALID_TEXT)}</p>\n`,
+  );
 }
 
 /** The accept form of an invite: the bound email as text, never as a field. */

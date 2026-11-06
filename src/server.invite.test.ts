@@ -270,6 +270,7 @@ describe("accept", () => {
     const late = await getPage(c, `/invite/${second.token}`, "");
     expect(late.status).toBe(404);
     expect(late.body).toContain("<h1>Link not valid</h1>");
+    expect(late.body).toContain(`<p class="plain-foot">${LINK_NOT_VALID}</p>`);
     expect(late.body).toContain(LINK_NOT_VALID);
     expect(late.body).not.toContain("two@example.com");
     expect((await accept(c, second.token, openedSecond)).status).toBe(404);

@@ -744,6 +744,10 @@ async function checkNoScript(env: Env, browser: Browser): Promise<void> {
   await signIn(page, env);
   env.recorder.actions.length = 0;
   await page.goto(`${base}/__test/confirm/typed/delete-check`);
+  const nameFont = await page
+    .locator('input[name="confirm_name"]')
+    .evaluate((el) => getComputedStyle(el).fontFamily);
+  assert(nameFont.startsWith('"JetBrains Mono"'), `typed name input is mono: ${nameFont}`);
   await page.fill('input[name="confirm_name"]', "Checkout API");
   await Promise.all([page.waitForURL(`${base}/__test/confirm/done`), page.keyboard.press("Enter")]);
   assert(env.recorder.actions.length === 1, "typed confirmation records 1 action");
