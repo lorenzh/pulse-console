@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import type { AdminCheckView } from "@lorenzh/pulse-contract";
 import { escapeHtml } from "@lorenzh/pulse-kit";
 import {
   checkConfig,
@@ -6,6 +7,7 @@ import {
   checkStates,
   checkUptime,
   LAST_RESULT_AT,
+  labelViews,
   QUOTE_URL,
   webLatency,
   webLocationUptime,
@@ -27,6 +29,7 @@ import {
   type SignedInOptions,
   startSignedInConsole,
 } from "../test/signed-in-console.ts";
+import { shadowedPage } from "./check-detail-pages.ts";
 import type { ConsoleRole } from "./roles.ts";
 
 const TOKEN = "checks-admin-token-sentinel-0123456789";
@@ -641,12 +644,12 @@ describe("GET /checks/check", () => {
     }
     expect(res.body).toContain('<th scope="col" class="num">Latency</th>');
     expectCalloutsOnly(res.body);
-    // State and SLO with a negative budget whose rounded text is -0.0.
+    // State and SLO with a slightly negative budget: exceeded, without a number.
     expect(res.body).toContain(
       '<dt>State</dt><dd><span class="check-state check-state-up"><span class="dot" aria-hidden="true"></span><span>Up</span></span></dd>',
     );
     expect(res.body).toContain(
-      "Availability 99.95 % over 30 days, objective 99.9 %. Error budget exceeded (-0.0 %)",
+      "Availability 99.95 % over 30 days, objective 99.9 %. Error budget exceeded</p>",
     );
     // Locations joined by name, in code-unit order, with a row for a name only on one side.
     expect(res.body).toContain(
@@ -685,6 +688,10 @@ describe("GET /checks/check", () => {
     );
     // A complete timestamp group: 21 rows for limit=20, then one Older link.
     expect(tbodyRows(res.body, "Recent results")).toBe(21);
+    expect(res.body).toContain('<tr><td class="mono">2026-11-05 11:59:30.000 UTC</td><td>eu</td>');
+    expect(res.body).toContain(
+      '<p>One row per result. Each location reports its own result, so two rows can share a time.</p>\n<div class="table-scroll" tabindex="0" role="region" aria-label="Recent results table">',
+    );
     const last = LAST_RESULT_AT - 19 * 60000;
     expect(res.body).toContain(`href="/checks/check?id=web&amp;before=${last}">Older results</a>`);
     expect(res.body).not.toContain("Newest results");
@@ -796,13 +803,16 @@ describe("GET /checks/check", () => {
     const c = await consoleFor(api);
     const res = await getPage(c, "/checks/check?id=nightly-backup");
     expect(res.status).toBe(200);
-    const line = `curl -fsS -X POST -H 'Authorization: Bearer <secret>' '${api.url}/heartbeat/nightly-backup'`;
-    expect(res.body).toContain(`<pre id="heartbeat-line">${escapeHtml(line)}</pre>`);
+    expect(res.body).toContain(
+      '<pre id="heartbeat-line">curl -fsS -X POST -H &#39;Authorization: Bearer &lt;secret&gt;&#39; &#39;&lt;pulse-api-url&gt;/heartbeat/nightly-backup&#39;</pre>',
+    );
+    expect(res.body).not.toContain(`${api.url}/heartbeat`);
+    expect(res.body).not.toContain(api.url.replace("http://", ""));
     expect(res.body).toContain(
       '<button type="button" data-copy="heartbeat-line" hidden>Copy</button>',
     );
     expect(res.body).toContain(
-      "Use the address under which your job reaches pulse-api. The secret is not shown again.",
+      "Replace &lt;pulse-api-url&gt; with the address under which your job reaches pulse-api, for example https://pulse-api.example.com, and &lt;secret&gt; with the secret of this check. The secret is not shown again.",
     );
     expect(res.body).toContain("<dt>Secret</dt><dd>set</dd>");
     expect(res.body).toContain("Heartbeat checks are not run by probes; your job pings pulse-api.");
@@ -1054,7 +1064,10 @@ describe("GET /checks/shadowed", () => {
     );
     expectCalloutsOnly(res.body);
     expect(res.body).toContain("<dt>Name</dt><dd>DNS record (old)</dd>");
-    expect(res.body).toContain("<dt>recordType</dt><dd>AAAA</dd>");
+    expect(res.body).toContain("<dt>Record type</dt><dd>AAAA</dd>");
+    expect(res.body).toContain("<dt>DNS name</dt><dd>example.com</dd>");
+    expect(res.body).toContain("<dt>Interval (ms)</dt><dd>60000</dd>");
+    expect(res.body).not.toContain("<dt>recordType</dt>");
     expect(res.body).toContain('href="/checks/check?id=dns-a"');
     expect(res.body).toContain('href="/checks/export?id=dns-a&amp;shadowed=1"');
     expect(res.body).toContain('href="/checks/delete?id=dns-a&amp;shadowed=1"');
@@ -1202,4 +1215,253 @@ describe("Edit and Delete visibility", () => {
       expect(row).toContain('<a href="/checks/delete?id=web">Delete</a>');
     });
   }
+});
+
+const RAW_KEYS = [
+  "url",
+  "method",
+  "intervalMs",
+  "timeoutMs",
+  "latencyObjectiveMs",
+  "retries",
+  "retryDelayMs",
+  "keyword",
+  "expectedStatus",
+  "jsonAssert",
+  "availabilityTarget",
+  "host",
+  "port",
+  "warnDays",
+  "dnsName",
+  "recordType",
+  "expected",
+  "resolver",
+  "domain",
+  "period",
+  "grace",
+];
+
+const LABEL_ROWS: Record<string, string[]> = {
+  "full-http": [
+    "<dt>URL</dt><dd>https://example.com/health</dd>",
+    "<dt>Method</dt><dd>POST</dd>",
+    "<dt>Interval (ms)</dt><dd>60000</dd>",
+    "<dt>Timeout (ms)</dt><dd>5000</dd>",
+    "<dt>Latency objective (ms)</dt><dd>500</dd>",
+    "<dt>Retries</dt><dd>2</dd>",
+    "<dt>Retry delay (ms)</dt><dd>1000</dd>",
+    "<dt>Keyword</dt><dd>ok</dd>",
+    "<dt>Expected status</dt><dd>200-299</dd>",
+    "<dt>JSON assertions</dt><dd>{&quot;pointer&quot;:&quot;/ok&quot;,&quot;exists&quot;:true}</dd>",
+    "<dt>Availability target (%)</dt><dd>99.9</dd>",
+  ],
+  "full-tls": [
+    "<dt>Host</dt><dd>example.com</dd>",
+    "<dt>Port</dt><dd>443</dd>",
+    "<dt>Warn days before expiry</dt><dd>14</dd>",
+    "<dt>Interval (ms)</dt><dd>60000</dd>",
+    "<dt>Timeout (ms)</dt><dd>5000</dd>",
+    "<dt>Availability target (%)</dt><dd>99.9</dd>",
+  ],
+  "full-tcp": [
+    "<dt>Host</dt><dd>db.internal</dd>",
+    "<dt>Port</dt><dd>5432</dd>",
+    "<dt>Retries</dt><dd>1</dd>",
+    "<dt>Retry delay (ms)</dt><dd>500</dd>",
+  ],
+  "full-dns": [
+    "<dt>DNS name</dt><dd>example.com</dd>",
+    "<dt>Record type</dt><dd>A</dd>",
+    "<dt>Expected values</dt><dd>192.0.2.1</dd>",
+    "<dt>Resolver</dt><dd>192.0.2.53</dd>",
+  ],
+  "full-domain": [
+    "<dt>Domain</dt><dd>example.org</dd>",
+    "<dt>Warn days before expiry</dt><dd>30</dd>",
+    "<dt>Interval (ms)</dt><dd>3600000</dd>",
+  ],
+  "full-heartbeat": [
+    "<dt>Period (ms)</dt><dd>86400000</dd>",
+    "<dt>Grace (ms)</dt><dd>3600000</dd>",
+    "<dt>Secret</dt><dd>set</dd>",
+  ],
+};
+
+function expectNoRawKeyTerm(body: string): void {
+  for (const key of RAW_KEYS) expect(body).not.toContain(`<dt>${key}</dt>`);
+}
+
+describe("settings labels", () => {
+  const config = { ...checkConfig, checks: labelViews, shadowed: [] };
+  for (const view of labelViews) {
+    test(`${view.id} shows readable terms and no raw key`, async () => {
+      const c = await consoleFor(detailApi(config));
+      const res = await getPage(c, `/checks/check?id=${view.id}`);
+      expect(res.status).toBe(200);
+      for (const row of LABEL_ROWS[view.id] ?? []) expect(res.body).toContain(row);
+      expectNoRawKeyTerm(res.body);
+    });
+  }
+
+  test("the shadowed page uses the same labels", async () => {
+    const shadowed = labelViews.map((v) => ({ ...v, name: `${v.name} (old)` }));
+    const c = await consoleFor(detailApi({ ...checkConfig, shadowed }));
+    for (const view of labelViews) {
+      const res = await getPage(c, `/checks/shadowed?id=${view.id}`);
+      expect(res.status).toBe(200);
+      for (const row of LABEL_ROWS[view.id] ?? []) expect(res.body).toContain(row);
+      expectNoRawKeyTerm(res.body);
+    }
+  });
+
+  test("an unknown key keeps its raw name", () => {
+    const view: AdminCheckView = {
+      id: "x",
+      name: "X",
+      url: "https://example.com/",
+      intervalMs: 60000,
+      source: "database",
+    };
+    const extra = { ...view, fooBar: "baz" };
+    const page = shadowedPage({ kind: "ok", view: extra }, "x", "viewer");
+    const body = page.kind === "view" ? page.view.body : "";
+    expect(body).toContain("<dt>fooBar</dt><dd>baz</dd>");
+    expect(body).toContain("<dt>Interval (ms)</dt><dd>60000</dd>");
+  });
+});
+
+const FLOAT_REASON = "latency 1501.4197810000041ms over objective 500ms";
+
+function floatReasonApi(lastReason: string | null): FakeApi {
+  const api = detailApi();
+  const locResult = { ...webState.locations[0]?.result, reason: FLOAT_REASON };
+  const state = {
+    ...webState,
+    lastReason,
+    locations: [{ location: "ap", result: locResult, stale: false }],
+  };
+  api.reply("/checks", jsonReply([state]));
+  api.reply(
+    "/checks/web/results",
+    jsonReply([{ ...webResults[0], reason: FLOAT_REASON }, webResults[1]]),
+  );
+  return api;
+}
+
+describe("detail reason, results and budget", () => {
+  test("a float latency reason renders rounded in State, Locations and Recent results", async () => {
+    const api = floatReasonApi(FLOAT_REASON);
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=web");
+    expect(res.body).toContain("<dt>Last reason</dt><dd>latency 1501ms over objective 500ms</dd>");
+    expect(res.body).not.toContain("1501.4197810000041");
+    const locations = res.body
+      .split('<h2 class="eyebrow">Locations</h2>')[1]
+      ?.split("</section>")[0];
+    expect(locations).toContain(
+      '<td class="num">1</td><td>latency 1501ms over objective 500ms</td>',
+    );
+    const results = res.body.split('<h2 class="eyebrow">Recent results</h2>')[1] ?? "";
+    expect(results).toContain('<td class="num">1</td><td>latency 1501ms over objective 500ms</td>');
+    // A null result reason is an empty cell.
+    expect(results).toContain('<td class="num">1</td><td></td></tr>');
+  });
+
+  test("a null reason reads None", async () => {
+    const c = await consoleFor(floatReasonApi(null));
+    const res = await getPage(c, "/checks/check?id=web");
+    expect(res.body).toContain("<dt>Last reason</dt><dd>None</dd>");
+  });
+
+  test("a check without state reads reason None", async () => {
+    const api = detailApi();
+    api.reply("/checks", jsonReply([]));
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=web");
+    expect(res.body).toContain("<dt>Last reason</dt><dd>None</dd>");
+  });
+
+  test.each([
+    ["<b>latency</b> 2.5ms", "&lt;b&gt;latency&lt;/b&gt; 2.5ms"],
+    ["<script>alert(1)</script>", "&lt;script&gt;alert(1)&lt;/script&gt;"],
+    ["latency 2.5ms<img src=x onerror=alert(1)>", "latency 3ms&lt;img src=x onerror=alert(1)&gt;"],
+    ["latency 2.5ms &amp;", "latency 3ms &amp;amp;"],
+  ])("a hostile reason %s is escaped once", async (reason, expected) => {
+    const c = await consoleFor(floatReasonApi(reason));
+    const res = await getPage(c, "/checks/check?id=web");
+    expect(res.body).toContain(`<dt>Last reason</dt><dd>${expected}</dd>`);
+    expect(res.body).not.toContain("<script>alert");
+    expect(res.body).not.toContain("<img src=x");
+  });
+
+  test("results of one location keep their milliseconds", async () => {
+    const api = detailApi();
+    const base = webResults[0];
+    api.reply(
+      "/checks/web/results",
+      jsonReply([
+        { ...base, location: "eu", timestamp: 1762343970987 },
+        { ...base, location: "eu", timestamp: 1762343970123 },
+      ]),
+    );
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=web");
+    expect(tbodyRows(res.body, "Recent results")).toBe(2);
+    expect(res.body).toContain('<tr><td class="mono">2025-11-05 11:59:30.987 UTC</td><td>eu</td>');
+    expect(res.body).toContain('<tr><td class="mono">2025-11-05 11:59:30.123 UTC</td><td>eu</td>');
+    expect(res.body).toContain("One row per result. Each location reports its own result");
+  });
+
+  test("two locations in the same millisecond stay two rows", async () => {
+    const api = detailApi();
+    const base = webResults[0];
+    api.reply(
+      "/checks/web/results",
+      jsonReply([
+        { ...base, location: "eu", timestamp: 1762343970000 },
+        { ...base, location: "us", timestamp: 1762343970000 },
+      ]),
+    );
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=web");
+    expect(tbodyRows(res.body, "Recent results")).toBe(2);
+    expect(res.body).toContain('<tr><td class="mono">2025-11-05 11:59:30.000 UTC</td><td>eu</td>');
+    expect(res.body).toContain('<tr><td class="mono">2025-11-05 11:59:30.000 UTC</td><td>us</td>');
+  });
+
+  test("no results has no identity note", async () => {
+    const api = detailApi();
+    api.reply("/checks/web/results", jsonReply([]));
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=web");
+    expect(res.body).toContain("<p>No results yet</p>");
+    expect(res.body).not.toContain("One row per result.");
+  });
+
+  test("a large negative budget reads exceeded without a number", async () => {
+    const api = detailApi();
+    const slo = { target: 99.9, windowDays: 30, availability: 12.6, budgetRemaining: -87400 };
+    api.reply("/checks", jsonReply([{ ...webState, slo }]));
+    const c = await consoleFor(api);
+    const res = await getPage(c, "/checks/check?id=web");
+    expect(res.body).toContain("objective 99.9 %. Error budget exceeded</p>");
+    expect(res.body).not.toContain("-87400");
+    expect(res.body).not.toContain("Error budget exceeded (");
+  });
+});
+
+describe("heartbeat line ids", () => {
+  test.each([
+    ["it's", "it%27s", "'<pulse-api-url>/heartbeat/it'\\''s'"],
+    ["a b<c", "a%20b%3Cc", "'<pulse-api-url>/heartbeat/a%20b%3Cc'"],
+  ])("a heartbeat id %s stays in one quoted word", async (id, query, tail) => {
+    const hb = { ...checkConfig.checks[5], id, name: "Hostile" };
+    const api = detailApi({ ...checkConfig, checks: [hb], shadowed: [] });
+    const c = await consoleFor(api);
+    const res = await getPage(c, `/checks/check?id=${query}`);
+    expect(res.status).toBe(200);
+    const line = `curl -fsS -X POST -H 'Authorization: Bearer <secret>' ${tail}`;
+    expect(res.body).toContain(`<pre id="heartbeat-line">${escapeHtml(line)}</pre>`);
+    expect(res.body).not.toContain(`${api.url}/heartbeat`);
+  });
 });

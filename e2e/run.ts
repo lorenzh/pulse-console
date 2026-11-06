@@ -1282,7 +1282,10 @@ function replyChecks(
     jsonReply({
       ...checkConfig,
       checks: [
-        ...checkConfig.checks,
+        // The api serves the resolved retry fields; the detail shows them with labels.
+        ...checkConfig.checks.map((c) =>
+          c.id === "web" ? { ...c, retries: 1, retryDelayMs: 1000 } : c,
+        ),
         ...editable,
         ...extra.map((c) => ({ ...c, intervalMs: 60000, source: "database" })),
       ],
@@ -1293,7 +1296,12 @@ function replyChecks(
     name: c.name,
     url: c.url,
   }));
-  api.reply("/checks", jsonReply([webState, ...checkStates.slice(1), ...extraStates]));
+  // An older probe stored this float reason; the page rounds it for display.
+  const floatState = {
+    ...webState,
+    lastReason: "latency 1501.4197810000041ms over objective 500ms",
+  };
+  api.reply("/checks", jsonReply([floatState, ...checkStates.slice(1), ...extraStates]));
   api.reply("/admin/config/export", jsonReply(checkExport));
   api.reply("/uptime", jsonReply(checkUptime));
   api.reply("/checks/web/results", jsonReply(webResults));
@@ -1349,6 +1357,22 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     await assertFits(page, 390, `${label} detail`);
     const pre = await page.locator("pre").first().textContent();
     assert(pre === HOST_LINE, `${label}: detail host line is the literal`);
+    const detailText = (await page.locator("main").textContent()) ?? "";
+    assert(
+      detailText.includes("latency 1501ms over objective 500ms") &&
+        !detailText.includes("1501.4197810000041"),
+      `${label}: detail shows the rounded reason`,
+    );
+    for (const term of ["Interval (ms)", "Retry delay (ms)"]) {
+      assert(
+        (await page.locator("dt", { hasText: term }).count()) >= 1,
+        `${label}: detail shows ${term}`,
+      );
+    }
+    assert(
+      (await page.locator("dt", { hasText: "intervalMs" }).count()) === 0,
+      `${label}: detail shows no raw intervalMs`,
+    );
     const copy = page.locator("button[data-copy]").first();
     assert((await copy.isVisible()) === hasScript, `${label}: copy button visible ${hasScript}`);
     if (hasScript) {
@@ -1356,7 +1380,8 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
       const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
       assert(copied[0] === HOST_LINE, `${label}: copied host line is the literal`);
       await page.goto(`${base}/checks/check?id=nightly-backup`);
-      const line = `curl -fsS -X POST -H 'Authorization: Bearer <secret>' '${api.url}/heartbeat/nightly-backup'`;
+      const line =
+        "curl -fsS -X POST -H 'Authorization: Bearer <secret>' '<pulse-api-url>/heartbeat/nightly-backup'";
       assert(
         (await page.locator("pre").first().textContent()) === line,
         `${label}: heartbeat line`,

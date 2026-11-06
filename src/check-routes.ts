@@ -138,10 +138,7 @@ function detailRoute(deps: CheckRouteDeps): ProtectedRoute {
       const before = resultsBeforeOf(request.query);
       const read = await readCheckDetail(apiUrl, readDeps(deps), id, before);
       const isSaved = request.query.get("saved") === "1";
-      return detailResult(
-        checkDetailPage(read, { id, before, role: request.role, apiUrl }),
-        isSaved,
-      );
+      return detailResult(checkDetailPage(read, { id, before, role: request.role }), isSaved);
     },
   };
 }
