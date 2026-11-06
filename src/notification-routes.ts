@@ -393,10 +393,13 @@ async function postDelete(deps: CheckRouteDeps, request: PageRequest): Promise<P
 async function showFailed(deps: CheckRouteDeps, request: PageRequest): Promise<PageResult> {
   const read = await readNotifyFailed(apiUrlOf(deps), readDeps(deps));
   if (read.kind !== "ok") return problemPage(read, FAILED_PATH, "Failed deliveries");
+  // One token for the whole page: a token per row would exceed FORM_TOKEN_BINDING_MAX on a
+  // full list and evict the tokens of rows already rendered. A post leaves the page anyway.
+  const formToken = request.issueFormToken(RESEND_PATH);
   const body = failedListHtml(read.view, (entry) =>
     resendFormHtml({
       csrf: request.csrf,
-      formToken: request.issueFormToken(RESEND_PATH),
+      formToken,
       channelId: entry.channelId,
       key: entry.key,
       requestId: newRequestId(),

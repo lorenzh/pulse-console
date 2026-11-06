@@ -583,6 +583,33 @@ describe("failed and resend", () => {
     expect((await getPage(c, "/notifications/resend?id=bad", c.cookies.owner)).status).toBe(404);
   });
 
+  for (const [label, pick] of [
+    ["first", 0],
+    ["middle", 100],
+    ["last", 199],
+  ] as const) {
+    test(`a full list of 200 failed rows: the ${label} rendered Resend form is usable`, async () => {
+      const api = fakeApi();
+      const rows = Array.from({ length: 200 }, (_, i) => failedEntry({ key: `${i}:opened` }));
+      api.replyTo("GET", FAILED, jsonReply(failedView(rows)));
+      const c = await teamConsole(api);
+      const page = await getPage(c, "/notifications/failed", c.cookies.owner);
+      const forms = [
+        ...page.body.matchAll(/<form[^>]*action="\/notifications\/resend"[\s\S]*?<\/form>/g),
+      ];
+      expect(forms).toHaveLength(200);
+      const form = forms[pick]?.[0] ?? "";
+      const params = new URLSearchParams();
+      for (const m of form.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"/g)) {
+        params.append(m[1] ?? "", (m[2] ?? "").replaceAll("&quot;", '"').replaceAll("&amp;", "&"));
+      }
+      expect(params.get("key")).toBe(`${pick}:opened`);
+      const res = await send(c, "/notifications/resend", params.toString());
+      expect(res.status).toBe(303);
+      expect(writes(api)).toEqual([`POST ${RESENDS}`]);
+    });
+  }
+
   test("the failed list of an old api is 404 with its state", async () => {
     const api = fakeApi();
     api.replyTo("GET", FAILED, { status: 404, headers: WIRE_HEADERS, body: "{}" });
