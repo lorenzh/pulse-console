@@ -274,7 +274,9 @@ describe("GET /checks", () => {
     expect(res.body).toContain(`<h2 class="callout-title">${heading}</h2>`);
     expectCalloutsOnly(res.body);
     expect(res.body).toContain("line 3: &lt;bad&gt;");
-    expect(res.body).toContain("The last valid version from 2026-11-04 08:00:00 UTC stays in use.");
+    expect(res.body).toContain(
+      '<p>The last valid version from <span class="mono">2026-11-04 08:00:00 UTC</span> stays in use.</p>',
+    );
     expect(res.body).toContain("Console checks can still be changed.");
     expect(res.body).toContain('href="/checks/edit?id=web"');
   });
@@ -575,6 +577,15 @@ function tbodyRows(body: string, heading: string): number {
 }
 
 describe("GET /checks/check", () => {
+  test("the maintenance window shows its times in mono", async () => {
+    const c = await consoleFor(detailApi(), { role: "viewer" });
+    const res = await getPage(c, "/checks/check?id=dns-a");
+    expect(res.status).toBe(200);
+    expect(res.body).toContain(
+      '<dt>Maintenance</dt><dd><span class="mono">1970-01-01 00:00:00 UTC</span> to <span class="mono">2100-01-01 00:00:00 UTC</span>: Window</dd>',
+    );
+  });
+
   test("shows settings, state, locations, uptime, latency and results of an HTTP check", async () => {
     const api = detailApi();
     const c = await consoleFor(api, { role: "viewer" });
@@ -643,16 +654,16 @@ describe("GET /checks/check", () => {
     );
     expect(tbodyRows(res.body, "Locations")).toBe(4);
     expect(res.body).toContain(
-      '<tr><td>ap</td><td><span class="check-state check-state-up dense"><span class="dot" aria-hidden="true"></span><span>Up</span></span></td><td class="mono">2026-11-05 11:59:30 UTC</td><td class="num">120 ms</td><td class="num">1</td><td></td><td></td><td>No results in 90 days</td></tr>',
+      '<tr><td>ap</td><td><span class="check-state check-state-up dense"><span class="dot" aria-hidden="true"></span><span>Up</span></span></td><td class="mono">2026-11-05 11:59:30 UTC</td><td class="num">120 ms</td><td class="num">1</td><td></td><td></td><td class="num">No results in 90 days</td></tr>',
     );
     expect(res.body).toContain(
-      '<tr><td>eu</td><td><span class="check-state check-state-degraded dense"><span class="dot" aria-hidden="true"></span><span>Degraded</span></span></td><td class="mono">2026-11-05 11:59:30 UTC</td><td class="num">120 ms</td><td class="num">1</td><td></td><td></td><td>80.00 % with 4 of 5 results</td></tr>',
+      '<tr><td>eu</td><td><span class="check-state check-state-degraded dense"><span class="dot" aria-hidden="true"></span><span>Degraded</span></span></td><td class="mono">2026-11-05 11:59:30 UTC</td><td class="num">120 ms</td><td class="num">1</td><td></td><td></td><td class="num">80.00 % with 4 of 5 results</td></tr>',
     );
     expect(res.body).toContain(
-      '<tr><td>old</td><td>No current result</td><td class="mono"></td><td class="num"></td><td class="num"></td><td></td><td></td><td>No results in 90 days</td></tr>',
+      '<tr><td>old</td><td>No current result</td><td class="mono"></td><td class="num"></td><td class="num"></td><td></td><td></td><td class="num">No results in 90 days</td></tr>',
     );
     expect(res.body).toContain(
-      '<tr><td>us</td><td><span class="check-state check-state-down dense"><span class="dot" aria-hidden="true"></span><span>Down</span></span></td><td class="mono">2026-11-05 09:59:30 UTC</td><td class="num">120 ms</td><td class="num">3</td><td>connect timeout</td><td>Stale</td><td>99.90 % with 999 of 1000 results</td></tr>',
+      '<tr><td>us</td><td><span class="check-state check-state-down dense"><span class="dot" aria-hidden="true"></span><span>Down</span></span></td><td class="mono">2026-11-05 09:59:30 UTC</td><td class="num">120 ms</td><td class="num">3</td><td>connect timeout</td><td>Stale</td><td class="num">99.90 % with 999 of 1000 results</td></tr>',
     );
     // Aggregate uptime over 90 days, never rounded up.
     expect(res.body).toContain("<p>99.99 % over 90 days</p>");
@@ -799,7 +810,7 @@ describe("GET /checks/check", () => {
     expect(res.body).toContain(
       '<tr><td>Heartbeat pings</td><td><span class="check-state check-state-up dense"><span class="dot" aria-hidden="true"></span><span>Up</span></span></td><td class="mono">2026-11-05 11:59:30 UTC</td><td class="num">Not applicable</td>',
     );
-    expect(res.body).toContain("<td>100 % with 30 of 30 results</td>");
+    expect(res.body).toContain('<td class="num">100 % with 30 of 30 results</td>');
     expect(api.seen.some((s) => s.path.endsWith("/latency"))).toBe(false);
   });
 
@@ -888,7 +899,7 @@ describe("GET /checks/check", () => {
     expect(res.status).toBe(200);
     expect(res.body).toContain("<p>Location uptime needs a newer pulse-api.</p>");
     expect(res.body).not.toContain("pulse-api answered 404.");
-    expect(res.body).toContain("<td>Not available</td>");
+    expect(res.body).toContain('<td class="num">Not available</td>');
     expect(res.body).toContain("<p>99.99 % over 90 days</p>");
     expect(tbodyRows(res.body, "Recent results")).toBe(21);
   });

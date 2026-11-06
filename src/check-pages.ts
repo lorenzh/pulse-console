@@ -98,11 +98,11 @@ const FILE_HEADINGS: Record<Exclude<AdminFileStatus["state"], "ok">, string> = {
 /** R1: the banner of a file status other than `ok`. */
 function fileBanner(file: AdminFileStatus): string {
   if (file.state === "ok") return "";
-  const lastValid = `The last valid version from ${utcTime(file.lastAppliedAt)} stays in use.`;
+  const lastValid = `<p>The last valid version from <span class="mono">${escapeHtml(utcTime(file.lastAppliedAt))}</span> stays in use.</p>`;
   return callout({
     kind: "info",
     title: FILE_HEADINGS[file.state],
-    body: `${paragraph(file.message ?? undefined)}${paragraph(lastValid)}${paragraph("Console checks can still be changed.")}`,
+    body: `${paragraph(file.message ?? undefined)}${lastValid}${paragraph("Console checks can still be changed.")}`,
     role: "alert",
   });
 }

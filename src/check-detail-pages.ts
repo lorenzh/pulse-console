@@ -243,7 +243,9 @@ function stateEntries(view: AdminCheckView, state: CheckWithState | undefined) {
   if (window !== undefined) {
     entries.push([
       "Maintenance",
-      `${utcTime(window.start)} to ${utcTime(window.end)}: ${window.note}`,
+      {
+        html: `<span class="mono">${escapeHtml(utcTime(window.start))}</span> to <span class="mono">${escapeHtml(utcTime(window.end))}</span>: ${escapeHtml(window.note)}`,
+      },
     ]);
   }
   const isCertType = view.type === "tls" || view.type === "domain";
@@ -338,7 +340,7 @@ function locationsSection(detail: CheckDetail, retryHref: string): string {
     { head: "Attempts", kind: "num" },
     { head: "Reason" },
     { head: "Fresh" },
-    { head: "Uptime 90 days" },
+    { head: "Uptime 90 days", kind: "num" },
   ];
   const table =
     rows.length === 0
