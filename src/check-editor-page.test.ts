@@ -296,3 +296,31 @@ describe("a failed form keeps no write-only value", () => {
     expect(edit).toContain(`<pre id="editor-host-binding-line">${escapeHtml(HOST_LINE)}</pre>`);
   });
 });
+
+describe("HTTP Headers and JSON assertions are open on create and edit", () => {
+  const HEADERS_OPEN = "<details open>\n<summary>Headers</summary>";
+  const ASSERT_OPEN = "<details open>\n<summary>JSON assertions</summary>";
+  const bareWeb = Object.fromEntries(
+    Object.entries(checkConfig.checks[0] ?? {}).filter(([key]) => key !== "headers"),
+  );
+  const bare = { ...checkConfig, checks: [bareWeb] };
+  const cases = [
+    ["create", checkEditorHtml(createModel("http")), 5],
+    ["edit without headers or assertions", checkEditorHtml(editModel(viewOf(bare, "web"))), 5],
+    ["edit with stored headers", checkEditorHtml(editModel(viewOf(checkConfig, "web"))), 5],
+  ] as const;
+  for (const [mode, html, visibleRows] of cases) {
+    test(mode, () => {
+      expect(html).toContain(HEADERS_OPEN);
+      expect(html).toContain(ASSERT_OPEN);
+      const pointers = html.match(/name="assert_\d+_pointer"/g) ?? [];
+      expect(pointers).toHaveLength(10);
+      const header = html.match(/name="header_\d+_(?:name|intent)"/g) ?? [];
+      expect(new Set(header.map((m) => /\d+/.exec(m)?.[0])).size).toBe(20);
+      const [visible = ""] = html.split("<summary>More rows</summary>");
+      expect(html).toContain("<details>\n<summary>More rows</summary>");
+      expect(visible).toContain(`name="header_${visibleRows - 1}_`);
+      expect(visible).not.toContain(`name="header_${visibleRows}_`);
+    });
+  }
+});

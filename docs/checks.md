@@ -42,7 +42,9 @@ location-uptime route shows only `Location uptime needs a newer pulse-api.`
 
 The page shows:
 
-- Settings: every stored field, env header names as stored, `set` for a kept header value or
+- Settings: every stored field with a readable label in the editor's wording (`Interval (ms)`,
+  `Retry delay (ms)`, `Record type`, …); a field the console does not know keeps its raw key as
+  the label. Env header names as stored, `set` for a kept header value or
   body, `Secret: set` for a heartbeat. No write-only value is ever shown.
 - State: state, consecutive down, last result and reason, the maintenance window when present,
   certificate days left for TLS and domain, and the SLO text (`No availability objective`,
@@ -55,7 +57,9 @@ The page shows:
   quorum rule stands above the table.
 - Uptime: the aggregate over 90 days and every day in a `<details>` table.
 - Latency (HTTP only): 90 days, newest first; 14 rows visible and the rest in `<details>`.
-- Recent results: the rows of one page, newest first. pulse-api returns complete timestamp
+- Recent results: one row per result, newest first, with times to the millisecond. A note above
+  the table reads `One row per result. Each location reports its own result, so two rows can share
+  a time.`; `No results yet` has no note. pulse-api returns complete timestamp
   groups, so a page can hold more than 20 rows. `Older results` links to `before=<timestamp of
   the last row>`; a page with `before` also has `Newest results`. A `before` that is not 1 to 16
   digits is ignored.
@@ -98,10 +102,13 @@ text, so both lines are built in `src/shell-line.ts` and nowhere else.
 - The heartbeat example quotes the header and the URL:
 
   ```sh
-  curl -fsS -X POST -H 'Authorization: Bearer <secret>' 'http://localhost:3000/heartbeat/nightly-backup'
+  curl -fsS -X POST -H 'Authorization: Bearer <secret>' '<pulse-api-url>/heartbeat/nightly-backup'
   ```
 
-  `<secret>` stays a placeholder. Type the secret inside the quotes: a secret holds only
+  `<pulse-api-url>` and `<secret>` stay placeholders: the console never prints its saved API URL
+  here, because that is often an internal address. The note reads `Replace <pulse-api-url> with
+  the address under which your job reaches pulse-api, for example https://pulse-api.example.com,
+  and <secret> with the secret of this check. The secret is not shown again.` Type the secret inside the quotes: a secret holds only
   `A-Z a-z 0-9 . _ ~ -`.
 
 ## Ids `.` and `..`
@@ -166,7 +173,8 @@ or `equals`) and `assert_<i>_equals`, which must be JSON (`"ok"`, `200`, `true`)
   has neither input: both come from the stored view.
 - Durations are whole milliseconds; each such label ends in `(ms)`. Defaults: method GET, TLS
   port 443 and warn days 14, domain warn days 30 and interval 86400000, heartbeat grace 0.
-- HTTP has 20 header rows and 10 JSON assertion rows. The first `max(existing + 3, 5)` header
+- HTTP has 20 header rows and 10 JSON assertion rows. The Headers and JSON assertions
+  disclosures are always open, on create and edit, with or without stored values. The first `max(existing + 3, 5)` header
   rows are open; the rest sit in `More rows`. On edit the stored literal headers come first, as
   text with `Value: set` and Keep, Replace and Remove; env headers fill the next free rows.
 - The heartbeat secret is a `password` input with `autocomplete="new-password"`. On edit it
@@ -292,9 +300,13 @@ body is kept and the heartbeat secret from the stored view that the POST read it
 
 - Percentages are never rounded up: `99.995` shows `99.99 %`, `100` shows `100 %`, no results
   show `No results`.
-- The error budget takes its sign from the raw value: `-0.04` shows
-  `Error budget exceeded (-0.0 %)`.
-- Times are UTC, `YYYY-MM-DD HH:MM:SS UTC`.
+- The error budget: from 0 to 100 it shows `<value with one decimal> % of the error budget left`;
+  below 0 (also `-0.04`) it shows `Error budget exceeded` with no number; above 100 it shows
+  `Error budget not available`.
+- A reason `latency <decimal>ms …` that an older probe stored shows the latency rounded to whole
+  ms (`latency 1501.4197810000041ms over objective 500ms` shows
+  `latency 1501ms over objective 500ms`). Every other reason shows as served.
+- Times are UTC, `YYYY-MM-DD HH:MM:SS UTC`; Recent results shows `YYYY-MM-DD HH:MM:SS.mmm UTC`.
 
 ## List filters
 

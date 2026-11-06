@@ -11,7 +11,7 @@ import type {
 } from "@lorenzh/pulse-contract";
 import { escapeHtml } from "@lorenzh/pulse-kit";
 import { apiIdSegment } from "./api-path.ts";
-import { budgetText, formatPercent, utcTime } from "./check-format.ts";
+import { budgetText, formatPercent, reasonText, utcTime, utcTimeMs } from "./check-format.ts";
 import {
   type CheckView,
   checkProblemView,
@@ -48,7 +48,11 @@ export const HEARTBEAT_RULE_TEXT =
 export const SHADOWED_PAGE_TEXT =
   "Shadowed by checks.json: the check from checks.json runs instead. This definition is kept in the database.";
 const HEARTBEAT_NOTE =
-  "Use the address under which your job reaches pulse-api. The secret is not shown again.";
+  "Replace <pulse-api-url> with the address under which your job reaches pulse-api, for example https://pulse-api.example.com, and <secret> with the secret of this check. The secret is not shown again.";
+// The console never prints its saved server-to-server api URL into a copied line.
+const API_URL_PLACEHOLDER = "<pulse-api-url>";
+const RESULTS_IDENTITY_TEXT =
+  "One row per result. Each location reports its own result, so two rows can share a time.";
 const LATENCY_VISIBLE_DAYS = 14;
 const RESULTS_PAGE_ROWS = 20;
 
@@ -124,6 +128,35 @@ const SKIPPED_FIELDS: ReadonlySet<string> = new Set([
   "secret",
 ]);
 
+/** Settings terms in the editor's wording; a key missing here keeps its raw name. */
+const SETTING_LABELS: Readonly<Record<string, string>> = {
+  url: "URL",
+  method: "Method",
+  intervalMs: "Interval (ms)",
+  timeoutMs: "Timeout (ms)",
+  latencyObjectiveMs: "Latency objective (ms)",
+  retries: "Retries",
+  retryDelayMs: "Retry delay (ms)",
+  keyword: "Keyword",
+  expectedStatus: "Expected status",
+  jsonAssert: "JSON assertions",
+  availabilityTarget: "Availability target (%)",
+  host: "Host",
+  port: "Port",
+  warnDays: "Warn days before expiry",
+  dnsName: "DNS name",
+  recordType: "Record type",
+  expected: "Expected values",
+  resolver: "Resolver",
+  domain: "Domain",
+  period: "Period (ms)",
+  grace: "Grace (ms)",
+};
+
+function settingLabel(key: string): string {
+  return Object.hasOwn(SETTING_LABELS, key) ? (SETTING_LABELS[key] ?? key) : key;
+}
+
 function valueText(value: unknown): string {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map((item) => valueText(item)).join(", ");
@@ -149,7 +182,7 @@ function settingsEntries(view: AdminCheckView): Array<readonly [string, Value]> 
     ["Source", { html: sourceTag(view.source) }],
   ];
   for (const [key, value] of Object.entries(view)) {
-    if (!SKIPPED_FIELDS.has(key)) entries.push([key, valueText(value)]);
+    if (!SKIPPED_FIELDS.has(key)) entries.push([settingLabel(key), valueText(value)]);
   }
   if ("headers" in view && view.headers !== undefined) {
     for (const [name, value] of Object.entries(view.headers)) {
@@ -197,13 +230,13 @@ function hostBindingSection(view: AdminCheckView): string {
   );
 }
 
-function heartbeatSection(view: AdminCheckView, apiUrl: string): string {
+function heartbeatSection(view: AdminCheckView): string {
   if (view.type !== "heartbeat") return "";
   const segment = apiIdSegment(view.id);
   if (segment === undefined) {
     return section("Heartbeat usage", paragraph(unaddressableHeartbeatText(view.id)));
   }
-  const line = heartbeatLine(`${apiUrl}/heartbeat/${segment}`);
+  const line = heartbeatLine(`${API_URL_PLACEHOLDER}/heartbeat/${segment}`);
   return section(
     "Heartbeat usage",
     `${copyBlock("heartbeat-line", line)}${paragraph(HEARTBEAT_NOTE)}`,
@@ -237,7 +270,7 @@ function stateEntries(view: AdminCheckView, state: CheckWithState | undefined) {
     ["State", { html: checkStateHtml(state?.state ?? "unknown", false) }],
     ["Consecutive down", mono(String(state?.consecutiveDown ?? 0))],
     ["Last result", mono(utcTime(state?.lastResultAt ?? null))],
-    ["Last reason", state?.lastReason ?? "None"],
+    ["Last reason", typeof state?.lastReason === "string" ? reasonText(state.lastReason) : "None"],
   ];
   const window = state?.maintenance;
   if (window !== undefined) {
@@ -319,7 +352,7 @@ function locationCells(row: LocationRow, isHeartbeat: boolean, isRead: boolean):
     utcTime(result.timestamp),
     isHeartbeat ? "Not applicable" : `${result.latencyMs} ms`,
     String(result.attempts),
-    result.reason ?? "",
+    result.reason === null ? "" : reasonText(result.reason),
     row.latest?.stale === true ? "Stale" : "",
     locationUptimeText(row, isRead),
   ];
@@ -412,13 +445,13 @@ ${tableHtml("Latency", heads, older)}</details>
 
 function resultCells(result: Result): Cell[] {
   return [
-    utcTime(result.timestamp),
+    utcTimeMs(result.timestamp),
     result.location,
     { state: result.status },
     result.statusCode === null ? "" : String(result.statusCode),
     `${result.latencyMs} ms`,
     String(result.attempts),
-    result.reason ?? "",
+    result.reason === null ? "" : reasonText(result.reason),
   ];
 }
 
@@ -452,7 +485,7 @@ function resultsSection(
   const table =
     read.value.length === 0
       ? paragraph("No results yet")
-      : tableHtml("Recent results", heads, read.value.map(resultCells));
+      : `${paragraph(RESULTS_IDENTITY_TEXT)}${tableHtml("Recent results", heads, read.value.map(resultCells))}`;
   return section("Recent results", `${table}${pagingLinks(read.value, detail.view.id, before)}`);
 }
 
@@ -480,7 +513,6 @@ export type DetailContext = {
   id: string;
   before: string | undefined;
   role: ConsoleRole;
-  apiUrl: string;
 };
 
 /** A detail or shadowed view, or the 404 for an unknown id. */
@@ -500,7 +532,7 @@ export function checkDetailPage(read: CheckDetailRead, context: DetailContext): 
     stateSection(view, detail.state),
     settingsSection(view),
     hostBindingSection(view),
-    heartbeatSection(view, context.apiUrl),
+    heartbeatSection(view),
     locationsSection(detail, retryHref),
     uptimeSection(detail.uptime, view.id, retryHref),
     latencySection(detail.latency, view.id, retryHref),

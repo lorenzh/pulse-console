@@ -1282,7 +1282,10 @@ function replyChecks(
     jsonReply({
       ...checkConfig,
       checks: [
-        ...checkConfig.checks,
+        // The api serves the resolved retry fields; the detail shows them with labels.
+        ...checkConfig.checks.map((c) =>
+          c.id === "web" ? { ...c, retries: 1, retryDelayMs: 1000 } : c,
+        ),
         ...editable,
         ...extra.map((c) => ({ ...c, intervalMs: 60000, source: "database" })),
       ],
@@ -1293,7 +1296,12 @@ function replyChecks(
     name: c.name,
     url: c.url,
   }));
-  api.reply("/checks", jsonReply([webState, ...checkStates.slice(1), ...extraStates]));
+  // An older probe stored this float reason; the page rounds it for display.
+  const floatState = {
+    ...webState,
+    lastReason: "latency 1501.4197810000041ms over objective 500ms",
+  };
+  api.reply("/checks", jsonReply([floatState, ...checkStates.slice(1), ...extraStates]));
   api.reply("/admin/config/export", jsonReply(checkExport));
   api.reply("/uptime", jsonReply(checkUptime));
   api.reply("/checks/web/results", jsonReply(webResults));
@@ -1349,6 +1357,22 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     await assertFits(page, 390, `${label} detail`);
     const pre = await page.locator("pre").first().textContent();
     assert(pre === HOST_LINE, `${label}: detail host line is the literal`);
+    const detailText = (await page.locator("main").textContent()) ?? "";
+    assert(
+      detailText.includes("latency 1501ms over objective 500ms") &&
+        !detailText.includes("1501.4197810000041"),
+      `${label}: detail shows the rounded reason`,
+    );
+    for (const term of ["Interval (ms)", "Retry delay (ms)"]) {
+      assert(
+        (await page.locator("dt", { hasText: term }).count()) >= 1,
+        `${label}: detail shows ${term}`,
+      );
+    }
+    assert(
+      (await page.locator("dt", { hasText: "intervalMs" }).count()) === 0,
+      `${label}: detail shows no raw intervalMs`,
+    );
     const copy = page.locator("button[data-copy]").first();
     assert((await copy.isVisible()) === hasScript, `${label}: copy button visible ${hasScript}`);
     if (hasScript) {
@@ -1356,7 +1380,8 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
       const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
       assert(copied[0] === HOST_LINE, `${label}: copied host line is the literal`);
       await page.goto(`${base}/checks/check?id=nightly-backup`);
-      const line = `curl -fsS -X POST -H 'Authorization: Bearer <secret>' '${api.url}/heartbeat/nightly-backup'`;
+      const line =
+        "curl -fsS -X POST -H 'Authorization: Bearer <secret>' '<pulse-api-url>/heartbeat/nightly-backup'";
       assert(
         (await page.locator("pre").first().textContent()) === line,
         `${label}: heartbeat line`,
@@ -1438,6 +1463,32 @@ async function alertText(page: Page): Promise<string> {
   return (await page.locator("main").innerText()).slice(0, 600);
 }
 
+/** Header and assertion inputs that must be visible without opening a summary (R4). */
+const HTTP_EXTRAS: readonly [string, string][] = [
+  ["header_0_name", "X-E2E"],
+  ["header_0_kind", "plain"],
+  ["header_0_value", "1"],
+  ["header_1_name", "X-E2E-Token"],
+  ["header_1_kind", "env"],
+  ["header_1_value", "PULSE_HEADER_E2E"],
+  ["assert_0_pointer", "/ok"],
+  ["assert_0_mode", "exists"],
+];
+
+/** Fill the HTTP extras without a click on a summary; fill and selectOption need visible fields. */
+async function fillHttpExtras(page: Page, label: string): Promise<void> {
+  for (const [name, value] of HTTP_EXTRAS) {
+    const radio = page.locator(`input[type="radio"][name="${name}"][value="${value}"]`);
+    const isRadio = (await radio.count()) === 1;
+    const field = isRadio ? radio : page.locator(`[name="${name}"]`);
+    assert(await field.isVisible(), `${label}: ${name} is visible without a click`);
+    const tag = await field.evaluate((el) => el.tagName);
+    if (isRadio) await field.check({ timeout: 2000 });
+    else if (tag === "SELECT") await field.selectOption(value, { timeout: 2000 });
+    else await field.fill(value, { timeout: 2000 });
+  }
+}
+
 async function createEach(page: Page, base: string, state: StatefulApi, label: string) {
   const checks: ConfigEntry[] = [...checkConfig.checks];
   for (const c of CREATE_CASES) {
@@ -1447,6 +1498,7 @@ async function createEach(page: Page, base: string, state: StatefulApi, label: s
     await page.fill('input[name="name"]', `E2E ${c.type}`);
     for (const [name, value] of Object.entries(c.fields))
       await page.fill(`[name="${name}"]`, value);
+    if (c.type === "http") await fillHttpExtras(page, `${label} create http`);
     const template =
       checkConfig.checks.find((x) => ("type" in x ? x.type : "http") === c.type) ?? {};
     state.api.replyTo("POST", "/admin/checks", {
@@ -1454,7 +1506,11 @@ async function createEach(page: Page, base: string, state: StatefulApi, label: s
       body: "{}",
       headers: { ...WIRE, etag: `"${NEW_REVISION}"` },
       after: () => {
-        checks.push({ ...template, id: c.id, name: `E2E ${c.type}`, source: "database" });
+        // The created HTTP check has no headers and no assertions, so its edit form shows R4.
+        const bare = Object.fromEntries(
+          Object.entries(template).filter(([key]) => key !== "headers" && key !== "jsonAssert"),
+        );
+        checks.push({ ...bare, id: c.id, name: `E2E ${c.type}`, source: "database" });
         state.setChecks(checks);
       },
     });
@@ -1467,6 +1523,15 @@ async function createEach(page: Page, base: string, state: StatefulApi, label: s
   }
   const posts = state.api.seen.filter((s) => s.method === "POST");
   assert(posts.length === CREATE_CASES.length, `${label}: one POST per create`);
+  const http = JSON.parse(posts[0]?.body ?? "{}") as { headers?: unknown; jsonAssert?: unknown };
+  assert(
+    JSON.stringify(http.headers) === '{"X-E2E":"1","X-E2E-Token":{"env":"PULSE_HEADER_E2E"}}',
+    `${label}: create http sends the headers, got ${JSON.stringify(http.headers)}`,
+  );
+  assert(
+    JSON.stringify(http.jsonAssert) === '[{"pointer":"/ok","exists":true}]',
+    `${label}: create http sends the assertion, got ${JSON.stringify(http.jsonAssert)}`,
+  );
   assert(
     posts.every((s) => s.headers["if-match"] === `"${checkConfig.revision}"`),
     `${label}: create sends If-Match of the POST-time read`,
@@ -1519,6 +1584,7 @@ async function editEachType(page: Page, base: string, state: StatefulApi, label:
     state.api.replyTo("PUT", path, { status: 412, body: "{}", headers: WIRE });
     await page.goto(url);
     await page.fill('input[name="name"]', `E2E ${c.type} conflict`);
+    if (c.type === "http") await fillHttpExtras(page, `${label} edit http`);
     await submitForm(page);
     assert(
       (await page.getByText("Changed since you opened it").count()) === 1,
