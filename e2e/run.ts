@@ -2328,6 +2328,10 @@ async function matrixTeamAndAccount(env: Env, page: Page, scheme: Scheme, width:
   ]);
   await assertTimestampsMono(page, `${at} invite link page`);
   const link = await page.inputValue("#invite-link");
+  const linkFamily = await page
+    .locator("#invite-link")
+    .evaluate((el) => getComputedStyle(el).fontFamily);
+  assert(linkFamily.startsWith('"JetBrains Mono"'), `${at}: link output not mono ${linkFamily}`);
   const linkAxe = await new AxeBuilder({ page }).withTags(AXE_TAGS).analyze();
   assert(linkAxe.violations.length === 0, `${at} axe on the invite link page`);
   await axeOn(page, `${base}/team`, `${at} /team`);
@@ -2556,6 +2560,8 @@ async function runChecks(): Promise<void> {
 
 async function serve(): Promise<void> {
   const env = await startEnv(SERVE_WAIT_MS);
+  // The manual console shows the checks fixture, so /checks/edit?id=web has an editable check.
+  replyChecks(env.api, []);
   console.log(`url: ${env.console.base}`);
   console.log(`sign in: ${env.ownerEmail} / ${OWNER_PASSWORD}`);
   console.log(`fixture recovery codes: ${env.console.recoveryCodes.join(" ")}`);

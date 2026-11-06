@@ -72,6 +72,7 @@ legend { font-size: 0.875rem; font-weight: 500; padding: 0; margin: 0 0 8px; }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 0; }
 input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), select, textarea { width: 100%; min-height: var(--touch); padding: 0 14px; background: var(--field); border: 1px solid var(--field-line); border-radius: var(--radius-field); color: var(--text); font: inherit; font-size: 1rem; font-weight: 400; }
 textarea { padding: 12px 14px; line-height: 1.6; }
+input.link-output:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), input.mono:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]) { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 input:not([type="radio"]):not([type="checkbox"]):focus-visible, select:focus-visible, textarea:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
 [aria-invalid="true"] { border-color: var(--error) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 20%, transparent); }
 select { appearance: none; padding-right: 36px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 20px) 50%, calc(100% - 15px) 50%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }

@@ -167,6 +167,9 @@ describe("app routes", () => {
     expect(css).toContain(
       '.confirm input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"])[name="confirm_name"] { font-family: var(--font-mono); }',
     );
+    expect(css).toContain(
+      'input.link-output:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]), input.mono:not([type="radio"]):not([type="checkbox"]):not([type="hidden"]) { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }',
+    );
     for (const part of [
       "color-scheme: light dark",
       "@media (prefers-color-scheme: dark)",
