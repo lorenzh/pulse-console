@@ -172,12 +172,14 @@ describe("app routes", () => {
       "main.shell-main { padding: 20px 16px 40px; }",
       ".sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px; gap: 0; }",
       ".sidebar nav ul { flex-direction: row; flex-wrap: nowrap; flex: none;",
+      ".sidebar nav .nav-item { padding: 0 3px; gap: 3px; font-size: 13px; }",
       ".account { flex: 1 0 auto; max-width: 100%;",
       ".account-email { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }",
       ".shell { display: grid; grid-template-columns: 236px minmax(0, 1fr);",
     ]) {
       expect(css).toContain(part);
     }
+    expect(css).not.toContain(".sidebar nav .icon { display: none; }");
     expect(css.startsWith("[hidden] { display: none !important; }\n")).toBe(true);
     expect(css.split("@font-face").length - 1).toBe(7);
     expect(css.split("font-display: swap").length - 1).toBe(7);

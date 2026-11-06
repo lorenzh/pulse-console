@@ -603,7 +603,40 @@ async function tabTo(page: Page, text: string): Promise<void> {
 }
 
 /** R9: at 390 px every nav item reached by Tab keeps its whole outline inside the row. */
+async function checkMobileNavIcons(env: Env, browser: Browser): Promise<void> {
+  for (const colorScheme of ["light", "dark"] as const) {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      colorScheme,
+    });
+    const page = await context.newPage();
+    await signIn(page, env);
+    await page.goto(`${env.console.base}/`);
+    await page.evaluate(() => document.fonts.ready);
+    const icons = await page.evaluate(() =>
+      [...document.querySelectorAll(".sidebar nav .nav-item")].map((item) => {
+        const icon = item.querySelector(".icon");
+        if (icon === null) return "missing";
+        const r = icon.getBoundingClientRect();
+        const label = item.getBoundingClientRect();
+        const shown = getComputedStyle(icon).display !== "none";
+        return shown && r.width === 16 && r.height === 16 && r.left < label.right
+          ? "ok"
+          : `${r.width}x${r.height}`;
+      }),
+    );
+    assert(icons.length === 5, `mobile nav ${colorScheme}: ${icons.length} items`);
+    assert(
+      icons.every((x) => x === "ok"),
+      `mobile nav ${colorScheme}: icons ${icons.join(",")}`,
+    );
+    await context.close();
+  }
+  ok("mobile nav: every item shows its 16px icon at 390 px in light and dark");
+}
+
 async function checkMobileNavFocus(env: Env, browser: Browser): Promise<void> {
+  await checkMobileNavIcons(env, browser);
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await context.newPage();
   await signIn(page, env);

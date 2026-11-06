@@ -200,8 +200,7 @@ dl.settings, .settings { display: grid; grid-template-columns: 150px minmax(0, 1
   .sidebar { position: static; height: auto; overflow-y: visible; width: 100%; gap: 8px; border-right: 0; border-bottom: 1px solid var(--rule); }
   .sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px; gap: 0; }
   .sidebar nav ul { flex-direction: row; flex-wrap: nowrap; flex: none; gap: 0; }
-  .sidebar nav .nav-item { padding: 0 8px; }
-  .sidebar nav .icon { display: none; }
+  .sidebar nav .nav-item { padding: 0 3px; gap: 3px; font-size: 13px; }
   .nav-group { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   .sidebar-foot { margin-top: 0; }
   .topbar { padding: 10px 16px; min-height: 48px; }
