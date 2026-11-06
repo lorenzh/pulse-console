@@ -3,7 +3,7 @@
 // fixture console for a manual check and runs until stopped.
 import { randomBytes } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
-import type { TokenMetadata } from "@lorenzh/pulse-contract";
+import type { ManualIncident, TokenMetadata } from "@lorenzh/pulse-contract";
 import {
   type Browser,
   type BrowserContext,
@@ -28,6 +28,14 @@ import {
   createFixtureRoutes,
   type Recorder,
 } from "../test/fixture-routes.ts";
+import {
+  type IncidentApi,
+  incidentConfig,
+  seedAutomatic,
+  seedManual,
+  seedResults,
+  startIncidentApi,
+} from "../test/incident-api.ts";
 import {
   OWNER_PASSWORD,
   type SignedInConsole,
@@ -2303,6 +2311,222 @@ async function checkProbeFocus(page: Page, base: string): Promise<void> {
 }
 
 /** Probes in a real browser: add with four snippets, typed revoke, countdown, layout. */
+const LONG_TEXT = "x".repeat(300);
+
+function incidentSeeds(): ManualIncident[] {
+  const now = Date.now();
+  return [
+    ...seedManual(),
+    {
+      id: 40,
+      // The contract caps a title at 200 code points; the message carries the 300 characters.
+      title: LONG_TEXT.slice(0, 200),
+      componentIds: ["web"],
+      impact: "minor",
+      status: "identified",
+      createdAt: now - 60_000,
+      resolvedAt: null,
+      updates: [{ at: now - 60_000, status: "identified", message: LONG_TEXT }],
+    },
+    {
+      id: 12,
+      title: "​",
+      componentIds: [],
+      impact: "minor",
+      status: "investigating",
+      createdAt: now - 120_000,
+      resolvedAt: null,
+      updates: [{ at: now - 120_000, status: "investigating", message: "Seeded." }],
+    },
+  ];
+}
+
+const INCIDENT_PAGES = [
+  "/incidents",
+  "/incidents/manual?id=40",
+  "/incidents/manual?id=2",
+  "/incidents/automatic?id=7",
+  "/incidents/automatic?id=31",
+  "/incidents/new",
+  "/incidents/new?from=7",
+  "/incidents/resolve?id=40",
+  "/incidents/delete?id=40",
+  "/incidents/delete?id=12",
+];
+
+/** The preview parts except times, as the browser shows them. */
+async function previewParts(page: Page): Promise<string> {
+  return page.evaluate(() =>
+    JSON.stringify(
+      [...document.querySelectorAll(".incident-preview [data-part]")]
+        .filter((el) => el.getAttribute("data-part") !== "time")
+        .map((el) => [el.getAttribute("data-part"), el.textContent, el.hasAttribute("hidden")]),
+    ),
+  );
+}
+
+async function incidentLayout(page: Page, base: string, label: string): Promise<void> {
+  for (const [width, height] of [
+    [390, 844],
+    [1280, 800],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    for (const path of INCIDENT_PAGES) {
+      await page.goto(base + path);
+      await assertFits(page, width, `${label} ${width}px ${path}`);
+    }
+  }
+  for (const path of INCIDENT_PAGES) {
+    await axeOn(page, base + path, `${label} ${path}`);
+    const alert = await page.locator(".callout-error, [role=alert]").count();
+    assert(alert === 0, `${label} ${path}: shows an error state`);
+  }
+  await page.goto(`${base}/incidents`);
+  const untitled = page.getByRole("link", { name: "Untitled incident #12", exact: true });
+  assert((await untitled.count()) === 1, `${label}: untitled #12 has a named link`);
+  ok(`incidents, ${label}: 10 pages fit 390 and 1280 px with 300-character text, 0 axe violations`);
+}
+
+/** Live changes write nothing and equal the server preview after Update preview. */
+async function incidentLivePreview(
+  page: Page,
+  base: string,
+  api: IncidentApi,
+  violations: string[],
+): Promise<void> {
+  await page.goto(`${base}/incidents/new`);
+  const before = api.writes();
+  await page.fill('input[name="title"]', "<b>Checkout</b> slow");
+  await page.check('input[name="impact"][value="major"]');
+  await page.check('input[name="status"][value="identified"]');
+  await page.check('input[name="component"][value="web"]');
+  await page.check('input[name="component"][value="public-api"]');
+  await page.fill('textarea[name="message"]', "Line 1\nLine <2>");
+  const live = await previewParts(page);
+  assert(violations.length === 0, `live preview: ${violations.join(" | ")}`);
+  assert(api.writes() === before, "live preview: 0 writes");
+  assert((await page.locator(".incident-preview b").count()) === 0, "live preview: title inert");
+  assert(
+    (await page.locator(".incident-preview[aria-live], .incident-preview [aria-live]").count()) ===
+      0,
+    "live preview: not a live region",
+  );
+  assert(live.includes('"<b>Checkout</b> slow"'), `live preview title: ${live}`);
+  assert(live.includes('"Line 1\\nLine <2>"'), `live preview message: ${live}`);
+  assert(live.includes('"Affects: Web, Public API",false'), `live preview affects: ${live}`);
+  await Promise.all([
+    page.waitForURL(`${base}/incidents/new`),
+    page.getByRole("button", { name: "Update preview", exact: true }).click(),
+  ]);
+  const server = await previewParts(page);
+  assert(server === live, `live preview ${live} != server preview ${server}`);
+  assert(api.writes() === before, "Update preview: 0 writes");
+  ok(
+    "incidents, JavaScript on: live preview of title/impact/status/components/message equals the server preview, inert, 0 writes",
+  );
+}
+
+function lastBody(api: IncidentApi, method: string, path: string): unknown {
+  const rows = api.seen.filter((s) => s.method === method && s.path === path);
+  return rows.at(-1)?.body;
+}
+
+/** Preview then publish a leading-LF message from the re-rendered composer and update forms. */
+async function incidentLeadingLf(page: Page, base: string, api: IncidentApi, label: string) {
+  await page.goto(`${base}/incidents/new`);
+  await page.fill('input[name="title"]', "Leading line feed");
+  await page.fill('textarea[name="message"]', "\nLine one");
+  await Promise.all([
+    page.waitForURL(`${base}/incidents/new`),
+    page.getByRole("button", { name: "Update preview", exact: true }).click(),
+  ]);
+  await Promise.all([
+    page.waitForURL(/\/incidents\/manual\?id=\d+/),
+    page.getByRole("button", { name: "Publish incident", exact: true }).click(),
+  ]);
+  const created = lastBody(api, "POST", "/manual-incidents") as { message?: unknown } | undefined;
+  assert(created?.message === "\nLine one", `${label}: composer body ${JSON.stringify(created)}`);
+  const form = page.locator('form[action="/incidents/update"]');
+  await form.locator('textarea[name="message"]').fill("\nLine one");
+  await Promise.all([
+    page.waitForLoadState("load"),
+    form.getByRole("button", { name: "Update preview", exact: true }).click(),
+  ]);
+  const again = page.locator('form[action="/incidents/update"]');
+  await Promise.all([
+    page.waitForURL(/posted=1|\/incidents\/manual\?id=/),
+    again.getByRole("button", { name: "Post update", exact: true }).click(),
+  ]);
+  const updatePath =
+    api.seen.filter((s) => s.method === "POST" && s.path.endsWith("/updates")).at(-1)?.path ?? "";
+  const update = lastBody(api, "POST", updatePath) as { message?: unknown } | undefined;
+  assert(update?.message === "\nLine one", `${label}: update body ${JSON.stringify(update)}`);
+  ok(
+    `incidents, ${label}: "\\nLine one" kept its leading LF through preview and publish of composer and update`,
+  );
+}
+
+/** Resolve and typed delete, including the untitled confirm name. */
+async function incidentResolveDelete(page: Page, base: string, api: IncidentApi, label: string) {
+  await page.goto(`${base}/incidents/resolve?id=1`);
+  await page.fill('textarea[name="message"]', "Fixed now.");
+  await Promise.all([
+    page.waitForURL(/\/incidents\/manual\?id=1/),
+    page.getByRole("button", { name: "Resolve incident", exact: true }).click(),
+  ]);
+  assert(api.manual.find((m) => m.id === 1)?.status === "resolved", `${label}: #1 resolved`);
+  await page.goto(`${base}/incidents/delete?id=12`);
+  const input = page.getByLabel("Type Incident 12 to confirm");
+  assert((await input.count()) === 1, `${label}: untitled delete input has its name`);
+  await input.fill("Incident 12");
+  await Promise.all([
+    page.waitForURL(/\/incidents/),
+    page.getByRole("button", { name: "Delete incident", exact: true }).click(),
+  ]);
+  assert(!api.manual.some((m) => m.id === 12), `${label}: #12 deleted`);
+  ok(`incidents, ${label}: resolve and typed delete of untitled #12 work`);
+}
+
+async function checkIncidentsWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const api = startIncidentApi({
+    token: ADMIN_TOKEN,
+    config: incidentConfig,
+    manual: incidentSeeds(),
+    automatic: seedAutomatic,
+    results: seedResults,
+    now: () => Date.now(),
+  });
+  const server = await startSignedInConsole({
+    apiUrl: api.url,
+    ownerEmail: DEMO_EMAIL,
+    adminToken: ADMIN_TOKEN,
+  });
+  const env = { ownerEmail: DEMO_EMAIL, console: server } as unknown as Env;
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+  });
+  const page = await newPage(context, violations);
+  page.on("pageerror", (error) => violations.push(`page error: ${error.message}`));
+  try {
+    await signIn(page, env);
+    if (hasScript) {
+      await incidentLayout(page, server.base, label);
+      await incidentLivePreview(page, server.base, api, violations);
+    }
+    await incidentLeadingLf(page, server.base, api, label);
+    await incidentResolveDelete(page, server.base, api, label);
+    assert(violations.length === 0, `incidents ${label}: CSP violations ${violations.join(" | ")}`);
+    ok(`incidents, ${label}: 0 CSP violations`);
+  } finally {
+    await context.close();
+    await server.close();
+    api.stop();
+  }
+}
+
 async function checkProbesWith(browser: Browser, hasScript: boolean): Promise<void> {
   const env = await startEnv(0);
   env.api.stop();
@@ -2817,6 +3041,8 @@ async function runChecks(): Promise<void> {
     await checkTokensWith(browser, false);
     await checkProbesWith(browser, true);
     await checkProbesWith(browser, false);
+    await checkIncidentsWith(browser, true);
+    await checkIncidentsWith(browser, false);
     // A console of its own: each check signs in with a fixture recovery code.
     const shellEnv = await startEnv(0);
     try {

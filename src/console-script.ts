@@ -79,7 +79,7 @@ export const CONSOLE_JS = `"use strict";
       if (last) setPart(last, "update-status", status);
     }
     var message = form.querySelector('textarea[name="message"]');
-    if (message && last) setPart(last, "message", message.value.replace(/\r\n?/g, "\n"));
+    if (message && last) setPart(last, "message", message.value.replace(/\\r\\n?/g, "\\n"));
     var boxes = form.querySelectorAll('input[name="component"]');
     var affects = preview.querySelector('[data-part="affects"]');
     if (boxes.length === 0 || !affects) return;
