@@ -171,7 +171,7 @@ function rowHtml(
     `<td>${checkStateHtml(state, true)}</td>`,
     `<td class="mono">${escapeHtml(lastResultAt(row, results))}</td>`,
   ];
-  return `<tr>${cells.join("")}<td>${rowActions(row, role)}</td></tr>`;
+  return `<tr>${cells.join("")}<td class="actions-cell">${rowActions(row, role)}</td></tr>`;
 }
 
 function table(

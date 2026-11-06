@@ -1274,6 +1274,12 @@ describe("Team confirmation tones and table regions", () => {
     );
     const invite = /\/team\/invites\/revoke\?invite=(\d+)/.exec(page.body)?.[1];
     expect(invite).toBeDefined();
+    expect(page.body).toContain(
+      `<td class="actions-cell"><a href="/team/invites/revoke?invite=${invite}">Revoke<span class="visually-hidden">`,
+    );
+    expect(page.body).toContain(
+      `<td class="actions-cell"><span class="row-actions"><a href="/team/role?user=${c.ids.admin}">Change role<span class="visually-hidden">`,
+    );
     const rows: Array<[string, string, boolean]> = [
       [`/team/invites/revoke?invite=${invite}`, "Revoke invite", true],
       [`/team/remove?user=${c.ids.admin}`, "Remove", true],

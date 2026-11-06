@@ -219,7 +219,9 @@ export async function assertChecksBoxEnd(page: Page, label: string): Promise<voi
   );
   check(Number(dims.split(" ")[0]) > 0, `${label}: ArrowRight scrolls (${dims})`);
   await page.keyboard.press("End");
-  for (let i = 0; i < 40; i += 1) await page.keyboard.press("ArrowRight");
+  // One ArrowRight scrolls 40 px; the nowrap Actions column makes the table wider than the
+  // 1800 px that 5 + 40 presses reach at 390 px, so press until well past the end.
+  for (let i = 0; i < 80; i += 1) await page.keyboard.press("ArrowRight");
   await page.waitForTimeout(300);
   const seen = await box.evaluate((el) => {
     const head = Array.from(el.querySelectorAll("th")).find(
@@ -365,4 +367,146 @@ export async function assertFontsUsed(page: Page, monoSelector: string | undefin
   const mono = await platformFonts(page, monoSelector);
   const jet = mono.find((f) => f.familyName.startsWith("JetBrains Mono") && f.isCustomFont);
   check(jet !== undefined, `${label}: ${monoSelector} platform fonts ${JSON.stringify(mono)}`);
+}
+
+/** The literal header lists of R4 (spec 777), in page order. */
+export const HEADERS = {
+  checks: ["Name", "Id", "Type", "Target", "Source", "State", "Last result", "Actions"],
+  members: ["Name", "Email", "Role", "2FA", "Actions"],
+  invites: ["Email", "Role", "Created by", "Expires", "State", "Actions"],
+  sessions: ["Signed in", "Last used", ""],
+  tokens: ["Name", "Id", "Access", "Source", "Created", "Last used", "State", "Actions"],
+  probes: ["Name", "Id", "Source", "Created", "Last used", "State", "Actions"],
+} as const;
+
+/** The R3 computed sizes in px, worked out in the spec from the #774 formulas. */
+export const TYPE_SCALE: Readonly<
+  Record<number, { body: number; h1: number; h2: number; h1Line: number; h1Spacing: number }>
+> = {
+  1280: { body: 15, h1: 39.04, h2: 23.52, h1Line: 42.944, h1Spacing: -0.7808 },
+  390: { body: 15, h1: 32, h2: 20, h1Line: 35.2, h1Spacing: -0.64 },
+};
+
+type Measured = { text: string; lines: number };
+
+/**
+ * The text and line count of each element: distinct rounded tops of the client rects wider
+ * than 0 of a Range over each visible text node. `.visually-hidden` text is skipped, because
+ * its 1 px clipped rect would count as a second line.
+ */
+function measureLines(elements: Element[]): Measured[] {
+  return elements.map((el) => {
+    const tops = new Set<number>();
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      if (node.parentElement?.closest(".visually-hidden")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const r of Array.from(range.getClientRects())) {
+        if (r.width > 0) tops.add(Math.round(r.top));
+      }
+    }
+    return { text: (el.textContent ?? "").trim(), lines: tops.size };
+  });
+}
+
+async function measure(page: Page, selector: string): Promise<Measured[]> {
+  await page.evaluate(() => document.fonts.ready);
+  return page.locator(selector).evaluateAll(measureLines);
+}
+
+/** R1: each table's headers equal the literal list; 1 line per entry, 0 for an empty one. */
+export async function assertHeaderLines(
+  page: Page,
+  tableSelector: string,
+  want: readonly string[],
+  label: string,
+): Promise<number> {
+  const tables = await page.locator(tableSelector).count();
+  check(tables > 0, `${label}: no table ${tableSelector}`);
+  for (let i = 0; i < tables; i += 1) {
+    const heads = await page.locator(tableSelector).nth(i).locator("th").evaluateAll(measureLines);
+    const texts = heads.map((h) => h.text);
+    check(
+      texts.join("|") === want.join("|"),
+      `${label}: headers ${JSON.stringify(texts)}, want ${JSON.stringify(want)}`,
+    );
+    want.forEach((text, k) => {
+      const expected = text === "" ? 0 : 1;
+      const got = heads[k]?.lines;
+      check(got === expected, `${label}: header "${text}" has ${got} lines, want ${expected}`);
+    });
+  }
+  return tables;
+}
+
+/** R2: every link in an action cell is 1 line; returns the labels it measured. */
+export async function assertActionLines(
+  page: Page,
+  selector: string,
+  label: string,
+): Promise<string[]> {
+  const links = await measure(page, selector);
+  for (const link of links) {
+    check(link.lines === 1, `${label}: action "${link.text}" has ${link.lines} lines, want 1`);
+  }
+  return links.map((l) => l.text);
+}
+
+/** R2 on /checks: the long-url row shows View, Edit, Export, Delete, each on 1 line. */
+export async function assertChecksActions(page: Page, width: number, label: string) {
+  const cell = 'table.checks tr:has(td:text-is("long-url")) td.actions-cell';
+  const links = await measure(page, `${cell} a`);
+  const want = ["View", "Edit", "Export", "Delete"];
+  const got = links.map((l) => l.text);
+  check(
+    got.join("|") === want.join("|"),
+    `${label}: long-url actions ${JSON.stringify(got)}, want ${JSON.stringify(want)}`,
+  );
+  await assertActionLines(page, `${cell} a`, `${label} long-url`);
+  const [actions] = await measure(page, 'table.checks th:text-is("Actions")');
+  check(actions?.lines === 1, `${label}: header "Actions" has ${actions?.lines} lines, want 1`);
+  await assertHeaderLines(page, "table.checks", HEADERS.checks, label);
+  if (width !== 390) return;
+  const at = await page.locator(cell).evaluate((td) => {
+    const box = td.closest(".table-scroll")?.getBoundingClientRect();
+    const c = td.getBoundingClientRect();
+    if (box === undefined) return "no box";
+    const isInside = c.left >= box.left - 0.5 && c.right <= box.right + 0.5;
+    return isInside ? "" : `${c.left}-${c.right} in ${box.left}-${box.right}`;
+  });
+  check(at === "", `${label}: long-url Actions cell outside the box (${at})`);
+}
+
+function near(got: string, want: number, tolerance: number, label: string): void {
+  const value = Number.parseFloat(got);
+  check(Math.abs(value - want) <= tolerance, `${label} ${got}, want ${want} ± ${tolerance}`);
+}
+
+/** R3: body, page title and the #people-heading section heading on /team. */
+export async function assertTypeScale(page: Page, width: number, label: string): Promise<void> {
+  const want = TYPE_SCALE[width];
+  check(want !== undefined, `${label}: no type scale for ${width}`);
+  if (want === undefined) return;
+  const got = await page.evaluate(() => {
+    const read = (selector: string) => {
+      const el = document.querySelector(selector);
+      if (el === null) return { fontSize: "none", lineHeight: "", letterSpacing: "", weight: "" };
+      const s = getComputedStyle(el);
+      return {
+        fontSize: s.fontSize,
+        lineHeight: s.lineHeight,
+        letterSpacing: s.letterSpacing,
+        weight: s.fontWeight,
+      };
+    };
+    return { body: read("body"), h1: read(".page-head h1"), h2: read("#people-heading") };
+  });
+  near(got.body.fontSize, want.body, 0.01, `${label}: body font size`);
+  near(got.h1.fontSize, want.h1, 0.01, `${label}: h1 font size`);
+  near(got.h2.fontSize, want.h2, 0.01, `${label}: h2 font size`);
+  near(got.h1.lineHeight, want.h1Line, 0.05, `${label}: h1 line height`);
+  near(got.h1.letterSpacing, want.h1Spacing, 0.05, `${label}: h1 letter spacing`);
+  check(got.h1.weight === "700", `${label}: h1 weight ${got.h1.weight}, want 700`);
+  check(got.h2.weight === "500", `${label}: h2 weight ${got.h2.weight}, want 500`);
 }

@@ -195,6 +195,20 @@ describe("app routes", () => {
     ]) {
       expect(css).toContain(part);
     }
+    for (const rule of [
+      "th { white-space: nowrap; }",
+      "td.actions-cell { white-space: nowrap; }",
+      "td.actions-cell a { white-space: nowrap; overflow-wrap: normal; }",
+      ".cell-note { white-space: normal; overflow-wrap: normal; }",
+      "summary { min-height: 24px; }",
+      ".table-scroll { position: relative; }",
+      "font-size: 0.9375rem",
+      "h1 { font-size: clamp(2rem, 1.8rem + 0.8vw, 2.5rem); font-weight: 700; line-height: 1.1; letter-spacing: -0.02em;",
+      "h2 { font-size: clamp(1.25rem, 1.15rem + 0.4vw, 1.5rem); font-weight: 500;",
+    ]) {
+      expect(css).toContain(rule);
+    }
+    expect(css).not.toContain("font-size: 1.75rem");
     expect(css).not.toContain(".sidebar nav .icon { display: none; }");
     expect(css).not.toContain("flex-direction: column; justify-content: center;");
     expect(css.startsWith("[hidden] { display: none !important; }\n")).toBe(true);

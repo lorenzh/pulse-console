@@ -1195,6 +1195,9 @@ describe("Edit and Delete visibility", () => {
       const list = await getPage(c, "/checks");
       expect(list.body).toContain('<a href="/checks/new">Add a check</a>');
       const row = rowOf(list.body, "web");
+      expect(row).toContain(
+        '<td class="actions-cell"><a href="/checks/check?id=web">View</a> <a href="/checks/edit?id=web">Edit</a> <a href="/checks/export?id=web">Export</a> <a href="/checks/delete?id=web">Delete</a></td>',
+      );
       expect(row).toContain('<a href="/checks/edit?id=web">Edit</a>');
       expect(row).toContain('<a href="/checks/delete?id=web">Delete</a>');
     });

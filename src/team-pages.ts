@@ -67,7 +67,7 @@ function memberRow(m: TeamMember, actor: ConsoleRole): string {
 <td>${escapeHtml(m.email)}</td>
 <td>${roleTag(m.role)}</td>
 <td>${m.hasAuthenticator ? "2FA: on" : "2FA: off"}</td>
-<td>${memberActions(m, actor)}</td>
+<td class="actions-cell">${memberActions(m, actor)}</td>
 </tr>`;
 }
 
@@ -83,7 +83,7 @@ function inviteRow(invite: PendingInvite, view: TeamView): string {
 <td>${escapeHtml(invite.createdByName ?? "removed")}</td>
 <td class="mono">${escapeHtml(utcMinute(invite.expiresAt))}</td>
 <td>${state}</td>
-<td>${action}</td>
+<td class="actions-cell">${action}</td>
 </tr>`;
 }
 

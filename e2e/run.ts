@@ -35,10 +35,13 @@ import {
 } from "../test/signed-in-console.ts";
 import {
   assertAccountVisible,
+  assertActionLines,
+  assertChecksActions,
   assertChecksBoxEnd,
   assertDanger,
   assertFontsUsed,
   assertForbidden,
+  assertHeaderLines,
   assertHostileText,
   assertInput,
   assertLinkColor,
@@ -49,8 +52,10 @@ import {
   assertRadio,
   assertSettingsBreakpoint,
   assertShellGeometry,
+  assertTypeScale,
   FONT_BYTES_BOUND,
   FONT_PATHS,
+  HEADERS,
   PALETTE,
   type Scheme,
 } from "./design-matrix.ts";
@@ -1119,6 +1124,7 @@ async function checkTeamActions(env: Env, browser: Browser): Promise<void> {
     ]);
     await page.goto(`${base}/team`);
     await assertFits(page, 390, "390px team with action links");
+    await assertTeamLines(page, "390px /team with member action links");
     for (const [name, label] of [
       ["Change role for Rem Ovable", "role form"],
       ["Reset 2FA for Rem Ovable", "2FA reset confirmation"],
@@ -1897,6 +1903,11 @@ async function checkTokenLayout(page: Page, base: string): Promise<void> {
     await page.setViewportSize({ width, height: 800 });
     await page.goto(`${base}/tokens`);
     await assertFits(page, width, `/tokens at ${width}`);
+    await assertHeaderLines(page, "main table.tokens", HEADERS.tokens, `/tokens at ${width}`);
+    const rotates = await page.locator('td.actions-cell a:text-is("Rotate")').count();
+    assert(rotates > 0, `/tokens at ${width}: Rotate links ${rotates}, want more than 0`);
+    const links = await assertActionLines(page, "td.actions-cell a", `/tokens at ${width}`);
+    ok(`/tokens at ${width}: headers 1 line each; ${links.length} Rotate/Revoke links 1 line each`);
     await page.goto(`${base}/tokens/new`);
     await assertFits(page, width, `/tokens/new at ${width}`);
     await page.goto(`${base}/tokens/revoke?id=${E2E_OPS.id}`);
@@ -2103,6 +2114,14 @@ async function checkProbeLayout(page: Page, base: string): Promise<void> {
       await page.goto(`${base}${path}`);
       await assertFits(page, width, `${path} at ${width}`);
     }
+    await page.goto(`${base}/probes`);
+    const label = `/probes at ${width}`;
+    await assertHeaderLines(page, "main table.tokens", HEADERS.probes, label);
+    for (const name of ["Rotate this token", "Revoke this token"]) {
+      const links = await assertActionLines(page, `td.actions-cell a:text-is("${name}")`, label);
+      assert(links.length > 0, `${label}: ${name} links ${links.length}, want more than 0`);
+    }
+    ok(`${label}: headers 1 line each; Rotate this token and Revoke this token 1 line each`);
   }
 }
 
@@ -2226,6 +2245,10 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   await assertNoSidewaysScroll(page, `${at} /checks`);
   await assertHostileText(page, HOSTILE_NAME, `${at} /checks`);
   if (width === 390) await assertChecksBoxEnd(page, `${at} /checks`);
+  await assertChecksActions(page, width, `${at} /checks`);
+  ok(
+    `matrix ${at}: /checks headers ${HEADERS.checks.join(", ")} 1 line each; long-url View, Edit, Export, Delete 1 line each${width === 390 ? ", its Actions cell inside the box" : ""}`,
+  );
   await axeOn(page, `${base}/checks`, `${at} /checks`);
   ok(
     `matrix ${at}: checks list with ${MATRIX_CHECKS.length} long/hostile rows fits${width === 390 ? ", the named box scrolls to Actions" : ""}`,
@@ -2317,6 +2340,21 @@ async function assertTimestampsMono(page: Page, label: string): Promise<void> {
 }
 
 /** Team, account, invite and the danger confirmations in each scheme and width. */
+/** R1/R2 on /team: member and invite headers and every action link on 1 line. */
+async function assertTeamLines(page: Page, label: string): Promise<void> {
+  await page.evaluate(() => document.fonts.ready);
+  await assertHeaderLines(page, '[aria-label="Team table"] table', HEADERS.members, label);
+  await assertHeaderLines(
+    page,
+    '[aria-label="Pending invites table"] table',
+    HEADERS.invites,
+    label,
+  );
+  const links = await assertActionLines(page, "td.actions-cell a", label);
+  assert(links.length > 0, `${label}: no action links`);
+  ok(`${label}: member and invite headers 1 line each; ${links.length} action links 1 line each`);
+}
+
 async function matrixTeamAndAccount(env: Env, page: Page, scheme: Scheme, width: number) {
   const base = env.console.base;
   const at = `${scheme} ${width}px`;
@@ -2337,6 +2375,9 @@ async function matrixTeamAndAccount(env: Env, page: Page, scheme: Scheme, width:
   await axeOn(page, `${base}/team`, `${at} /team`);
   await assertTimestampsMono(page, `${at} /team pending invites`);
   await assertNoSidewaysScroll(page, `${at} /team`);
+  await assertTypeScale(page, width, `${at} /team`);
+  ok(`matrix ${at}: body, h1 and #people-heading sizes, h1 line height, spacing and weights`);
+  await assertTeamLines(page, `${at} /team`);
   const revoke = await page
     .locator(`a[href^="/team/invites/revoke?invite="]`)
     .last()
@@ -2354,6 +2395,9 @@ async function matrixTeamAndAccount(env: Env, page: Page, scheme: Scheme, width:
     await page.goto(base + path);
     await assertTimestampsMono(page, `${at} ${path}`);
   }
+  await page.goto(`${base}/account/sessions`);
+  await assertHeaderLines(page, "table#sessions", HEADERS.sessions, `${at} /account/sessions`);
+  ok(`matrix ${at}: Sessions headers "Signed in", "Last used", "" measure 1, 1 and 0 lines`);
   for (const path of [
     "/__test/confirm/typed/remove-member",
     "/__test/confirm/typed/transfer-ownership",

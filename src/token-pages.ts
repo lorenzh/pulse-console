@@ -68,12 +68,12 @@ export type TokenListModel = {
 
 function actionsCell(model: TokenListModel, token: TokenMetadata): string {
   if (token.id === model.selfId)
-    return `<strong>This console</strong> ${escapeHtml(OWN_TOKEN_TEXT)}`;
+    return `<span class="cell-note"><strong>This console</strong> ${escapeHtml(OWN_TOKEN_TEXT)}</span>`;
   if (!model.canChange || !isTokenActive(token, model.now)) return "";
   const rotate = a(`/tokens/rotate${tokenQuery(token.id)}`, "Rotate");
   const revoke =
     token.id === model.lastAdminId
-      ? escapeHtml(LAST_ADMIN_TEXT)
+      ? `<span class="cell-note">${escapeHtml(LAST_ADMIN_TEXT)}</span>`
       : a(`/tokens/revoke${tokenQuery(token.id)}`, "Revoke");
   return `${rotate} ${revoke}`;
 }
@@ -87,10 +87,9 @@ function rowHtml(model: TokenListModel, token: TokenMetadata): string {
     escapeHtml(utcTime(token.createdAt)),
     escapeHtml(lastUsedText(token.lastUsedAt)),
     escapeHtml(tokenStateText(token, model.now)),
-    actionsCell(model, token),
   ];
   const tds = cells.map((cell) => `<td>${cell}</td>`).join("");
-  return `<tr>${tds}</tr>`;
+  return `<tr>${tds}<td class="actions-cell">${actionsCell(model, token)}</td></tr>`;
 }
 
 function tableHtml(model: TokenListModel, heading: string, rows: readonly TokenMetadata[]): string {
