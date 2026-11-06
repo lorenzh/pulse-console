@@ -53,9 +53,15 @@ function expectAccountShell(res: Reply, title: string): void {
   expect(res.body).not.toMatch(/\son[a-z]+=/);
 }
 
+const SUBMITS: Record<string, string> = {
+  "Sign out all other sessions": '<button type="submit" class="danger">',
+  "Create new recovery codes": '<button type="submit">',
+};
+
+/** Cancel is a ghost link before the submit; sign out all is danger, new codes stay primary. */
 function expectCancel(body: string, button: string, href: string): void {
   expect(body).toContain(
-    `<div class="actions"><button type="submit">${button}</button>\n<a class="cancel" href="${href}">Cancel</a></div>`,
+    `<div class="panel-foot"><a class="button ghost cancel" href="${href}">Cancel</a> ${SUBMITS[button]}${button}</button></div>`,
   );
 }
 
@@ -119,15 +125,29 @@ describe("account pages in the signed-in shell", () => {
     const c = await signedIn();
     const { body } = await getPage(c, "/account/sessions");
     expect(body).toContain('<p><a href="/account/security">Back to account security</a></p>');
+    expect(body).toContain(
+      '<div class="table-scroll" tabindex="0" role="region" aria-label="Sessions table">\n<table id="sessions">',
+    );
+    expect(body).toContain("This browser");
     expect(countOf(body, 'action="/sign-out"')).toBe(1);
   });
 
-  test("both confirmations have Cancel next to the primary button", async () => {
+  test("both confirmations are panels with Cancel before the submit", async () => {
     const c = await signedIn();
     const all = await getPage(c, "/account/sessions/sign-out-all");
     expectCancel(all.body, "Sign out all other sessions", "/account/sessions");
+    expect(all.body).toContain(
+      '<form method="post" action="/account/sessions/sign-out-all" class="panel confirm confirm-danger">',
+    );
     const codes = await getPage(c, "/account/recovery-codes");
     expectCancel(codes.body, "Create new recovery codes", "/account/security");
+    expect(codes.body).toContain(
+      '<form method="post" action="/account/recovery-codes" class="panel confirm confirm-safe">',
+    );
+    expect(codes.body).toMatch(
+      /<div class="panel-body">[\s\S]*name="password"[\s\S]*<\/div>\n<div class="panel-foot">/,
+    );
+    expect(codes.body).not.toContain("danger");
   });
 
   test("a viewer sees Overview and no Team", async () => {
@@ -156,6 +176,15 @@ describe("account pages in the signed-in shell", () => {
   });
 });
 
+describe("account notices are callouts", () => {
+  test("the signed-out notice on Sessions is a success callout with role status", async () => {
+    const c = await signedIn();
+    const { body } = await getPage(c, "/account/sessions?signed-out=others");
+    expect(body).toContain('<section class="callout callout-success" role="status">');
+    expect(body).toContain("<p>All other sessions are signed out.</p>");
+  });
+});
+
 describe("account re-renders keep the shell and Cancel", () => {
   async function codesPost(c: SignedInConsole, password: string, token?: string): Promise<Reply> {
     const page = await getPage(c, "/account/recovery-codes");
@@ -172,6 +201,13 @@ describe("account re-renders keep the shell and Cancel", () => {
     expect(res.status).toBe(401);
     expectAccountShell(res, "New recovery codes");
     expectCancel(res.body, "Create new recovery codes", "/account/security");
+  });
+
+  test("the wrong password is an error callout with role alert, not a bare paragraph", async () => {
+    const c = await signedIn();
+    const res = await codesPost(c, "wrong-password-0123456789");
+    expect(res.body).toContain('<section class="callout callout-error" role="alert">');
+    expect(res.body).not.toContain('class="error"');
   });
 
   test("an empty password is 422 in the shell", async () => {

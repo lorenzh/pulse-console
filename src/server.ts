@@ -39,7 +39,6 @@ import { serializeCookie, serializeCookieDeletion } from "./cookies.ts";
 import { FONT_FILES, loadFonts } from "./fonts.ts";
 import { createFormTokens, type FormTokenResult } from "./form-tokens.ts";
 import { checkApiUrl, checkEmail, checkName, type FormFields, passwordText } from "./forms.ts";
-import { paragraph } from "./html.ts";
 import {
   anonBinding,
   type ConsoleServerDeps,
@@ -83,6 +82,7 @@ import { hasRole } from "./roles.ts";
 import { shellPage } from "./shell.ts";
 import { postFactor, sendFactorForm } from "./sign-in-factor.ts";
 import {
+  alertCallout,
   alreadySubmittedState,
   forbiddenState,
   formExpiredNotice,
@@ -710,7 +710,7 @@ function signOutExpiredPage(ctx: Ctx, live: { id: string; session: Session }): s
   const signedIn = { id: live.id, user, csrf: live.session.csrfToken };
   return signedInPage(ctx, signedIn, {
     title: "Sign out",
-    body: paragraph(formExpiredResendNotice, ' role="alert"'),
+    body: alertCallout(formExpiredResendNotice),
   });
 }
 
@@ -994,7 +994,7 @@ function isProtectedTokenAccepted(
     kind: "page",
     status: 409,
     title: "Form expired",
-    body: paragraph(formExpiredNotice, ' role="alert"'),
+    body: alertCallout(formExpiredNotice),
   };
   sendPageResult(ctx, signedIn, route, form.kind === "page" ? { ...form, status: 409 } : form);
   return false;

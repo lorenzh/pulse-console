@@ -2,7 +2,12 @@
 // dispatcher; actions only go to the recorder here, never to pulse-api.
 import { escapeHtml } from "@lorenzh/pulse-kit";
 import type { ApiFailure } from "../src/api-failure.ts";
-import { plainConfirmPage, typedConfirmPage, typedNameError } from "../src/confirm.ts";
+import {
+  type ConfirmTone,
+  plainConfirmPage,
+  typedConfirmPage,
+  typedNameError,
+} from "../src/confirm.ts";
 import {
   csrfField,
   field,
@@ -133,7 +138,14 @@ function invalidAnswer(request: PageRequest): PageResult {
   return page(422, "Edit", editForm(request, errors));
 }
 
-type Family = { family: string; title: string; consequence: string; submit: string };
+type Family = {
+  family: string;
+  title: string;
+  consequence: string;
+  submit: string;
+  /** The tone of the plain variant; a typed confirmation is always danger. */
+  tone: ConfirmTone;
+};
 
 const TYPED_FAMILIES: readonly Family[] = [
   {
@@ -141,36 +153,42 @@ const TYPED_FAMILIES: readonly Family[] = [
     title: "Delete check",
     consequence: "The check and its history are deleted.",
     submit: "Delete check",
+    tone: "danger",
   },
   {
     family: "delete-incident",
     title: "Delete incident",
     consequence: "The incident and its updates are deleted.",
     submit: "Delete incident",
+    tone: "danger",
   },
   {
     family: "revoke-token",
     title: "Revoke token",
     consequence: "Clients that use this token stop working.",
     submit: "Revoke token",
+    tone: "danger",
   },
   {
     family: "revoke-probe",
     title: "Revoke probe",
     consequence: "The probe can no longer send results.",
     submit: "Revoke probe",
+    tone: "danger",
   },
   {
     family: "remove-member",
     title: "Remove member",
     consequence: "The member loses access to this console.",
     submit: "Remove member",
+    tone: "danger",
   },
   {
     family: "transfer-ownership",
     title: "Transfer ownership",
     consequence: "You become an admin and lose the owner role.",
     submit: "Transfer ownership",
+    tone: "danger",
   },
 ];
 
@@ -180,30 +198,35 @@ const PLAIN_FAMILIES: readonly Family[] = [
     title: "Resolve incident",
     consequence: "The incident is marked resolved on the status page.",
     submit: "Resolve incident",
+    tone: "safe",
   },
   {
     family: "delete-maintenance",
     title: "Delete maintenance",
     consequence: "The maintenance window is deleted.",
     submit: "Delete maintenance",
+    tone: "danger",
   },
   {
     family: "reset-2fa",
     title: "Reset two-factor authentication",
     consequence: "The member must set up two-factor authentication again.",
     submit: "Reset",
+    tone: "danger",
   },
   {
     family: "sign-out-all-sessions",
     title: "Sign out all sessions",
     consequence: "Every session of this account ends.",
     submit: "Sign out all",
+    tone: "danger",
   },
   {
     family: "new-recovery-codes",
     title: "New recovery codes",
     consequence: "The old recovery codes stop working.",
     submit: "Create new codes",
+    tone: "safe",
   },
 ];
 
@@ -238,7 +261,7 @@ function confirmRoute(
             typed: request.fields.confirm_name,
             error: input.error,
           })
-        : plainConfirmPage(view);
+        : plainConfirmPage({ ...view, tone: f.tone });
     return page(status, f.title, body);
   };
   const gone = (): PageResult => page(404, "Page not found", notFoundState());

@@ -1,6 +1,6 @@
 import { escapeHtml } from "@lorenzh/pulse-kit";
 import { csrfField, field, formTokenField, paragraph, plainDocument } from "./html.ts";
-import { alreadySubmittedState } from "./states.ts";
+import { alertCallout, alreadySubmittedState, callout } from "./states.ts";
 
 // Every value goes through escapeHtml. The CSP allows only the /console.css stylesheet.
 
@@ -30,11 +30,20 @@ export type ConnectionView =
 
 function connectionHtml(view: ConnectionView | undefined): string {
   if (view === undefined) return "";
-  if (!view.isOk) return paragraph(view.text, ' id="connection-result" role="alert"');
+  if (!view.isOk) {
+    return callout({
+      kind: "error",
+      body: paragraph(view.text),
+      role: "alert",
+      id: "connection-result",
+    });
+  }
   const scope = view.isScopeChecked
     ? ""
     : "<p>This pulse-api has no token routes, so the admin scope was not checked.</p>\n";
-  return `<p id="connection-result">Connected. Wire version: 1. Checks: ${view.checkCount}.</p>\n${scope}`;
+  // Deploy greps this line byte for byte.
+  const line = `<p>Connected. Wire version: 1. Checks: ${view.checkCount}.</p>\n`;
+  return callout({ kind: "success", body: line, id: "connection-result" }) + scope;
 }
 
 /** The owner and API form of setup. Password fields are never filled in. */
@@ -49,7 +58,7 @@ export function setupOwnerPage(view: {
   const errors = view.errors ?? {};
   return plainDocument(
     "Create the owner account",
-    `${paragraph(view.message, ' role="alert"')}${connectionHtml(view.connection)}<p>The console needs a pulse-api token with the read or checks scope and the admin scope. If pulse-api answers that it is throttling, wait a minute before the next test.</p>
+    `${alertCallout(view.message)}${connectionHtml(view.connection)}<p>The console needs a pulse-api token with the read or checks scope and the admin scope. If pulse-api answers that it is throttling, wait a minute before the next test.</p>
 <form method="post" action="/setup/owner">
 ${csrfField(view.csrf)}
 ${formTokenField(view.formToken)}
@@ -76,7 +85,7 @@ export function signInPage(view: {
 }): string {
   return plainDocument(
     "Sign in",
-    `${paragraph(view.notice, ' class="notice"')}${paragraph(view.error, ' role="alert" class="error"')}<form method="post" action="/sign-in">
+    `${view.notice === undefined ? "" : callout({ kind: "info", body: paragraph(view.notice) })}${alertCallout(view.error)}<form method="post" action="/sign-in">
 ${csrfField(view.csrf)}
 ${formTokenField(view.formToken)}
 <input type="hidden" name="next" value="${escapeHtml(view.next)}">
@@ -101,6 +110,6 @@ export function messagePage(
   const a =
     link === undefined
       ? ""
-      : `<p><a href="${escapeHtml(link.href)}">${escapeHtml(link.label)}</a></p>\n`;
+      : `<p class="plain-foot"><a href="${escapeHtml(link.href)}">${escapeHtml(link.label)}</a></p>\n`;
   return plainDocument(title, `${paragraph(text)}${a}`);
 }

@@ -71,6 +71,9 @@ const FAMILIES: Array<[string, string]> = [
   ...PLAIN.map((f): [string, string] => ["plain", f]),
 ];
 
+/** R3 and R11: Resolve and new recovery codes stay primary; every other confirmation is danger. */
+const SAFE_PLAIN = new Set(["resolve-incident", "new-recovery-codes"]);
+
 const TYPED_PATH = "/__test/confirm/typed/delete-check";
 
 async function openForm(c: SignedInConsole, path: string): Promise<string> {
@@ -100,8 +103,15 @@ describe("confirmation families", () => {
       expect(get.body).toMatch(
         /<input type="hidden" name="csrf" value="[^"]+">\n<input type="hidden" name="form_token" value="[^"]{43}">\n<input type="hidden" name="revision" value="rev-1">/,
       );
-      expect(get.body).toContain('<a class="cancel" href="/">Cancel</a>');
+      expect(get.body).toContain('<a class="button ghost cancel" href="/">Cancel</a>');
       expect(get.body).toContain("This cannot be undone.");
+      const tone = kind === "plain" && SAFE_PLAIN.has(family) ? "safe" : "danger";
+      expect(get.body).toContain(`class="panel confirm confirm-${tone}">`);
+      expect(get.body).toContain(
+        '<a class="button ghost cancel" href="/">Cancel</a> <button type="submit"',
+      );
+      expect(get.body.includes('<button type="submit" class="danger"')).toBe(tone === "danger");
+      expect(get.body).not.toContain("style=");
       if (kind === "typed") {
         expect(get.body).toContain('<label for="field-confirm_name">Type Checkout API to confirm');
       } else {

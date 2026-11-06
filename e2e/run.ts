@@ -47,6 +47,11 @@ const SERVE_WAIT_MS = 3000;
 const DEMO_EMAIL = "demo-owner@example.com";
 // --accent-text in the light scheme, the default of a new context.
 const LINK_COLOUR = "rgb(122, 66, 144)";
+// --text in the light scheme: the ghost confirmation Cancel is a button, not a link colour.
+const TEXT_COLOUR = "rgb(39, 27, 50)";
+// Light --error fill and --bg text of a danger submit; light --strong fill of a primary one.
+const DANGER_FILL = "rgb(164, 38, 44)";
+const PRIMARY_FILL = "rgb(39, 27, 50)";
 // The R3 link table: every :visited selector part and its color, written out from the spec.
 const VISITED_RULES: Readonly<Record<string, string>> = {
   "a:visited": "var(--accent-text)",
@@ -420,14 +425,46 @@ async function checkNotFound(env: Env, browser: Browser): Promise<void> {
 }
 
 /** Computed colour and keyboard outline of a link, reached by Tab. */
-async function assertLink(page: Page, name: string, label: string): Promise<void> {
+async function assertLink(
+  page: Page,
+  name: string,
+  label: string,
+  want = LINK_COLOUR,
+): Promise<void> {
   const link = page.getByRole("link", { name, exact: true }).first();
   const colour = await link.evaluate((a) => getComputedStyle(a).color);
-  assert(colour === LINK_COLOUR, `${label}: colour ${colour}`);
+  assert(colour === want, `${label}: colour ${colour}`);
   await page.locator("body").focus();
   await tabTo(page, name);
   const outline = (await focusedOutline(page)).outline;
   assert(outline !== "none", `${label}: no focus outline`);
+}
+
+/** The confirmation foot: the ghost Cancel comes before the submit in DOM and visual order. */
+async function assertGhostCancelFirst(page: Page, label: string): Promise<void> {
+  const foot = await page
+    .locator(".panel-foot")
+    .first()
+    .evaluate((el) => {
+      const cancel = el.querySelector("a.button.ghost.cancel");
+      const submit = el.querySelector('button[type="submit"]');
+      if (cancel === null || submit === null) return undefined;
+      return {
+        isBefore: (cancel.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        isLeft: cancel.getBoundingClientRect().right <= submit.getBoundingClientRect().left,
+      };
+    });
+  assert(
+    foot?.isBefore === true && foot.isLeft,
+    `${label}: Cancel is not a ghost before the submit`,
+  );
+}
+
+async function assertSubmitFill(page: Page, name: string, want: string): Promise<void> {
+  const fill = await page
+    .getByRole("button", { name, exact: true })
+    .evaluate((b) => getComputedStyle(b).backgroundColor);
+  assert(fill === want, `${name}: fill ${fill}, want ${want}`);
 }
 
 /**
@@ -475,9 +512,13 @@ async function checkLinks(env: Env, browser: Browser): Promise<void> {
   await assertLink(page, "Account security", "header Account security");
   await assertLink(page, "Sessions", "account-content link");
   await page.goto(`${base}/account/sessions/sign-out-all`);
-  await assertLink(page, "Cancel", "sign out all Cancel");
+  await assertLink(page, "Cancel", "sign out all Cancel", TEXT_COLOUR);
+  await assertGhostCancelFirst(page, "sign out all");
+  await assertSubmitFill(page, "Sign out all other sessions", DANGER_FILL);
   await page.goto(`${base}/account/recovery-codes`);
-  await assertLink(page, "Cancel", "recovery codes Cancel");
+  await assertLink(page, "Cancel", "recovery codes Cancel", TEXT_COLOUR);
+  await assertGhostCancelFirst(page, "recovery codes");
+  await assertSubmitFill(page, "Create new recovery codes", PRIMARY_FILL);
   const problems = await visitedProblems(page);
   assert(problems.length === 0, `visited rules: ${problems.join(", ")}`);
   await page.fill('input[name="password"]', OWNER_PASSWORD);
@@ -486,7 +527,9 @@ async function checkLinks(env: Env, browser: Browser): Promise<void> {
   env.console.recoveryCodes.splice(0, env.console.recoveryCodes.length, ...codes);
   await assertLink(page, "Continue", "result Continue");
   await context.close();
-  ok(`links: header, account, both Cancels and Continue are ${LINK_COLOUR} with a focus outline`);
+  ok(
+    `links: header, account and Continue are ${LINK_COLOUR}; both ghost Cancels are ${TEXT_COLOUR} before the submit; sign out all is ${DANGER_FILL}, new codes ${PRIMARY_FILL}; all with a focus outline`,
+  );
   ok(
     `Visited links: ordinary links are ${LINK_COLOUR}; the ${Object.keys(VISITED_RULES).length} listed :visited rules (link, 4 button, callout, 2 nav, breadcrumb) match R3 and none sits in @media`,
   );
@@ -552,7 +595,11 @@ async function checkAxe(env: Env, browser: Browser): Promise<void> {
   await axeOn(page, `${base}/__test/states/forbidden`, "shell 403");
   env.role.current = "owner";
   await axeOn(page, `${base}/__test/confirm/typed/delete-check`, "typed confirmation");
+  await assertGhostCancelFirst(page, "typed confirmation");
+  await assertSubmitFill(page, "Delete check", DANGER_FILL);
   await axeOn(page, `${base}/__test/confirm/plain/resolve-incident`, "plain confirmation");
+  await assertGhostCancelFirst(page, "plain confirmation");
+  await assertSubmitFill(page, "Resolve incident", PRIMARY_FILL);
   assert(violations.length === 0, `CSP violations: ${violations.join(" | ")}`);
   await context.close();
 }
@@ -969,6 +1016,7 @@ async function checkInvites(env: Env, browser: Browser): Promise<void> {
     await page.goto(`${base}/team`);
     await assertFits(page, 390, "390px team with a pending invite");
     await axeOn(page, `${base}/team/invites/revoke?invite=1`, "revoke invite");
+    await assertSubmitFill(page, "Revoke invite", DANGER_FILL);
     await assertFits(page, 390, "390px revoke invite");
     const anon = await newPage(invitee, violations);
     await axeOn(anon, link, "invite accept form");

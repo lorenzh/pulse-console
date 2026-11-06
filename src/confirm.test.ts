@@ -52,15 +52,19 @@ describe("typedNameError", () => {
 describe("typedConfirmPage", () => {
   test("renders the target, the labelled field, hidden fields in order and Cancel", () => {
     const html = typedConfirmPage({ ...BASE, targetName: "Checkout <API>" });
-    expect(html).toContain("<p>The check &lt;b&gt; is deleted.</p>");
-    expect(html).toContain('<p class="confirm-target">Checkout &lt;API&gt;</p>');
+    expect(html).toContain('<p class="confirm-title">The check &lt;b&gt; is deleted.</p>');
+    expect(html).toContain('<p class="confirm-target mono">Checkout &lt;API&gt;</p>');
     expect(html).toContain('<label for="field-confirm_name">Type Checkout &lt;API&gt; to confirm');
     expect(html).toContain(
       '<input type="hidden" name="csrf" value="csrf-1">\n<input type="hidden" name="form_token" value="token-1">\n<input type="hidden" name="revision" value="rev-1">',
     );
-    expect(html).toContain('<form method="post" action="/x/delete" class="confirm">');
-    expect(html).toContain('data-busy-label="Deleting…">Delete check</button>');
-    expect(html).toContain('<a class="cancel" href="/checks">Cancel</a>');
+    expect(html).toContain(
+      '<form method="post" action="/x/delete" class="panel confirm confirm-danger">',
+    );
+    expect(html).toContain(
+      '<div class="panel-foot"><a class="button ghost cancel" href="/checks">Cancel</a> <button type="submit" class="danger" data-busy-label="Deleting…">Delete check</button></div>',
+    );
+    expect(html).not.toContain("<h2");
     expect(html).not.toContain("error-summary");
   });
 
@@ -72,7 +76,8 @@ describe("typedConfirmPage", () => {
       error: "The name does not match. Type api exactly.",
       notice: "Expired.",
     });
-    expect(html).toContain('<p role="alert">Expired.</p>');
+    expect(html).toContain('<section class="callout callout-warning" role="alert">');
+    expect(html).toContain("<p>Expired.</p>");
     expect(html).toContain('value="API&lt;"');
     expect(html).toContain(
       '<li><a href="#field-confirm_name">The name does not match. Type api exactly.</a></li>',
@@ -83,12 +88,24 @@ describe("typedConfirmPage", () => {
 
 describe("plainConfirmPage", () => {
   test("renders consequence, hidden fields, submit and Cancel without a name field", () => {
-    const html = plainConfirmPage(BASE);
-    expect(html).toContain("<p>The check &lt;b&gt; is deleted.</p>");
+    const html = plainConfirmPage({ ...BASE, tone: "danger", hidden: [["kind", "x"]] });
+    expect(html).toContain('<p class="confirm-title">The check &lt;b&gt; is deleted.</p>');
     expect(html).toContain(
-      '<input type="hidden" name="csrf" value="csrf-1">\n<input type="hidden" name="form_token" value="token-1">\n<input type="hidden" name="revision" value="rev-1">',
+      '<input type="hidden" name="csrf" value="csrf-1">\n<input type="hidden" name="form_token" value="token-1">\n<input type="hidden" name="revision" value="rev-1">\n<input type="hidden" name="kind" value="x">\n<div class="panel-body">',
     );
-    expect(html).toContain('<a class="cancel" href="/checks">Cancel</a>');
+    expect(html).toContain('class="panel confirm confirm-danger"');
+    expect(html).toContain(
+      '<a class="button ghost cancel" href="/checks">Cancel</a> <button type="submit" class="danger"',
+    );
     expect(html).not.toContain("confirm_name");
+  });
+
+  test("a safe confirmation has a primary submit and no danger class", () => {
+    const html = plainConfirmPage({ ...BASE, tone: "safe", submitLabel: "Resolve incident" });
+    expect(html).toContain('class="panel confirm confirm-safe"');
+    expect(html).not.toContain("danger");
+    expect(html).toContain(
+      '<a class="button ghost cancel" href="/checks">Cancel</a> <button type="submit" data-busy-label="Deleting…">Resolve incident</button>',
+    );
   });
 });

@@ -5,7 +5,7 @@ import { typedNameError } from "./confirm.ts";
 import { checkEmail } from "./forms.ts";
 import { routeRole, type TeamActionKind, targetDecision } from "./permissions.ts";
 import type { PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
-import { forbiddenState, formExpiredNotice, notFoundState, staleState } from "./states.ts";
+import { callout, forbiddenState, formExpiredNotice, notFoundState, staleState } from "./states.ts";
 import {
   type InviteFormState,
   inviteLinkBody,
@@ -76,7 +76,7 @@ function saveFailed(): PageResult {
     kind: "page",
     status: 500,
     title: "Not saved",
-    body: `<p role="alert">${SAVE_FAILED}</p>\n`,
+    body: callout({ kind: "error", body: `<p>${SAVE_FAILED}</p>\n`, role: "alert" }),
   };
 }
 
@@ -345,12 +345,18 @@ function precheck(
   return op.lateRefusal?.(request, member);
 }
 
+/** An error callout with the escaped sentence and the way back to the team. */
+function refusedBody(sentence: string): string {
+  const error = callout({ kind: "error", body: `<p>${sentence}</p>\n`, role: "alert" });
+  return `${error}<p><a href="/team">Back to the team</a></p>\n`;
+}
+
 function fieldRefused(op: MemberOperation, error: string): PageResult {
   return {
     kind: "page",
     status: 422,
     title: op.title,
-    body: `<p role="alert">${escapeHtml(error)}</p>\n<p><a href="/team">Back to the team</a></p>\n`,
+    body: refusedBody(escapeHtml(error)),
   };
 }
 
@@ -429,7 +435,7 @@ function noAuthenticator(member: TeamMember): PageResult {
     kind: "page",
     status: 409,
     title: "Make owner",
-    body: `<p role="alert">${escapeHtml(member.name)} has not set up two-factor sign-in yet.</p>\n<p><a href="/team">Back to the team</a></p>\n`,
+    body: refusedBody(`${escapeHtml(member.name)} has not set up two-factor sign-in yet.`),
   };
 }
 

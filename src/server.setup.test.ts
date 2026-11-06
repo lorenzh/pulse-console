@@ -249,6 +249,15 @@ function ownerFields(apiUrl: string, action: "test" | "complete"): Record<string
   };
 }
 
+/** The success line is a success callout with its id, no role, and the exact deploy text. */
+function expectConnected(body: string, checks: number): void {
+  const open = '<section class="callout callout-success" id="connection-result">';
+  expect(body).toContain(open);
+  const start = body.indexOf(open);
+  const end = body.indexOf("</section>", start);
+  expect(body.slice(start, end)).toContain(`<p>Connected. Wire version: 1. Checks: ${checks}.</p>`);
+}
+
 function userCount(dbPath: string): number {
   const db = openDatabase(dbPath, { createFile: () => undefined, chmod: chmodSync });
   const row = db.query("SELECT count(*) AS n FROM users").get();
@@ -386,6 +395,13 @@ describe("owner form", () => {
       expect(r.body).toContain(text);
       expect(r.body).not.toContain(PASSWORD);
     }
+    const noAction = await client.post("/setup/owner", {
+      ...ownerFields(api.url, "complete"),
+      action: "other",
+    });
+    expect(noAction.body).toContain('<section class="callout callout-error" role="alert">');
+    expect(noAction.body).toContain("<p>Choose an action.</p>");
+    expect(noAction.body).not.toContain("style=");
     const emoji = "😀".repeat(12);
     const ok = await client.post("/setup/owner", {
       ...ownerFields(api.url, "test"),
@@ -452,15 +468,11 @@ describe("connection test", () => {
     await client.unlock();
     const three = await client.post("/setup/owner", ownerFields(api.url, "test"));
     expect(three.status).toBe(200);
-    expect(three.body).toContain(
-      '<p id="connection-result">Connected. Wire version: 1. Checks: 3.</p>',
-    );
+    expectConnected(three.body, 3);
     expect(three.body).not.toContain("admin scope was not checked");
     checks = 0;
     const zero = await client.post("/setup/owner", ownerFields(`${api.url}/`, "test"));
-    expect(zero.body).toContain(
-      '<p id="connection-result">Connected. Wire version: 1. Checks: 0.</p>',
-    );
+    expectConnected(zero.body, 0);
     expect(api.requests.map((r) => r.path)).toEqual([
       "/admin/config",
       "/admin/tokens/self",
@@ -480,9 +492,7 @@ describe("connection test", () => {
     await client.unlock();
     const res = await client.post("/setup/owner", ownerFields(api.url, "test"));
     expect(res.status).toBe(200);
-    expect(res.body).toContain(
-      '<p id="connection-result">Connected. Wire version: 1. Checks: 2.</p>',
-    );
+    expectConnected(res.body, 2);
     expect(res.body).not.toContain("admin scope was not checked");
     expect(api.requests.map((r) => r.path)).toEqual([
       "/admin/config",
@@ -567,8 +577,9 @@ describe("connection test", () => {
       const res = await client.post("/setup/owner", ownerFields(api.url, "complete"));
       expect(res.status).toBe(502);
       expect(res.body).toContain(
-        `<p id="connection-result" role="alert">${text.replace("'", "&#39;")}</p>`,
+        '<section class="callout callout-error" role="alert" id="connection-result">',
       );
+      expect(res.body).toContain(`<p>${text.replace("'", "&#39;")}</p>`);
       expect(res.body).not.toContain("upstream-body-sentinel");
       expect(c.store.instance()).toBeUndefined();
       expect(userCount(c.dbPath)).toBe(0);
@@ -707,9 +718,7 @@ describe("completion", () => {
     await client.unlock();
     const tested = await client.post("/setup/owner", ownerFields(api.url, "test"));
     expect(tested.status).toBe(200);
-    expect(tested.body).toContain(
-      '<p id="connection-result">Connected. Wire version: 1. Checks: 3.</p>',
-    );
+    expectConnected(tested.body, 3);
     const done = await client.post("/setup/owner", ownerFields(api.url, "complete"));
     expect(done.status).toBe(303);
     expect(done.headers.get("location")).toBe("/account/authenticator");

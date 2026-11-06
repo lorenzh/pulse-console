@@ -52,6 +52,16 @@ ${title}${view.body}${action}</div>
 `;
 }
 
+/**
+ * The `role="alert"` callout of one plain sentence: a warning for the form-expired notices,
+ * an error for every other refusal. Nothing for undefined.
+ */
+export function alertCallout(text: string | undefined): string {
+  if (text === undefined) return "";
+  const isExpired = text === formExpiredNotice || text === formExpiredResendNotice;
+  return callout({ kind: isExpired ? "warning" : "error", body: paragraph(text), role: "alert" });
+}
+
 /** Empty state: heading, text and at most one next step (an action link or a button form HTML). */
 export function emptyState(view: {
   title: string;

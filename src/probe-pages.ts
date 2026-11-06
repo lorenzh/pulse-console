@@ -286,6 +286,7 @@ export function probeRotateConfirmHtml(model: ProbeConfirmModel): string {
       revision: model.revision,
       submitLabel: "Rotate token",
       busyLabel: "Rotating…",
+      tone: "safe",
       cancelHref: "/probes",
       notice: model.notice,
     })
