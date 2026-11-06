@@ -8,9 +8,18 @@ const labels = (role: ConsoleRole, registry = NAVIGATION) =>
   visibleNavigation(role, registry).map((e) => e.label);
 
 describe("navigation registry", () => {
-  test("has exactly 9 entries, 4 of them unavailable; Tokens and Probes are available", () => {
+  test("has exactly 9 entries; only Activity and System are unavailable", () => {
     expect(NAVIGATION).toHaveLength(9);
-    expect(NAVIGATION.filter((e) => !e.isAvailable)).toHaveLength(4);
+    expect(NAVIGATION.filter((e) => !e.isAvailable).map((e) => e.label)).toEqual([
+      "Activity",
+      "System",
+    ]);
+    for (const id of ["incidents", "maintenance"]) {
+      expect(NAVIGATION.find((e) => e.id === id)).toMatchObject({
+        isAvailable: true,
+        minRole: "viewer",
+      });
+    }
     expect(NAVIGATION.find((e) => e.id === "tokens")).toMatchObject({
       isAvailable: true,
       minRole: "admin",
@@ -22,10 +31,10 @@ describe("navigation registry", () => {
   });
 
   test.each([
-    ["viewer", ["Overview", "Checks"]],
-    ["member", ["Overview", "Checks"]],
-    ["admin", ["Overview", "Checks", "Tokens", "Probes", "Team"]],
-    ["owner", ["Overview", "Checks", "Tokens", "Probes", "Team"]],
+    ["viewer", ["Overview", "Checks", "Incidents", "Maintenance"]],
+    ["member", ["Overview", "Checks", "Incidents", "Maintenance"]],
+    ["admin", ["Overview", "Checks", "Incidents", "Maintenance", "Tokens", "Probes", "Team"]],
+    ["owner", ["Overview", "Checks", "Incidents", "Maintenance", "Tokens", "Probes", "Team"]],
   ] as const)("today %s sees its available entries", (role, expected) => {
     expect(labels(role)).toEqual([...expected]);
   });
@@ -79,15 +88,17 @@ describe("navigation registry", () => {
     expect(html.match(/<a (?:class="nav-item" )?href="[^"]*"/g)).toEqual([
       '<a class="nav-item" href="/"',
       '<a class="nav-item" href="/checks"',
+      '<a class="nav-item" href="/incidents"',
+      '<a class="nav-item" href="/maintenance"',
       '<a class="nav-item" href="/tokens"',
       '<a class="nav-item" href="/probes"',
       '<a class="nav-item" href="/team"',
       '<a href="/account/security"',
     ]);
-    for (const path of ["/incidents", "/system"]) {
+    for (const path of ["/activity", "/system"]) {
       expect(html).not.toContain(`href="${path}"`);
     }
-    expect(html).not.toContain("Incidents");
+    expect(html).not.toContain("Activity");
   });
 });
 

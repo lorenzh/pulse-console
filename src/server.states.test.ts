@@ -106,7 +106,7 @@ describe("state fixtures", () => {
       expect(res.status).toBe(status);
       expect(res.body).toContain(`<h2 class="callout-title">${heading}</h2>`);
       expect(res.body).toContain('value="Kept &lt;name&gt;"');
-      expect(res.body).toContain(">Kept note</textarea>");
+      expect(res.body).toContain(">\nKept note</textarea>");
       expect(res.body).not.toContain(SECRET);
       const fresh = formTokenOf(res.body, path);
       expect(fresh).toHaveLength(43);

@@ -3,7 +3,7 @@
 // fixture console for a manual check and runs until stopped.
 import { randomBytes } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
-import type { TokenMetadata } from "@lorenzh/pulse-contract";
+import type { ManualIncident, TokenMetadata } from "@lorenzh/pulse-contract";
 import {
   type Browser,
   type BrowserContext,
@@ -28,6 +28,15 @@ import {
   createFixtureRoutes,
   type Recorder,
 } from "../test/fixture-routes.ts";
+import {
+  type IncidentApi,
+  incidentConfig,
+  type SeedWindow,
+  seedAutomatic,
+  seedManual,
+  seedResults,
+  startIncidentApi,
+} from "../test/incident-api.ts";
 import {
   OWNER_PASSWORD,
   type SignedInConsole,
@@ -62,6 +71,7 @@ import {
   assertShellGeometry,
   assertSidebarSpans,
   assertTeamTable,
+  assertTextWraps,
   assertTypeScale,
   assertUnbrokenRow,
   assertWordsIntact,
@@ -688,6 +698,8 @@ async function checkFocus(env: Env, browser: Browser): Promise<void> {
     "Skip to content",
     "Overview",
     "Checks",
+    "Incidents",
+    "Maintenance",
     "Tokens",
     "Probes",
     "Team",
@@ -742,7 +754,7 @@ async function checkMobileNavIcons(env: Env, browser: Browser): Promise<void> {
           : `${r.width}x${r.height} icon ${r.left}-${r.right},${r.top}-${r.bottom} label ${label.left},${label.top}-${label.bottom}`;
       }),
     );
-    assert(icons.length === 5, `mobile nav ${colorScheme}: ${icons.length} items`);
+    assert(icons.length === 7, `mobile nav ${colorScheme}: ${icons.length} items`);
     assert(
       icons.every((x) => x === "ok"),
       `mobile nav ${colorScheme}: icons ${icons.join(",")}`,
@@ -777,7 +789,15 @@ async function checkMobileNavFocusAt(env: Env, browser: Browser, width: number):
   await assertNavEdges(page, `light ${width}px /`);
   await assertCompactAccount(page, width, env.ownerEmail, `light ${width}px /`);
   await page.keyboard.press("Tab");
-  for (const text of ["Overview", "Checks", "Tokens", "Probes", "Team"]) {
+  for (const text of [
+    "Overview",
+    "Checks",
+    "Incidents",
+    "Maintenance",
+    "Tokens",
+    "Probes",
+    "Team",
+  ]) {
     await page.keyboard.press("Tab");
     const got = await page.evaluate(() => {
       const el = document.activeElement;
@@ -2303,6 +2323,418 @@ async function checkProbeFocus(page: Page, base: string): Promise<void> {
 }
 
 /** Probes in a real browser: add with four snippets, typed revoke, countdown, layout. */
+const LONG_TEXT = "x".repeat(300);
+
+function incidentSeeds(): ManualIncident[] {
+  const now = Date.now();
+  return [
+    ...seedManual(),
+    {
+      id: 40,
+      // The contract caps a title at 200 code points; the message carries the 300 characters.
+      title: LONG_TEXT.slice(0, 200),
+      componentIds: ["web"],
+      impact: "minor",
+      status: "identified",
+      createdAt: now - 60_000,
+      resolvedAt: null,
+      updates: [{ at: now - 60_000, status: "identified", message: LONG_TEXT }],
+    },
+    {
+      id: 12,
+      title: "​",
+      componentIds: [],
+      impact: "minor",
+      status: "investigating",
+      createdAt: now - 120_000,
+      resolvedAt: null,
+      updates: [{ at: now - 120_000, status: "investigating", message: "Seeded." }],
+    },
+  ];
+}
+
+const INCIDENT_PAGES = [
+  "/incidents",
+  "/incidents/manual?id=40",
+  "/incidents/manual?id=2",
+  "/incidents/automatic?id=7",
+  "/incidents/automatic?id=31",
+  "/incidents/new",
+  "/incidents/new?from=7",
+  "/incidents/resolve?id=40",
+  "/incidents/delete?id=40",
+  "/incidents/delete?id=12",
+];
+
+/** The preview parts except times, as the browser shows them. */
+async function previewParts(page: Page): Promise<string> {
+  return page.evaluate(() =>
+    JSON.stringify(
+      [...document.querySelectorAll(".incident-preview [data-part]")]
+        .filter((el) => el.getAttribute("data-part") !== "time")
+        .map((el) => [el.getAttribute("data-part"), el.textContent, el.hasAttribute("hidden")]),
+    ),
+  );
+}
+
+async function incidentLayout(page: Page, base: string, label: string): Promise<void> {
+  for (const [width, height] of [
+    [390, 844],
+    [1280, 800],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    for (const path of INCIDENT_PAGES) {
+      await page.goto(base + path);
+      await assertFits(page, width, `${label} ${width}px ${path}`);
+      await axeOn(page, base + path, `${label} ${width}px ${path}`);
+      const alert = await page.locator(".callout-error, [role=alert]").count();
+      assert(alert === 0, `${label} ${width}px ${path}: shows an error state`);
+    }
+  }
+  await incidentFocusOrder(page, base);
+  await page.goto(`${base}/incidents`);
+  const untitled = page.getByRole("link", { name: "Untitled incident #12", exact: true });
+  assert((await untitled.count()) === 1, `${label}: untitled #12 has a named link`);
+  ok(`incidents, ${label}: 10 pages fit 390 and 1280 px with 300-character text, 0 axe violations`);
+}
+
+/** The composer controls take focus in reading order. */
+async function incidentFocusOrder(page: Page, base: string): Promise<void> {
+  await page.goto(`${base}/incidents/new`);
+  await page.focus('input[name="title"]');
+  const reached: string[] = [];
+  for (let i = 0; i < 9; i += 1) {
+    reached.push(
+      await page.evaluate(() => {
+        const el = document.activeElement;
+        if (!(el instanceof HTMLElement)) return "";
+        const name = el.getAttribute("name") ?? "";
+        const value = el.getAttribute("value") ?? "";
+        if (el.tagName === "A" || el.tagName === "BUTTON") return el.textContent?.trim() ?? "";
+        return name === "component" ? `component=${value}` : name;
+      }),
+    );
+    await page.keyboard.press("Tab");
+  }
+  const expected = [
+    "title",
+    "impact",
+    "status",
+    "component=web",
+    "component=public-api",
+    "message",
+    "Cancel",
+    "Update preview",
+    "Publish incident",
+  ];
+  assert(
+    JSON.stringify(reached) === JSON.stringify(expected),
+    `incident composer focus order: ${reached.join(", ")}`,
+  );
+  ok(
+    "incident composer: Tab moves through title, impact, status, components, message, Cancel, Update preview, Publish incident",
+  );
+}
+
+/** Live changes write nothing and equal the server preview after Update preview. */
+async function incidentLivePreview(
+  page: Page,
+  base: string,
+  api: IncidentApi,
+  violations: string[],
+): Promise<void> {
+  await page.goto(`${base}/incidents/new`);
+  const before = api.writes();
+  await page.fill('input[name="title"]', "<b>Checkout</b> slow");
+  await page.check('input[name="impact"][value="major"]');
+  await page.check('input[name="status"][value="identified"]');
+  await page.check('input[name="component"][value="web"]');
+  await page.check('input[name="component"][value="public-api"]');
+  await page.fill('textarea[name="message"]', "Line 1\nLine <2>");
+  const live = await previewParts(page);
+  assert(violations.length === 0, `live preview: ${violations.join(" | ")}`);
+  assert(api.writes() === before, "live preview: 0 writes");
+  assert((await page.locator(".incident-preview b").count()) === 0, "live preview: title inert");
+  assert(
+    (await page.locator(".incident-preview[aria-live], .incident-preview [aria-live]").count()) ===
+      0,
+    "live preview: not a live region",
+  );
+  assert(live.includes('"<b>Checkout</b> slow"'), `live preview title: ${live}`);
+  assert(live.includes('"Line 1\\nLine <2>"'), `live preview message: ${live}`);
+  assert(live.includes('"Affects: Web, Public API",false'), `live preview affects: ${live}`);
+  await Promise.all([
+    page.waitForURL(`${base}/incidents/new`),
+    page.getByRole("button", { name: "Update preview", exact: true }).click(),
+  ]);
+  const server = await previewParts(page);
+  assert(server === live, `live preview ${live} != server preview ${server}`);
+  assert(api.writes() === before, "Update preview: 0 writes");
+  ok(
+    "incidents, JavaScript on: live preview of title/impact/status/components/message equals the server preview, inert, 0 writes",
+  );
+}
+
+function lastBody(api: IncidentApi, method: string, path: string): unknown {
+  const rows = api.seen.filter((s) => s.method === method && s.path === path);
+  return rows.at(-1)?.body;
+}
+
+/** Preview then publish a leading-LF message from the re-rendered composer and update forms. */
+async function incidentLeadingLf(page: Page, base: string, api: IncidentApi, label: string) {
+  await page.goto(`${base}/incidents/new`);
+  await page.fill('input[name="title"]', "Leading line feed");
+  await page.fill('textarea[name="message"]', "\nLine one");
+  await Promise.all([
+    page.waitForURL(`${base}/incidents/new`),
+    page.getByRole("button", { name: "Update preview", exact: true }).click(),
+  ]);
+  await Promise.all([
+    page.waitForURL(/\/incidents\/manual\?id=\d+/),
+    page.getByRole("button", { name: "Publish incident", exact: true }).click(),
+  ]);
+  const created = lastBody(api, "POST", "/manual-incidents") as { message?: unknown } | undefined;
+  assert(created?.message === "\nLine one", `${label}: composer body ${JSON.stringify(created)}`);
+  const form = page.locator('form[action="/incidents/update"]');
+  await form.locator('textarea[name="message"]').fill("\nLine one");
+  await Promise.all([
+    page.waitForLoadState("load"),
+    form.getByRole("button", { name: "Update preview", exact: true }).click(),
+  ]);
+  const again = page.locator('form[action="/incidents/update"]');
+  await Promise.all([
+    page.waitForURL(/posted=1|\/incidents\/manual\?id=/),
+    again.getByRole("button", { name: "Post update", exact: true }).click(),
+  ]);
+  const updatePath =
+    api.seen.filter((s) => s.method === "POST" && s.path.endsWith("/updates")).at(-1)?.path ?? "";
+  const update = lastBody(api, "POST", updatePath) as { message?: unknown } | undefined;
+  assert(update?.message === "\nLine one", `${label}: update body ${JSON.stringify(update)}`);
+  ok(
+    `incidents, ${label}: "\\nLine one" kept its leading LF through preview and publish of composer and update`,
+  );
+}
+
+/** Resolve and typed delete, including the untitled confirm name. */
+async function incidentResolveDelete(page: Page, base: string, api: IncidentApi, label: string) {
+  await page.goto(`${base}/incidents/resolve?id=1`);
+  await page.fill('textarea[name="message"]', "Fixed now.");
+  await Promise.all([
+    page.waitForURL(/\/incidents\/manual\?id=1/),
+    page.getByRole("button", { name: "Resolve incident", exact: true }).click(),
+  ]);
+  assert(api.manual.find((m) => m.id === 1)?.status === "resolved", `${label}: #1 resolved`);
+  await page.goto(`${base}/incidents/delete?id=12`);
+  const input = page.getByLabel("Type Incident 12 to confirm");
+  assert((await input.count()) === 1, `${label}: untitled delete input has its name`);
+  await input.fill("Incident 12");
+  await Promise.all([
+    page.waitForURL(/\/incidents/),
+    page.getByRole("button", { name: "Delete incident", exact: true }).click(),
+  ]);
+  assert(!api.manual.some((m) => m.id === 12), `${label}: #12 deleted`);
+  ok(`incidents, ${label}: resolve and typed delete of untitled #12 work`);
+}
+
+/** The database window that the maintenance edits submit; its epochs carry milliseconds. */
+function maintenanceSeeds(): SeedWindow[] {
+  return [
+    {
+      id: "db-upgrade",
+      index: null,
+      source: "database",
+      checkIds: ["web"],
+      start: 1793959200123,
+      end: 1793966400456,
+      note: "Database upgrade",
+    },
+  ];
+}
+
+const MAINTENANCE_PAGES = [
+  "/maintenance",
+  "/maintenance/new",
+  "/maintenance/edit?id=db-upgrade",
+  "/maintenance/delete?id=db-upgrade",
+];
+
+/** Submits the edit form natively and returns the recorded PUT body's start and end. */
+async function submitMaintenanceEdit(
+  page: Page,
+  base: string,
+  api: IncidentApi,
+  start: string | undefined,
+): Promise<{ start?: unknown; end?: unknown; note?: unknown }> {
+  const before = api.count("PUT", "/admin/maintenance/db-upgrade");
+  await page.goto(`${base}/maintenance/edit?id=db-upgrade`);
+  await page.locator('[name="note"]').fill("Edited");
+  if (start !== undefined) await page.locator('[name="start"]').fill(start);
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.request().method() === "POST" && r.url().includes("/maintenance/edit?id=db-upgrade"),
+    ),
+    page.getByRole("button", { name: "Save window", exact: true }).click(),
+  ]);
+  await page.waitForURL(/\/maintenance\?saved=1/);
+  assert(response.status() === 303, `maintenance edit: status ${response.status()}, expected 303`);
+  assert(
+    api.count("PUT", "/admin/maintenance/db-upgrade") === before + 1,
+    "maintenance edit: expected exactly one PUT",
+  );
+  return lastBody(api, "PUT", "/admin/maintenance/db-upgrade") as {
+    start?: unknown;
+    end?: unknown;
+    note?: unknown;
+  };
+}
+
+async function maintenanceLayout(page: Page, base: string, label: string): Promise<void> {
+  for (const [width, height] of [
+    [390, 844],
+    [1280, 800],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    for (const path of MAINTENANCE_PAGES) {
+      await page.goto(base + path);
+      await assertFits(page, width, `${label} ${width}px ${path}`);
+      await axeOn(page, base + path, `${label} ${width}px ${path}`);
+    }
+    await page.goto(`${base}/maintenance`);
+    await assertTextWraps(page, ".maintenance-row h3", `${label} ${width}px /maintenance`);
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  ok(`maintenance, ${label}: 4 pages fit 390 and 1280 px, 0 axe violations`);
+  await maintenanceFocusOrder(page, base);
+}
+
+/** The edit form controls take focus in reading order; a time field's parts count once. */
+async function maintenanceFocusOrder(page: Page, base: string): Promise<void> {
+  await page.goto(`${base}/maintenance/edit?id=db-upgrade`);
+  await page.focus('input[name="check"]');
+  const reached: string[] = [];
+  for (let i = 0; i < 60 && reached.at(-1) !== "Save window"; i += 1) {
+    const name = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!(el instanceof HTMLElement)) return "";
+      if (el.tagName === "A" || el.tagName === "BUTTON") return el.textContent?.trim() ?? "";
+      const field = el.getAttribute("name") ?? "";
+      const value = el.getAttribute("value") ?? "";
+      return field === "check" || field === "component" ? `${field}=${value}` : field;
+    });
+    if (reached.at(-1) !== name) reached.push(name);
+    await page.keyboard.press("Tab");
+  }
+  const expected = [
+    "check=web",
+    "check=cert",
+    "check=db-port",
+    "check=dns-a",
+    "check=domain-exp",
+    "check=nightly-backup",
+    "component=web",
+    "component=public-api",
+    "start",
+    "end",
+    "note",
+    "Cancel",
+    "Save window",
+  ];
+  assert(
+    JSON.stringify(reached) === JSON.stringify(expected),
+    `maintenance edit focus order: ${reached.join(", ")}`,
+  );
+  ok(
+    `maintenance edit: Tab moves through 6 checks, 2 components, start, end, note, Cancel, Save window`,
+  );
+}
+
+/** Acceptance evidence 10: real Chromium edits keep or replace the stored epochs. */
+async function checkMaintenanceWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const api = startIncidentApi({
+    token: ADMIN_TOKEN,
+    config: incidentConfig,
+    maintenance: maintenanceSeeds(),
+    now: () => Date.now(),
+  });
+  const server = await startSignedInConsole({
+    apiUrl: api.url,
+    ownerEmail: DEMO_EMAIL,
+    adminToken: ADMIN_TOKEN,
+  });
+  const env = { ownerEmail: DEMO_EMAIL, console: server } as unknown as Env;
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+  });
+  const page = await newPage(context, violations);
+  page.on("pageerror", (error) => violations.push(`page error: ${error.message}`));
+  try {
+    await signIn(page, env);
+    // axe injects a script, so the layout and axe pass runs with JavaScript on only.
+    if (hasScript) await maintenanceLayout(page, server.base, label);
+    const kept = await submitMaintenanceEdit(page, server.base, api, undefined);
+    assert(
+      kept.start === 1793959200123 && kept.end === 1793966400456 && kept.note === "Edited",
+      `maintenance ${label}: kept PUT ${JSON.stringify(kept)}`,
+    );
+    const moved = await submitMaintenanceEdit(page, server.base, api, "2026-11-06T10:00:01");
+    assert(
+      moved.start === 1793959201000 && moved.end === 1793966400456,
+      `maintenance ${label}: moved PUT ${JSON.stringify(moved)}`,
+    );
+    assert(violations.length === 0, `maintenance ${label}: ${violations.join(" | ")}`);
+    ok(
+      `maintenance, ${label}: note-only edit PUT start 1793959200123 end 1793966400456; start 10:00:01 PUT 1793959201000, 0 CSP violations`,
+    );
+  } finally {
+    await context.close();
+    await server.close();
+    api.stop();
+  }
+}
+
+async function checkIncidentsWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const api = startIncidentApi({
+    token: ADMIN_TOKEN,
+    config: incidentConfig,
+    manual: incidentSeeds(),
+    automatic: seedAutomatic,
+    results: seedResults,
+    now: () => Date.now(),
+  });
+  const server = await startSignedInConsole({
+    apiUrl: api.url,
+    ownerEmail: DEMO_EMAIL,
+    adminToken: ADMIN_TOKEN,
+  });
+  const env = { ownerEmail: DEMO_EMAIL, console: server } as unknown as Env;
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+  });
+  const page = await newPage(context, violations);
+  page.on("pageerror", (error) => violations.push(`page error: ${error.message}`));
+  try {
+    await signIn(page, env);
+    if (hasScript) {
+      await incidentLayout(page, server.base, label);
+      await incidentLivePreview(page, server.base, api, violations);
+    }
+    await incidentLeadingLf(page, server.base, api, label);
+    await incidentResolveDelete(page, server.base, api, label);
+    assert(violations.length === 0, `incidents ${label}: CSP violations ${violations.join(" | ")}`);
+    ok(`incidents, ${label}: 0 CSP violations`);
+  } finally {
+    await context.close();
+    await server.close();
+    api.stop();
+  }
+}
+
 async function checkProbesWith(browser: Browser, hasScript: boolean): Promise<void> {
   const env = await startEnv(0);
   env.api.stop();
@@ -2817,6 +3249,10 @@ async function runChecks(): Promise<void> {
     await checkTokensWith(browser, false);
     await checkProbesWith(browser, true);
     await checkProbesWith(browser, false);
+    await checkIncidentsWith(browser, true);
+    await checkIncidentsWith(browser, false);
+    await checkMaintenanceWith(browser, true);
+    await checkMaintenanceWith(browser, false);
     // A console of its own: each check signs in with a fixture recovery code.
     const shellEnv = await startEnv(0);
     try {
@@ -2844,7 +3280,33 @@ async function runChecks(): Promise<void> {
   }
 }
 
+/** A second console for the manual incident and maintenance journey, on the stateful fake. */
+async function serveIncidents(): Promise<string> {
+  const api = startIncidentApi({
+    token: ADMIN_TOKEN,
+    config: incidentConfig,
+    manual: incidentSeeds(),
+    automatic: seedAutomatic,
+    results: seedResults,
+    maintenance: maintenanceSeeds(),
+    now: () => Date.now(),
+  });
+  const server = await startSignedInConsole({
+    apiUrl: api.url,
+    ownerEmail: DEMO_EMAIL,
+    adminToken: ADMIN_TOKEN,
+  });
+  setInterval(() => {
+    const writes = api.seen.filter((s) => s.method !== "GET" && s.method !== "HEAD");
+    const lines = writes.map((w) => [w.method, w.path].join(" "));
+    console.log(`incident api writes: ${JSON.stringify(lines)}`);
+  }, 5000);
+  return server.base;
+}
+
 async function serve(): Promise<void> {
+  const incidents = await serveIncidents();
+  console.log(`incidents and maintenance url: ${incidents} (same sign in)`);
   const env = await startEnv(SERVE_WAIT_MS);
   // The manual console shows the checks fixture, so /checks/edit?id=web has an editable check.
   replyChecks(env.api, []);

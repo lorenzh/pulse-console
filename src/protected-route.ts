@@ -20,6 +20,8 @@ export type PageRequest = {
   csrf: string;
   /** The known fields of a POST body; empty for GET and HEAD. */
   fields: Readonly<Partial<Record<string, string>>>;
+  /** The list fields of a POST body, in body order; empty for GET and HEAD. */
+  lists: Readonly<Partial<Record<string, readonly string[]>>>;
   query: URLSearchParams;
   /** A fresh form token bound to this session and `actionPath`; empty for HEAD. */
   issueFormToken: (actionPath: string) => string;
@@ -55,6 +57,11 @@ export type ProtectedRoute = {
   navId?: NavId | undefined;
   /** The POST fields of the route; the dispatcher adds `csrf` and `form_token`. */
   knownFields?: readonly string[] | undefined;
+  /**
+   * Repeatable POST fields and the most values of each. More values, or one value twice, answer
+   * `400`. A name of `knownFields`, `csrf` or `form_token` stays a single field.
+   */
+  listFields?: Readonly<Record<string, number>> | undefined;
   handle: (request: PageRequest) => Promise<PageResult>;
   /** The POST body limit; defaults to `MAX_FORM_BYTES` (8192). */
   maxFormBytes?: number | undefined;

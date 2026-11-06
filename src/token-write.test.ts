@@ -90,6 +90,7 @@ const request: PageRequest = {
   role: "admin",
   csrf: "csrf",
   fields: {},
+  lists: {},
   query: new URLSearchParams(),
   issueFormToken: () => "form-token",
 };

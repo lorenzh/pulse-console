@@ -200,6 +200,25 @@ export async function assertNoSidewaysScroll(page: Page, label: string): Promise
   );
 }
 
+/** Long incident and maintenance text wraps inside its box instead of widening it. */
+export async function assertTextWraps(page: Page, selector: string, label: string): Promise<void> {
+  const boxes = await page.locator(selector).evaluateAll((elements) =>
+    elements.map((el) => ({
+      scroll: el.scrollWidth,
+      client: el.clientWidth,
+      wrap: getComputedStyle(el).overflowWrap,
+    })),
+  );
+  check(boxes.length > 0, `${label}: no ${selector}`);
+  for (const box of boxes) {
+    check(
+      box.scroll <= box.client,
+      `${label}: ${selector} scrollWidth ${box.scroll} > ${box.client}`,
+    );
+    check(box.wrap === "anywhere", `${label}: ${selector} overflow-wrap ${box.wrap}`);
+  }
+}
+
 /** Check 4 on /checks at 390 px: the named box scrolls to Actions and shows its outline. */
 export async function assertChecksBoxEnd(page: Page, label: string): Promise<void> {
   const box = page.getByRole("region", { name: "Checks table", exact: true });

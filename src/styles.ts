@@ -266,4 +266,15 @@ button[data-copy] { align-self: flex-start; }
   .table-scroll-hint { display: block; }
   #recovery-codes code { font-size: 0.75rem; }
 }
+.incident-message, .preview-message { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.incident-preview { border: 1px solid var(--line-strong); border-radius: var(--radius-panel); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.incident-preview h3 { margin: 0; }
+.maintenance-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.maintenance-row { border: 1px solid var(--line-strong); border-radius: var(--radius-panel); padding: 12px 16px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.maintenance-row h3 { margin: 0; overflow-wrap: anywhere; }
+.maintenance-row .settings dd { overflow-wrap: anywhere; min-width: 0; }
+.choices { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.maintenance-form input[type="datetime-local"] { max-width: 100%; }
+.preview-updates { display: flex; flex-direction: column; gap: 8px; }
 `;
