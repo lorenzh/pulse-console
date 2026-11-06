@@ -751,7 +751,7 @@ async function checkMobileNavIcons(env: Env, browser: Browser): Promise<void> {
           : `${r.width}x${r.height} icon ${r.left}-${r.right},${r.top}-${r.bottom} label ${label.left},${label.top}-${label.bottom}`;
       }),
     );
-    assert(icons.length === 5, `mobile nav ${colorScheme}: ${icons.length} items`);
+    assert(icons.length === 6, `mobile nav ${colorScheme}: ${icons.length} items`);
     assert(
       icons.every((x) => x === "ok"),
       `mobile nav ${colorScheme}: icons ${icons.join(",")}`,
@@ -2506,8 +2506,8 @@ async function tabToValue(page: Page, value: string): Promise<void> {
 async function pressByKeyboard(page: Page, value: string): Promise<void> {
   await page.locator("body").focus();
   await tabToValue(page, value);
-  await Promise.all([page.waitForLoadState("load"), page.keyboard.press("Enter")]);
-  await page.waitForLoadState("load");
+  // The form posts to the same URL, so wait for the next load event, not the current state.
+  await Promise.all([page.waitForEvent("load"), page.keyboard.press("Enter")]);
 }
 
 async function hiddenOrderOf(page: Page): Promise<string> {
@@ -2532,7 +2532,7 @@ async function checkStatusPageKeyboard(browser: Browser, hasScript: boolean): Pr
     name: id.toUpperCase(),
     checkIds: ["web"],
   }));
-  env.api.reply("/admin/config", jsonReply({ ...emptyConfig, components }));
+  env.api.reply("/admin/config", jsonReply({ ...checkConfig, components }));
   const label = hasScript ? "JavaScript on" : "JavaScript off";
   const violations: string[] = [];
   const context = await browser.newContext({
@@ -2543,6 +2543,8 @@ async function checkStatusPageKeyboard(browser: Browser, hasScript: boolean): Pr
   try {
     await signIn(page, env);
     await page.goto(`${env.console.base}/status-page`);
+    // axeOn reloads the page, so it runs before the unsaved moves.
+    if (hasScript) await axeOn(page, page.url(), "/status-page");
     assert((await hiddenOrderOf(page)) === "cdn,db,web", `${label}: stored order shown`);
     await pressByKeyboard(page, "reset-order");
     assert(
@@ -2553,7 +2555,6 @@ async function checkStatusPageKeyboard(browser: Browser, hasScript: boolean): Pr
     assert((await hiddenOrderOf(page)) === "db,web,cdn", `${label}: Move down`);
     await pressByKeyboard(page, "up:2");
     assert((await hiddenOrderOf(page)) === "db,cdn,web", `${label}: Move up`);
-    if (hasScript) await axeOn(page, page.url(), "/status-page");
     await pressByKeyboard(page, "save");
     const puts = env.api.seen.filter((s) => s.method === "PUT");
     assert(puts.length === 1, `${label}: one PUT, got ${puts.length}`);
