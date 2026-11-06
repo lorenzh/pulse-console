@@ -1294,6 +1294,134 @@ async function assertQuorumText(page: Page, url: string, isHeartbeat: boolean): 
   );
 }
 
+type TabStop = { key: string; style: string; width: string; inForm: boolean };
+
+/** The focused element as one stop: a radio by name and value, a summary or button by text. */
+async function focusedStop(page: Page): Promise<TabStop> {
+  return page.evaluate(() => {
+    const el = document.activeElement;
+    if (!(el instanceof HTMLElement)) return { key: "", style: "", width: "", inForm: false };
+    const style = getComputedStyle(el);
+    const name = el.getAttribute("name") ?? "";
+    const text = el.textContent?.trim() ?? "";
+    let key = name;
+    if (el instanceof HTMLInputElement && el.type === "radio") key = `${name}=${el.value}`;
+    else if (el.tagName === "SUMMARY") key = `summary:${text}`;
+    else if (el.tagName === "BUTTON") key = `button:${text}`;
+    return {
+      key,
+      style: style.outlineStyle,
+      width: style.outlineWidth,
+      inForm: el.closest("form.check-editor") !== null,
+    };
+  });
+}
+
+/** Rows 0 to 4 of the free header rows, written from the template, never from the DOM. */
+function freeHeaderStops(from: number): string[] {
+  const stops: string[] = [];
+  for (let i = from; i < 5; i += 1)
+    stops.push(`header_${i}_name`, `header_${i}_kind=plain`, `header_${i}_value`);
+  return stops;
+}
+
+function assertStops(): string[] {
+  const stops = ["summary:JSON assertions"];
+  for (let i = 0; i < 10; i += 1)
+    stops.push(`assert_${i}_pointer`, `assert_${i}_mode=none`, `assert_${i}_equals`);
+  return stops;
+}
+
+const HTTP_TIMING = [
+  "availability_target",
+  "url",
+  "method",
+  "interval_ms",
+  "timeout_ms",
+  "retries",
+  "retry_delay_ms",
+  "latency_objective_ms",
+  "expected_status",
+  "keyword",
+];
+
+function createTabStops(): string[] {
+  return [
+    "id",
+    "name",
+    ...HTTP_TIMING,
+    "body",
+    "summary:Headers",
+    ...freeHeaderStops(0),
+    "summary:More rows",
+    ...assertStops(),
+    "button:Create check",
+  ];
+}
+
+function editTabStops(hasScript: boolean): string[] {
+  return [
+    "name",
+    ...HTTP_TIMING,
+    "body_intent=keep",
+    "body",
+    "summary:Headers",
+    "header_0_intent=keep",
+    "header_0_value",
+    "header_1_name",
+    "header_1_kind=env",
+    "header_1_value",
+    ...freeHeaderStops(2),
+    "summary:More rows",
+    ...(hasScript ? ["button:Copy"] : []),
+    ...assertStops(),
+    "button:Save check",
+  ];
+}
+
+/** Tab from the page top into the editor, then one Tab per expected stop, then out of the form. */
+async function assertEditorTabOrder(page: Page, url: string, expected: string[]): Promise<void> {
+  await page.goto(url);
+  let stop = await focusedStop(page);
+  for (let i = 0; i < 40 && !stop.inForm; i += 1) {
+    await page.keyboard.press("Tab");
+    stop = await focusedStop(page);
+  }
+  const seen: string[] = [];
+  for (const [i, key] of expected.entries()) {
+    if (i > 0) {
+      await page.keyboard.press("Tab");
+      stop = await focusedStop(page);
+    }
+    seen.push(stop.key);
+    assert(
+      stop.key === key && stop.inForm,
+      `${url}: Tab stop ${i} is "${stop.key}", expected "${key}"; seen ${seen.join(", ")}`,
+    );
+    assert(
+      stop.style === "solid" && stop.width === "2px",
+      `${url}: ${key} focus outline is ${stop.width} ${stop.style}`,
+    );
+  }
+  await page.keyboard.press("Tab");
+  assert(!(await focusedStop(page)).inForm, `${url}: Tab after Submit leaves the form`);
+}
+
+/** Every editor fits a 1280 px window: no sideways scroll and the form inside the viewport. */
+async function assertEditorFits(page: Page, url: string, label: string): Promise<void> {
+  await page.goto(url);
+  await assertFits(page, 1280, `${label} 1280px ${url}`);
+  const box = await page.evaluate(() => {
+    const rect = document.querySelector("form.check-editor")?.getBoundingClientRect();
+    return rect === undefined ? null : { left: rect.left, right: rect.right, width: rect.width };
+  });
+  if (box === null) throw new CheckError(`${label} ${url}: no form.check-editor`);
+  assert(
+    box.width > 0 && box.left >= 0 && box.right <= 1280 && box.width <= 1280,
+    `${label} ${url}: editor box ${box.left}..${box.right} fits 1280 px`,
+  );
+}
+
 function startChecksApi(): ReturnType<typeof startFakeApi> {
   const api = startFakeApi();
   replyChecks(api, []);
@@ -1429,6 +1557,9 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     }
     await page.setViewportSize({ width: 1280, height: 800 });
     for (const [url, isHeartbeat] of EDITORS) await assertQuorumText(page, base + url, isHeartbeat);
+    for (const [url] of EDITORS) await assertEditorFits(page, base + url, label);
+    await assertEditorTabOrder(page, `${base}/checks/new?type=http`, createTabStops());
+    await assertEditorTabOrder(page, `${base}/checks/edit?id=web`, editTabStops(hasScript));
     await page.goto(`${base}/checks/edit?id=web`);
     const editorPre = await page.locator("#editor-host-binding-line").textContent();
     assert(editorPre === HOST_LINE, `${label}: editor host line is the literal`);
@@ -1444,7 +1575,7 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     }
     assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
     ok(
-      `Checks, ${label}: entered through the Checks nav link, list and detail fit 390 px, the Checks table region scrolls by ArrowRight under its hint, literal host-binding${hasScript ? " and heartbeat copy" : " line selectable, copy hidden"}, fixed quorum or heartbeat rule on ${EDITORS.length} editors${hasScript ? ", axe 0 on list/detail/shadowed/delete/editors" : ""}, 0 CSP violations`,
+      `Checks, ${label}: entered through the Checks nav link, list and detail fit 390 px, the Checks table region scrolls by ArrowRight under its hint, literal host-binding${hasScript ? " and heartbeat copy" : " line selectable, copy hidden"}, fixed quorum or heartbeat rule on ${EDITORS.length} editors, ${EDITORS.length} editors fit 1280 px, Tab through the HTTP create and edit editors reaches each control with a 2px solid outline and leaves the form after Submit${hasScript ? ", axe 0 on list/detail/shadowed/delete/editors" : ""}, 0 CSP violations`,
     );
   } finally {
     await context.close();

@@ -154,6 +154,71 @@ describe("POST /checks/edit", () => {
     expect(detail.body).toContain("Check saved.");
   });
 
+  describe("stored JSON pointers with trailing spaces", () => {
+    const spacedConfig = {
+      ...checkConfig,
+      checks: checkConfig.checks.map((check) =>
+        check.id === "web"
+          ? {
+              ...check,
+              jsonAssert: [
+                { pointer: "/status ", equals: "ok" },
+                { pointer: "/ready ", exists: true },
+              ],
+            }
+          : check,
+      ),
+    };
+    const assertFields = {
+      assert_0_pointer: "/status ",
+      assert_0_mode: "equals",
+      assert_0_equals: '"ok"',
+      assert_1_pointer: "/ready ",
+      assert_1_mode: "exists",
+    };
+
+    test("a name-only edit renders and sends them unchanged", async () => {
+      const api = fakeApi(spacedConfig);
+      const c = await teamConsole(api);
+      const page = await getPage(c, "/checks/edit?id=web", c.cookies.admin);
+      expect(page.body).toContain(
+        'name="assert_0_pointer" type="text" autocomplete="off" value="/status "',
+      );
+      expect(page.body).toContain(
+        'name="assert_1_pointer" type="text" autocomplete="off" value="/ready "',
+      );
+      const res = await submit(c, api, "/checks/edit?id=web", {
+        ...WEB_EDIT,
+        ...assertFields,
+        name: "Web shop 2",
+      });
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe("/checks/check?id=web&saved=1");
+      expect(calls(api)).toEqual(["GET /admin/config", "PUT /admin/checks/web"]);
+      const body = sentBody(api, "PUT");
+      expect(body.name).toBe("Web shop 2");
+      expect(body.jsonAssert).toEqual([
+        { pointer: "/status ", equals: "ok" },
+        { pointer: "/ready ", exists: true },
+      ]);
+    });
+
+    test("a leading-space pointer answers 422 with no write", async () => {
+      const api = fakeApi(spacedConfig);
+      const c = await teamConsole(api);
+      const res = await submit(c, api, "/checks/edit?id=web", {
+        ...WEB_EDIT,
+        assert_0_pointer: " /status",
+        assert_0_mode: "exists",
+      });
+      expect(res.status).toBe(422);
+      expect(res.body).toContain(
+        "Enter a JSON pointer such as /status, or leave it empty for the whole body.",
+      );
+      expect(calls(api)).toEqual(["GET /admin/config"]);
+    });
+  });
+
   test("stored row removed plus a free env row sends only that header", async () => {
     const api = fakeApi();
     const c = await teamConsole(api);

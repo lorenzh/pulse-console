@@ -359,7 +359,7 @@ function assertRow(r: Reader, i: number): Built | undefined {
     "Choose No check, Exists or Equals.",
   );
   if (mode === "none" || mode === undefined) return undefined;
-  const pointer = raw(r, `assert_${i}_pointer`).trim();
+  const pointer = raw(r, `assert_${i}_pointer`);
   if (pointer !== "" && !pointer.startsWith("/")) {
     return fail(
       r,

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AdminCheckView } from "@lorenzh/pulse-contract";
+import { editInputOf } from "./check-editor-page.ts";
 import { type CheckFormResult, parseCreateForm, parseEditForm } from "./check-form.ts";
 
 type Fields = Record<string, string>;
@@ -799,5 +800,61 @@ describe("parseEditForm with a trusted view", () => {
       port: 5432,
       intervalMs: 30000,
     });
+  });
+});
+
+describe("JSON pointers are exact strings", () => {
+  const POINTER_TEXT =
+    "Enter a JSON pointer such as /status, or leave it empty for the whole body.";
+  const spaced: AdminCheckView = {
+    id: "web",
+    name: "Web",
+    source: "database",
+    url: "https://example.com/",
+    intervalMs: 1500,
+    jsonAssert: [
+      { pointer: "/status ", equals: "ok" },
+      { pointer: "/ready ", exists: true },
+    ],
+  };
+
+  test("a name-only edit through editInputOf keeps stored pointers with spaces", () => {
+    const fields = { ...editInputOf(spaced).values, name: "Web shop 2" };
+    const result = parseEditForm(fields, spaced);
+    expect(result.isOk && result.input.jsonAssert).toEqual([
+      { pointer: "/status ", equals: "ok" },
+      { pointer: "/ready ", exists: true },
+    ]);
+  });
+
+  test("create keeps a pointer with inner and trailing whitespace", () => {
+    const input = inputOf(
+      parseCreateForm({ ...http, assert_0_pointer: "/a b\t", assert_0_mode: "exists" }),
+    );
+    expect(input).toHaveProperty("jsonAssert", [{ pointer: "/a b\t", exists: true }]);
+  });
+
+  test("a leading space or only spaces is a field error", () => {
+    for (const pointer of [" /status", "   "]) {
+      const posted = { ...http, assert_0_pointer: pointer, assert_0_mode: "exists" };
+      expect(errorOn(parseCreateForm(posted), "assert_0_pointer")).toBe(POINTER_TEXT);
+    }
+  });
+
+  test("an empty pointer checks the whole body and mode none ignores the pointer", () => {
+    expect(
+      inputOf(parseCreateForm({ ...http, assert_0_pointer: "", assert_0_mode: "exists" })),
+    ).toHaveProperty("jsonAssert", [{ pointer: "", exists: true }]);
+    expect(
+      inputOf(parseCreateForm({ ...http, assert_0_pointer: "/x ", assert_0_mode: "none" })),
+    ).not.toHaveProperty("jsonAssert");
+  });
+
+  test("other text fields are still trimmed", () => {
+    const input = inputOf(
+      parseCreateForm({ ...http, name: " Web shop 2 ", url: " https://example.com/ " }),
+    );
+    expect(input).toHaveProperty("name", "Web shop 2");
+    expect(input).toHaveProperty("url", "https://example.com/");
   });
 });
