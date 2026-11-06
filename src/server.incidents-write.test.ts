@@ -304,12 +304,15 @@ describe("POST /incidents/new", () => {
     expect(body).toMatchObject({ title });
   });
 
-  test("a session removed before the write sends zero writes", async () => {
+  test("a session removed after the token was accepted gives 409 Not saved with zero writes", async () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, "/incidents/new", c.cookies.member);
     const token = formTokenOf(opened.body, "/incidents/new");
-    c.db.query("DELETE FROM sessions WHERE user_id = ?").run(c.ids.member);
+    a.override("GET", "/admin/config", () => {
+      c.db.query("DELETE FROM sessions WHERE user_id = ?").run(c.ids.member);
+      return new Response(JSON.stringify(incidentConfig), { status: 200, headers: WIRE_HEADERS });
+    });
     a.seen.length = 0;
     const res = await post(
       c,
@@ -317,9 +320,79 @@ describe("POST /incidents/new", () => {
       [["csrf", c.csrfs.member], ["form_token", token], ...PUBLISH],
       "member",
     );
-    expect(res.headers.get("location") ?? "").not.toContain("/incidents");
-    expect(a.writes()).toBe(0);
+    expect(res.status).toBe(409);
+    expect(res.body).toContain("Not saved");
+    expect(a.seen.map((s) => `${s.method} ${s.path}`)).toEqual(["GET /admin/config"]);
     expect(peopleRows(c)).toEqual([]);
+  });
+
+  test("no answer within 5000 ms: 504, one unknown row, one read and one write", async () => {
+    const a = api();
+    const pending = new Set<() => void>();
+    const c = await startTeamConsole({
+      apiUrl: a.url,
+      adminToken: TOKEN,
+      schedule: (fn) => {
+        pending.add(fn);
+        return () => pending.delete(fn);
+      },
+    });
+    cleanups.push(() => c.close());
+    c.db.query("UPDATE sessions SET created_at = ?, last_seen_at = ?").run(NOW, NOW);
+    c.setNow(NOW);
+    let release = (): void => undefined;
+    a.holdWrites(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    cleanups.push(() => release());
+    const opened = await getPage(c, "/incidents/new", c.cookies.member);
+    const token = formTokenOf(opened.body, "/incidents/new");
+    pending.clear();
+    a.seen.length = 0;
+    const res = post(
+      c,
+      "/incidents/new",
+      [["csrf", c.csrfs.member], ["form_token", token], ...PUBLISH],
+      "member",
+    );
+    while (a.writes() !== 1 || pending.size === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    for (const fn of [...pending]) fn();
+    const answer = await res;
+    expect(answer.status).toBe(504);
+    expect(answer.body).toContain(
+      "The result is unknown. Open the incident list to see whether the change was published before you send it again.",
+    );
+    expect(a.seen.map((s) => `${s.method} ${s.path}`)).toEqual([
+      "GET /admin/config",
+      "POST /manual-incidents",
+    ]);
+    expect(peopleRows(c).map((r) => r.value)).toEqual(["unknown"]);
+  });
+
+  test("the admin token never reaches responses, logs or the database; text never reaches logs", async () => {
+    const a = api();
+    const c = await team(a);
+    const res = await submit(c, a, composer(PUBLISH));
+    expect(res.status).toBe(303);
+    const detail = await getPage(c, res.headers.get("location") ?? "/", c.cookies.member);
+    expect(detail.body).not.toContain(TOKEN);
+    expect(res.body).not.toContain(TOKEN);
+    const logs = c.logs.join("\n");
+    expect(logs).not.toContain(TOKEN);
+    expect(logs).not.toContain("Checkout slow again");
+    expect(logs).not.toContain("Line one");
+    const dump = c.db
+      .query<{ sql: string }, []>("SELECT name AS sql FROM sqlite_master WHERE type = 'table'")
+      .all()
+      .flatMap(({ sql }) => c.db.query(`SELECT * FROM "${sql}"`).all())
+      .map((row) => JSON.stringify(row))
+      .join("\n");
+    expect(dump).not.toContain(TOKEN);
+    expect(JSON.stringify(peopleRows(c))).not.toContain("Checkout slow again");
   });
 
   test("a foreign answer shows the unknown text with the input and logs one row", async () => {
