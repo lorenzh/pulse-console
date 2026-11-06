@@ -142,6 +142,12 @@ describe("GET /tokens", () => {
       expect(body).toContain("<td>Active</td>");
       expect(body).toContain('Probe tokens are on the <a href="/probes">Probes page</a> (1).');
       expect(body).toContain("<strong>This console</strong>");
+      expect(body).toContain(
+        '<td class="actions-cell"><span class="cell-note"><strong>This console</strong>',
+      );
+      expect(body).toContain(
+        `<td class="actions-cell"><a href="/tokens/rotate?id=${OPS_ID}">Rotate</a> <a href="/tokens/revoke?id=${OPS_ID}">Revoke</a></td>`,
+      );
       expect(body).not.toContain(`/tokens/rotate?id=${SELF_ID}`);
       expect(body).not.toContain(`/tokens/revoke?id=${SELF_ID}`);
       expect(body).toContain(`href="/tokens/rotate?id=${OPS_ID}"`);

@@ -77,10 +77,9 @@ function credentialRow(model: ProbeListModel, token: TokenMetadata): string {
     escapeHtml(utcTime(token.createdAt)),
     escapeHtml(lastUsedText(token.lastUsedAt)),
     escapeHtml(tokenStateText(token, model.now)),
-    actions,
   ];
   const tds = cells.map((cell) => `<td>${cell}</td>`).join("");
-  return `<tr>${tds}</tr>`;
+  return `<tr>${tds}<td class="actions-cell">${actions}</td></tr>`;
 }
 
 function credentialTable(model: ProbeListModel, group: LocationGroup): string {

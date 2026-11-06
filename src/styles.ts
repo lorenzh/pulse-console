@@ -37,10 +37,10 @@ export const CONSOLE_CSS = `[hidden] { display: none !important; }
   }
 }
 *, *::before, *::after { box-sizing: border-box; }
-body { margin: 0; font-family: var(--font-sans); font-size: 1rem; font-weight: 400; line-height: 1.5; color: var(--text); background: var(--bg); }
+body { margin: 0; font-family: var(--font-sans); font-size: 0.9375rem; font-weight: 400; line-height: 1.5; color: var(--text); background: var(--bg); }
 body, p, h1, h2, h3, li, label, a, dd, td, legend { overflow-wrap: anywhere; }
-h1 { font-size: 1.75rem; font-weight: 700; line-height: 1.2; letter-spacing: -0.01em; margin: 0; }
-h2 { font-size: 1.125rem; font-weight: 500; line-height: 1.3; margin: 0; }
+h1 { font-size: clamp(2rem, 1.8rem + 0.8vw, 2.5rem); font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; margin: 0; }
+h2 { font-size: clamp(1.25rem, 1.15rem + 0.4vw, 1.5rem); font-weight: 500; line-height: 1.3; margin: 0; }
 p { margin: 0; }
 strong, b { font-weight: 700; }
 small { font-size: 0.8125rem; }
@@ -51,6 +51,7 @@ pre { font-family: var(--font-mono); background: var(--code); color: var(--code-
 a, a:visited { color: var(--accent-text); }
 a:hover { text-decoration-thickness: 2px; }
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+summary { min-height: 24px; }
 button, a.button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: var(--touch); padding: 0 20px; border-radius: var(--radius-pill); border: 1px solid var(--strong); background: var(--strong); color: var(--on-strong); font: inherit; font-size: 15px; font-weight: 500; line-height: 1.2; text-align: center; text-decoration: none; cursor: pointer; }
 a.button, a.button:visited { color: var(--on-strong); }
 button:hover, a.button:hover { background: color-mix(in srgb, var(--strong) 85%, var(--bg)); border-color: color-mix(in srgb, var(--strong) 85%, var(--bg)); }
@@ -167,12 +168,17 @@ ul.counts .check-state { margin-right: 8px; }
 table { width: 100%; border-collapse: collapse; }
 th { background: var(--surface); padding: 10px 16px; text-align: left; border-bottom: 1px solid var(--line-strong); }
 td { padding: 9px 16px; border-bottom: 1px solid var(--rule); vertical-align: middle; }
+th { white-space: nowrap; }
+td.actions-cell { white-space: nowrap; }
+td.actions-cell a { white-space: nowrap; overflow-wrap: normal; }
+.cell-note { white-space: normal; overflow-wrap: normal; }
 tr { height: 52px; }
 thead tr { height: auto; }
 td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 tbody tr:hover { background: color-mix(in srgb, var(--surface) 45%, transparent); }
 .table-wrap { max-width: 100%; overflow-x: auto; }
 .table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-panel); background: linear-gradient(to right, var(--bg) 30%, transparent), linear-gradient(to left, var(--bg) 30%, transparent) 100% 0, radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / 0.18), transparent), radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 0.18), transparent) 100% 0; background-repeat: no-repeat; background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%; background-attachment: local, local, scroll, scroll; }
+.table-scroll { position: relative; }
 .table-scroll table tbody tr:last-child td { border-bottom: 0; }
 .table-scroll table.checks { min-width: 56rem; }
 .table-scroll table.tokens { min-width: 60rem; }
