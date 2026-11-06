@@ -92,7 +92,7 @@ describe("GET / Overview summary", () => {
       expect(res.body).toContain(count);
       expect(res.body).toContain(`pulse-api: ${api.url}`);
       expect(res.body).toContain(
-        'Signed in as Owner <span class="account-email">(owner@example.com)</span>',
+        '<span class="account-prefix">Signed in as </span>Owner <span class="account-email">(owner@example.com)</span>',
       );
       expect(res.body).toContain(
         '<a class="nav-item" href="/" aria-current="page"><svg class="icon"',

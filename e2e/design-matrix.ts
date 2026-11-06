@@ -974,3 +974,135 @@ export async function assertCopyButton(page: Page, selector: string, label: stri
   );
   check(got.after === "-4px", `${label}: Copy ::after top ${got.after}`);
 }
+
+/** R5 `--rule` colors from `src/styles.ts`, written here as literals. */
+const RULE: Readonly<Record<Scheme, string>> = {
+  light: "rgb(223, 215, 212)",
+  dark: "rgb(62, 48, 73)",
+};
+
+/** Browser 5: the sidebar border spans a long page and the Main nav stays in view. */
+export async function assertSidebarSpans(page: Page, scheme: Scheme, label: string) {
+  const read = () =>
+    page.evaluate(() => {
+      const bar = document.querySelector("header.sidebar");
+      const nav = document.querySelector('nav[aria-label="Main"]');
+      if (bar === null || nav === null) return undefined;
+      const r = bar.getBoundingClientRect();
+      const n = nav.getBoundingClientRect();
+      const s = getComputedStyle(bar);
+      return {
+        top: r.top + scrollY,
+        bottom: r.bottom + scrollY,
+        scrollHeight: document.documentElement.scrollHeight,
+        border: `${s.borderRightWidth} ${s.borderRightStyle} ${s.borderRightColor}`,
+        isNavInside: n.top >= -0.5 && n.bottom <= innerHeight + 0.5 && n.height > 0,
+      };
+    });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const first = await read();
+  check(first !== undefined, `${label}: no header.sidebar or Main nav`);
+  if (first === undefined) return;
+  check(first.scrollHeight >= 1200, `${label}: page scrollHeight ${first.scrollHeight} < 1200`);
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const second = await read();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  for (const [where, got] of [
+    ["top", first],
+    ["bottom", second],
+  ] as const) {
+    check(got !== undefined, `${label} at ${where}: no sidebar`);
+    if (got === undefined) return;
+    check(Math.abs(got.top) <= 0.5, `${label} at ${where}: sidebar top ${got.top}`);
+    check(
+      got.bottom >= got.scrollHeight - 1,
+      `${label} at ${where}: sidebar bottom ${got.bottom} < scrollHeight ${got.scrollHeight}`,
+    );
+    const want = `1px solid ${RULE[scheme]}`;
+    check(got.border === want, `${label} at ${where}: sidebar border ${got.border}, want ${want}`);
+  }
+  check(second?.isNavInside === true, `${label}: Main nav outside the viewport after the scroll`);
+}
+
+/** Browser 6: the edge hints show only where the Main nav has hidden content. */
+export async function assertNavEdges(page: Page, label: string): Promise<void> {
+  const want: ReadonlyArray<readonly [string, number, string]> = [
+    ["start", 0, "0/1"],
+    ["middle", 0.5, "1/1"],
+    ["end", 1, "1/0"],
+  ];
+  for (const [where, share, expected] of want) {
+    const got = await page.evaluate(async (part) => {
+      const nav = document.querySelector('nav[aria-label="Main"]');
+      const start = document.querySelector(".nav-edge-start");
+      const end = document.querySelector(".nav-edge-end");
+      if (!(nav instanceof HTMLElement) || start === null || end === null) return "missing";
+      nav.scrollLeft = (nav.scrollWidth - nav.clientWidth) * part;
+      for (let i = 0; i < 2; i += 1) await new Promise((r) => requestAnimationFrame(r));
+      const o = (el: Element) => Number(getComputedStyle(el).opacity);
+      return `${o(start)}/${o(end)}`;
+    }, share);
+    check(got !== "missing", `${label}: missing .nav-edge or Main nav`);
+    check(got === expected, `${label}: nav edges at ${where} ${got}, want ${expected}`);
+  }
+  await page.evaluate(() => {
+    const nav = document.querySelector('nav[aria-label="Main"]');
+    if (nav instanceof HTMLElement) nav.scrollLeft = 0;
+  });
+}
+
+/** Browser 7: the phone account row is one compact row with both controls in view. */
+export async function assertCompactAccount(
+  page: Page,
+  width: number,
+  email: string,
+  label: string,
+): Promise<void> {
+  const got = await page.evaluate(() => {
+    const rect = (s: string) => document.querySelector(s)?.getBoundingClientRect();
+    const foot = rect(".sidebar-foot");
+    const header = rect("header.sidebar");
+    const account = rect(".account");
+    const link = [...document.querySelectorAll(".sidebar-foot a")]
+      .find((a) => a.textContent?.trim() === "Account security")
+      ?.getBoundingClientRect();
+    const button = rect(".sidebar-foot button");
+    const role = document.querySelector(".account-role");
+    const tops = new Set<number>();
+    if (role !== null) {
+      const range = document.createRange();
+      range.selectNodeContents(role);
+      for (const r of Array.from(range.getClientRects())) {
+        if (r.width > 0) tops.add(Math.round(r.top));
+      }
+    }
+    if ([foot, header, account, link, button].some((r) => r === undefined)) return undefined;
+    const center = (r: DOMRect | undefined) => (r === undefined ? 0 : r.top + r.height / 2);
+    return {
+      parts: [...document.querySelectorAll(".sidebar-inner > *, .sidebar-foot > *")]
+        .map((e) => `${e.className} ${Math.round(e.getBoundingClientRect().height)}`)
+        .join(", "),
+      foot: foot?.height ?? 0,
+      header: header?.height ?? 0,
+      centers: [center(account), center(link), center(button)],
+      edges: [link?.left ?? 0, link?.right ?? 0, button?.left ?? 0, button?.right ?? 0],
+      text: document.querySelector(".account")?.textContent ?? "",
+      roleLines: tops.size,
+      isRoleVisible: role !== null && getComputedStyle(role).visibility === "visible",
+    };
+  });
+  check(got !== undefined, `${label}: account row parts missing`);
+  if (got === undefined) return;
+  check(got.foot <= 56, `${label}: .sidebar-foot height ${got.foot} > 56 (${got.parts})`);
+  check(got.header <= 240, `${label}: header.sidebar height ${got.header} > 240 (${got.parts})`);
+  const spread = Math.max(...got.centers) - Math.min(...got.centers);
+  check(spread <= 6, `${label}: account row centers ${got.centers.join(", ")} differ by ${spread}`);
+  check(
+    got.edges.every((x) => x >= -0.5 && x <= width + 0.5),
+    `${label}: account controls ${got.edges.join(", ")} outside 0-${width}`,
+  );
+  for (const part of ["Signed in as", email, "Role: Owner"]) {
+    check(got.text.includes(part), `${label}: account text "${got.text}" lacks ${part}`);
+  }
+  check(got.isRoleVisible && got.roleLines === 1, `${label}: role has ${got.roleLines} lines`);
+}

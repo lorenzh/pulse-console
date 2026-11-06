@@ -46,9 +46,10 @@ function expectAccountShell(res: Reply, title: string): void {
   expect(res.body).toContain('<a class="nav-item" href="/"><svg class="icon"');
   expect(res.body).not.toMatch(/class="nav-item"[^>]*aria-current/);
   expect(res.body).toContain(
-    'Signed in as Owner <span class="account-email">(owner@example.com)</span>',
+    '<span class="account-prefix">Signed in as </span>Owner <span class="account-email">(owner@example.com)</span>',
   );
-  expect(res.body).toContain("Role: Owner");
+  expect(res.body).toContain('<span class="account-role">Role: Owner</span>');
+  expect(res.body).toContain('class="secondary small" data-busy-label="Signing out…">Sign out');
   expect(res.body).not.toContain("style=");
   expect(res.body).not.toMatch(/\son[a-z]+=/);
 }

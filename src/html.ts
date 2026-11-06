@@ -118,11 +118,15 @@ export function submitButton(view: {
   name?: string | undefined;
   value?: string | undefined;
   variant?: "primary" | "secondary" | "ghost" | "danger" | undefined;
+  size?: "small" | undefined;
 }): string {
   const name = view.name === undefined ? "" : ` name="${escapeHtml(view.name)}"`;
   const value = view.value === undefined ? "" : ` value="${escapeHtml(view.value)}"`;
-  const cls =
-    view.variant === undefined || view.variant === "primary" ? "" : ` class="${view.variant}"`;
+  const classes = [
+    view.variant === undefined || view.variant === "primary" ? "" : view.variant,
+    view.size ?? "",
+  ].filter((c) => c !== "");
+  const cls = classes.length === 0 ? "" : ` class="${classes.join(" ")}"`;
   return `<button type="submit"${name}${value}${cls} data-busy-label="${escapeHtml(view.busyLabel)}">${escapeHtml(view.label)}</button>`;
 }
 

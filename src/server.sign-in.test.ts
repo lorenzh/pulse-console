@@ -459,7 +459,7 @@ describe("sessions", () => {
     await client.signInFull();
     const landing = await client.get("/");
     expect(landing.status).toBe(200);
-    expect(landing.body).toContain("Signed in as Owner &lt;Sentinel&gt;");
+    expect(landing.body).toContain("Signed in as </span>Owner &lt;Sentinel&gt;");
     expect(landing.body).toContain(EMAIL);
     expect(landing.body).toContain("http://api.example:3000");
     expect(landing.body).toContain('action="/sign-out"');

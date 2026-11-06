@@ -16,9 +16,18 @@ test("renders the instance, account, role and sign-out form", () => {
   const html = shellPage(view);
   expect(html).toContain("pulse Console");
   expect(html).toContain(
-    'Signed in as Owner &lt;Sentinel&gt; <span class="account-email">(o@example.com)</span>',
+    '<span class="account-prefix">Signed in as </span>Owner &lt;Sentinel&gt; <span class="account-email">(o@example.com)</span>',
   );
-  expect(html).toContain("Role: Admin");
+  expect(html).toContain('<span class="account-role">Role: Admin</span>');
+  expect(html).not.toContain("<br>Role:");
+  expect(html).toContain('<header class="sidebar">\n<div class="sidebar-inner">\n');
+  expect(html).toContain('<div class="nav-strip">\n<nav aria-label="Main">');
+  expect(html).toContain(
+    '</nav>\n<span class="nav-edge nav-edge-start" aria-hidden="true"></span>\n<span class="nav-edge nav-edge-end" aria-hidden="true"></span>\n</div>',
+  );
+  expect(html).toContain(
+    '<button type="submit" class="secondary small" data-busy-label="Signing out…">Sign out</button>',
+  );
   expect(html).toContain('<form method="post" action="/sign-out" class="sign-out">');
   expect(html).toContain(
     '<input type="hidden" name="csrf" value="csrf-value">\n<input type="hidden" name="form_token" value="form-token-value">',

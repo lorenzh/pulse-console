@@ -183,7 +183,7 @@ describe("app routes", () => {
       '--font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
       "@media (max-width: 1180px) {\n  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }",
       "@media (max-width: 900px) {\n  dl.settings, .settings { grid-template-columns: minmax(0, 1fr); }\n  .grid-2, .grid-4, .form-grid { grid-template-columns: minmax(0, 1fr); }",
-      "@media (max-width: 719px) {\n  .shell { grid-template-columns: minmax(0, 1fr); }",
+      "@media (max-width: 719px) {\n  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }",
       "main.shell-main { padding: 20px 16px 40px; }",
       ".sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px; scroll-snap-type: x mandatory; gap: 0; background:",
       ".sidebar nav ul { flex-direction: row; flex-wrap: nowrap; flex: none;",
@@ -219,11 +219,28 @@ describe("app routes", () => {
       "button[data-copy] { align-self: flex-start; }",
       "label.choice.option-card { align-items: flex-start; }",
       ".choice-text { display: flex; flex-direction: column;",
+      ".sidebar { align-self: stretch; border-right: 1px solid var(--rule); min-width: 0; }",
+      ".sidebar-inner { position: sticky; top: 0; height: 100vh; overflow-y: auto;",
+      "  .sidebar-inner { position: static; height: auto; overflow-y: visible;",
+      "  .nav-strip { position: relative; timeline-scope: --main-nav; }",
+      "scroll-timeline: --main-nav x",
+      ".nav-edge { display: none; }",
+      "animation: nav-edge-start linear both; animation-timeline: --main-nav;",
+      "animation: nav-edge-end linear both; animation-timeline: --main-nav;",
+      "@keyframes nav-edge-start { 0% { opacity: 0; } 5%, 100% { opacity: 1; } }",
+      "@keyframes nav-edge-end { 0%, 95% { opacity: 1; } 100% { opacity: 0; } }",
+      "  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }",
+      "  .sidebar-foot { margin-top: 0; flex-wrap: nowrap; padding: 8px 12px; }",
+      "  .avatar { display: none; }",
+      "  .account { flex: 1 1 0; min-width: 0; line-height: 1.3; }",
+      "  .account-who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
+      "  .account-role { white-space: nowrap; }",
     ]) {
       expect(css).toContain(rule);
     }
     expect(css).not.toContain(".table-scroll table.checks td { overflow-wrap: normal");
     expect(css).not.toContain("break-word");
+    expect(css).not.toContain(".sidebar { position: sticky; top: 0; height: 100vh;");
     expect(css).not.toContain("font-size: 1.75rem");
     expect(css).not.toContain(".sidebar nav .icon { display: none; }");
     expect(css).not.toContain("flex-direction: column; justify-content: center;");

@@ -39,6 +39,7 @@ import {
   assertChecksActions,
   assertChecksBoxEnd,
   assertChecksFit,
+  assertCompactAccount,
   assertCopyButton,
   assertDanger,
   assertEditorWidths,
@@ -48,6 +49,7 @@ import {
   assertHostileText,
   assertInput,
   assertLinkColor,
+  assertNavEdges,
   assertNoSidewaysScroll,
   assertNotFound,
   assertOverviewColors,
@@ -57,6 +59,7 @@ import {
   assertRecoveryCodes,
   assertSettingsBreakpoint,
   assertShellGeometry,
+  assertSidebarSpans,
   assertTeamTable,
   assertTypeScale,
   assertUnbrokenRow,
@@ -85,6 +88,8 @@ const LONG_NAME = `Checkout-API-${"very-long-unbroken-name-".repeat(8)}end`;
 const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 const SERVE_WAIT_MS = 3000;
 const DEMO_EMAIL = "demo-owner@example.com";
+/** A 70-character owner e-mail for the design matrix (R7). */
+const MATRIX_EMAIL = "a-seventy-character-address-for-the-design-matrix-check-12@example.com";
 // --accent-text in the light scheme, the default of a new context.
 const LINK_COLOUR = "rgb(122, 66, 144)";
 // --text in the light scheme: the ghost confirmation Cancel is a button, not a link colour.
@@ -449,6 +454,7 @@ async function checkLongEmail(browser: Browser): Promise<void> {
     const text = await page.locator(".account-email").textContent();
     assert(text === `(${email})`, `long e-mail span text: ${text}`);
     await assertFits(page, 390, "long e-mail");
+    await assertCompactAccount(page, 390, email, "light 390px long e-mail");
     ok("390px: a 70-character e-mail is shown in full in parentheses and fits");
   } finally {
     await context.close();
@@ -750,7 +756,7 @@ async function checkMobileNavFocus(env: Env, browser: Browser): Promise<void> {
   await checkMobileNavIcons(env, browser);
   for (const width of [390, 375, 360, 320]) await checkMobileNavFocusAt(env, browser, width);
   ok(
-    "mobile nav: every focused item keeps its 2px outline at offset 3px inside the row at 390, 375, 360 and 320 px",
+    "mobile nav: nav edge hints 0/1, 1/1, 1/0, compact account row and every focused item keeps its 2px outline at offset 3px inside the row at 390, 375, 360 and 320 px",
   );
 }
 
@@ -766,6 +772,8 @@ async function checkMobileNavFocusAt(env: Env, browser: Browser, width: number):
     ),
   );
   assert(new Set(tops).size === 1, `mobile nav: items on ${new Set(tops).size} rows`);
+  await assertNavEdges(page, `light ${width}px /`);
+  await assertCompactAccount(page, width, env.ownerEmail, `light ${width}px /`);
   await page.keyboard.press("Tab");
   for (const text of ["Overview", "Checks", "Tokens", "Probes", "Team"]) {
     await page.keyboard.press("Tab");
@@ -2318,7 +2326,15 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   await assertOverviewColors(page, scheme);
   await assertLinkColor(page, "Checks", PALETTE[scheme].lead, `${at} nav Checks`);
   await assertNoSidewaysScroll(page, `${at} /`);
-  if (width === 390) await assertAccountVisible(page, `${at} /`);
+  if (width === 390) {
+    await assertAccountVisible(page, `${at} /`);
+    assert(MATRIX_EMAIL.length === 70, `matrix e-mail has ${MATRIX_EMAIL.length} characters`);
+    await assertCompactAccount(page, width, MATRIX_EMAIL, `${at} /`);
+    await assertNavEdges(page, `${at} /`);
+    ok(
+      `matrix ${at}: one-row nav hints 0/1, 1/1, 1/0; account row foot <= 56px, header <= 240px, 70-character e-mail in the DOM`,
+    );
+  }
   await assertFontsUsed(page, "main .mono", `${at} /`);
   page.off("response", onFont);
   await axeOn(page, `${base}/`, `${at} Overview`);
@@ -2363,6 +2379,12 @@ async function matrixPages(env: Env, page: Page, scheme: Scheme, width: number):
   await assertInput(page, 'input[name="name"]', scheme, `${at} edit Name`);
   await assertRadio(page, `${at} edit`);
   await assertEditorWidths(page, width, `${at} edit`);
+  if (width === 1280) {
+    await assertSidebarSpans(page, scheme, `${at} edit`);
+    ok(
+      `matrix ${at}: sidebar spans the editor page with its ${scheme} rule, Main nav stays in view`,
+    );
+  }
   await assertNoSidewaysScroll(page, `${at} edit`);
   await axeOn(page, `${base}/checks/edit?id=web`, `${at} /checks/edit`);
   ok(
@@ -2628,10 +2650,7 @@ async function matrixGeometry(env: Env, page: Page, scheme: Scheme): Promise<voi
 }
 
 async function checkDesignMatrix(browser: Browser): Promise<void> {
-  const env = await startEnv(
-    0,
-    "a-seventy-character-address-for-the-design-matrix-check@example.com",
-  );
+  const env = await startEnv(0, MATRIX_EMAIL);
   replyChecks(env.api, MATRIX_CHECKS);
   env.target.current = { name: HOSTILE_NAME, revision: "rev-1" };
   try {

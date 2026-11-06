@@ -98,7 +98,10 @@ label.choice.option-card:has(input:checked) { border-color: var(--accent); backg
 .wordmark .cursor { display: inline-block; width: 0.55em; height: 1em; background: var(--accent); }
 .wordmark .pill { margin-left: 6px; padding: 1px 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill); font-family: var(--font-mono); font-size: 11px; font-weight: 400; color: var(--muted); }
 .shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
-.sidebar { position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 14px 12px; border-right: 1px solid var(--rule); min-width: 0; }
+.sidebar { align-self: stretch; border-right: 1px solid var(--rule); min-width: 0; }
+.sidebar-inner { position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 14px 12px; min-width: 0; }
+.nav-edge { display: none; }
+.account-who, .account-role { display: block; }
 .sidebar .instance { font-size: 0.8125rem; color: var(--muted); padding: 0 12px; }
 .sidebar nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .nav-group { padding: 16px 12px 6px; margin: 0; }
@@ -219,6 +222,8 @@ dl.settings, .settings { display: grid; grid-template-columns: 150px minmax(0, 1
 #recovery-codes { padding-left: 24px; font-family: var(--font-mono); }
 #recovery-codes code { white-space: nowrap; word-break: normal; overflow-wrap: normal; font-size: 0.8125rem; }
 button[data-copy] { align-self: flex-start; }
+@keyframes nav-edge-start { 0% { opacity: 0; } 5%, 100% { opacity: 1; } }
+@keyframes nav-edge-end { 0%, 95% { opacity: 1; } 100% { opacity: 0; } }
 @media (max-width: 1180px) {
   .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -227,14 +232,29 @@ button[data-copy] { align-self: flex-start; }
   .grid-2, .grid-4, .form-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 719px) {
-  .shell { grid-template-columns: minmax(0, 1fr); }
-  .sidebar { position: static; height: auto; overflow-y: visible; width: 100%; gap: 8px; border-right: 0; border-bottom: 1px solid var(--rule); }
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+  .sidebar { width: 100%; border-right: 0; border-bottom: 1px solid var(--rule); }
+  .sidebar-inner { position: static; height: auto; overflow-y: visible; gap: 8px; }
+  .nav-strip { position: relative; timeline-scope: --main-nav; }
+  .sidebar nav { scroll-timeline: --main-nav x; }
+  .nav-edge { display: block; position: absolute; top: 0; bottom: 0; width: 28px; pointer-events: none; opacity: 0; }
+  .nav-edge::before { content: ""; position: absolute; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-top: 2px solid var(--lead); border-right: 2px solid var(--lead); }
+  .nav-edge-start { left: 0; background: linear-gradient(to right, var(--bg), transparent); animation: nav-edge-start linear both; animation-timeline: --main-nav; }
+  .nav-edge-start::before { left: 8px; transform: rotate(-135deg); }
+  .nav-edge-end { right: 0; background: linear-gradient(to left, var(--bg), transparent); animation: nav-edge-end linear both; animation-timeline: --main-nav; }
+  .nav-edge-end::before { right: 8px; transform: rotate(45deg); }
   .sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 6px; scroll-padding-inline: 6px; scroll-snap-type: x mandatory; gap: 0; background: linear-gradient(to right, var(--bg) 30%, transparent), linear-gradient(to left, var(--bg) 30%, transparent) 100% 0, radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / 0.18), transparent), radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 0.18), transparent) 100% 0; background-repeat: no-repeat; background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%; background-attachment: local, local, scroll, scroll; }
   .sidebar nav ul { flex-direction: row; flex-wrap: nowrap; flex: none; gap: 0; }
   .sidebar nav .nav-item { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; white-space: nowrap; flex: 0 0 auto; padding: 0 8px; }
   .sidebar nav .nav-item:focus { scroll-snap-align: center; }
   .nav-group { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-  .sidebar-foot { margin-top: 0; }
+  .sidebar-foot { margin-top: 0; flex-wrap: nowrap; padding: 8px 12px; }
+  .avatar { display: none; }
+  .account { flex: 1 1 0; min-width: 0; line-height: 1.3; }
+  .account-who { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .account-prefix { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  .account-role { white-space: nowrap; }
+  .sidebar-foot a { flex: none; white-space: nowrap; }
   .topbar { padding: 10px 16px; min-height: 48px; }
   .banner { padding: 16px 16px 0; }
   main.shell-main { padding: 20px 16px 40px; }

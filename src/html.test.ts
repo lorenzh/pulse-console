@@ -45,6 +45,15 @@ test("submitButton renders the ghost and danger variants as classes", () => {
   );
 });
 
+test("submitButton adds the small size to its class", () => {
+  expect(submitButton({ label: "A", busyLabel: "B", variant: "secondary", size: "small" })).toBe(
+    '<button type="submit" class="secondary small" data-busy-label="B">A</button>',
+  );
+  expect(submitButton({ label: "A", busyLabel: "B", size: "small" })).toBe(
+    '<button type="submit" class="small" data-busy-label="B">A</button>',
+  );
+});
+
 test("plainDocument has the wordmark, one h1 in the plain panel and no script", () => {
   const html = plainDocument("Sign <in>", "<p>body</p>");
   expect(html).toContain('<body class="plain">');
