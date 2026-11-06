@@ -71,6 +71,7 @@ import {
   assertShellGeometry,
   assertSidebarSpans,
   assertTeamTable,
+  assertTextWraps,
   assertTypeScale,
   assertUnbrokenRow,
   assertWordsIntact,
@@ -2598,9 +2599,53 @@ async function maintenanceLayout(page: Page, base: string, label: string): Promi
       await assertFits(page, width, `${label} ${width}px ${path}`);
       await axeOn(page, base + path, `${label} ${width}px ${path}`);
     }
+    await page.goto(`${base}/maintenance`);
+    await assertTextWraps(page, ".maintenance-row h3", `${label} ${width}px /maintenance`);
   }
   await page.setViewportSize({ width: 1280, height: 800 });
   ok(`maintenance, ${label}: 4 pages fit 390 and 1280 px, 0 axe violations`);
+  await maintenanceFocusOrder(page, base);
+}
+
+/** The edit form controls take focus in reading order; a time field's parts count once. */
+async function maintenanceFocusOrder(page: Page, base: string): Promise<void> {
+  await page.goto(`${base}/maintenance/edit?id=db-upgrade`);
+  await page.focus('input[name="check"]');
+  const reached: string[] = [];
+  for (let i = 0; i < 60 && reached.at(-1) !== "Save window"; i += 1) {
+    const name = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!(el instanceof HTMLElement)) return "";
+      if (el.tagName === "A" || el.tagName === "BUTTON") return el.textContent?.trim() ?? "";
+      const field = el.getAttribute("name") ?? "";
+      const value = el.getAttribute("value") ?? "";
+      return field === "check" || field === "component" ? `${field}=${value}` : field;
+    });
+    if (reached.at(-1) !== name) reached.push(name);
+    await page.keyboard.press("Tab");
+  }
+  const expected = [
+    "check=web",
+    "check=cert",
+    "check=db-port",
+    "check=dns-a",
+    "check=domain-exp",
+    "check=nightly-backup",
+    "component=web",
+    "component=public-api",
+    "start",
+    "end",
+    "note",
+    "Cancel",
+    "Save window",
+  ];
+  assert(
+    JSON.stringify(reached) === JSON.stringify(expected),
+    `maintenance edit focus order: ${reached.join(", ")}`,
+  );
+  ok(
+    `maintenance edit: Tab moves through 6 checks, 2 components, start, end, note, Cancel, Save window`,
+  );
 }
 
 /** Acceptance evidence 10: real Chromium edits keep or replace the stored epochs. */
@@ -3235,7 +3280,33 @@ async function runChecks(): Promise<void> {
   }
 }
 
+/** A second console for the manual incident and maintenance journey, on the stateful fake. */
+async function serveIncidents(): Promise<string> {
+  const api = startIncidentApi({
+    token: ADMIN_TOKEN,
+    config: incidentConfig,
+    manual: incidentSeeds(),
+    automatic: seedAutomatic,
+    results: seedResults,
+    maintenance: maintenanceSeeds(),
+    now: () => Date.now(),
+  });
+  const server = await startSignedInConsole({
+    apiUrl: api.url,
+    ownerEmail: DEMO_EMAIL,
+    adminToken: ADMIN_TOKEN,
+  });
+  setInterval(() => {
+    const writes = api.seen.filter((s) => s.method !== "GET" && s.method !== "HEAD");
+    const lines = writes.map((w) => [w.method, w.path].join(" "));
+    console.log(`incident api writes: ${JSON.stringify(lines)}`);
+  }, 5000);
+  return server.base;
+}
+
 async function serve(): Promise<void> {
+  const incidents = await serveIncidents();
+  console.log(`incidents and maintenance url: ${incidents} (same sign in)`);
   const env = await startEnv(SERVE_WAIT_MS);
   // The manual console shows the checks fixture, so /checks/edit?id=web has an editable check.
   replyChecks(env.api, []);
