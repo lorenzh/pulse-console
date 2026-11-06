@@ -104,7 +104,7 @@ export type TextareaField = {
 export function textareaField(f: TextareaField): string {
   const parts = fieldParts(f.name, f.error);
   return `<label for="${parts.id}">${escapeHtml(f.label)}
-<textarea id="${parts.id}" name="${escapeHtml(f.name)}" rows="4"${parts.described}>${escapeHtml(f.value ?? "")}</textarea>${parts.error}
+<textarea id="${parts.id}" name="${escapeHtml(f.name)}" rows="4"${parts.described}>\n${escapeHtml(f.value ?? "")}</textarea>${parts.error}
 </label>`;
 }
 

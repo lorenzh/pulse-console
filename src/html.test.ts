@@ -105,10 +105,16 @@ test("textarea fields keep the value and show errors", () => {
   const html = textareaField({ label: "Note", name: "note", value: "</textarea>", error: "Bad" });
   expect(html).toContain('<label for="field-note">Note');
   expect(html).toContain(
-    '<textarea id="field-note" name="note" rows="4" aria-describedby="field-note-error" aria-invalid="true">&lt;/textarea&gt;</textarea>',
+    '<textarea id="field-note" name="note" rows="4" aria-describedby="field-note-error" aria-invalid="true">\n&lt;/textarea&gt;</textarea>',
   );
   expect(html).toContain('<span class="error" id="field-note-error">Bad</span>');
   expect(textareaField({ label: "Note", name: "note" })).not.toContain("aria-invalid");
+});
+
+test("a textarea keeps a leading line feed of its value", () => {
+  expect(textareaField({ label: "Message", name: "message", value: "\nLine one" })).toContain(
+    'rows="4">\n\nLine one</textarea>',
+  );
 });
 
 test("formErrorSummary links each field", () => {
