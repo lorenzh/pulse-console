@@ -7,6 +7,8 @@ import {
   isFormContentType,
   MAX_CHECK_FORM_BYTES,
   MAX_FORM_BYTES,
+  MAX_INCIDENT_FORM_BYTES,
+  MAX_MAINTENANCE_FORM_BYTES,
   parseForm,
   passwordText,
 } from "./forms.ts";
@@ -26,10 +28,81 @@ describe("parseForm", () => {
     expect(parseForm("email=a%40b.c&x=1&x=2", ["email", "csrf"])).toEqual({
       isOk: true,
       fields: { email: "a@b.c" },
+      lists: {},
     });
   });
   test("a repeated known field fails", () => {
     expect(parseForm("email=a&email=b", ["email"])).toEqual({ isOk: false, repeated: "email" });
+  });
+});
+
+describe("parseForm list fields", () => {
+  const LIMITS = { component: 1000 };
+  test("ordered distinct values survive, an absent list is empty", () => {
+    expect(parseForm("component=db&title=T&component=api", ["title"], LIMITS)).toEqual({
+      isOk: true,
+      fields: { title: "T" },
+      lists: { component: ["db", "api"] },
+    });
+    expect(parseForm("title=T", ["title"], LIMITS)).toEqual({
+      isOk: true,
+      fields: { title: "T" },
+      lists: { component: [] },
+    });
+  });
+  test("one value twice in a list fails", () => {
+    expect(parseForm("component=web&component=web", [], LIMITS)).toEqual({
+      isOk: false,
+      repeated: "component",
+    });
+  });
+  test("1000 distinct values fit a 1000-value limit; 1001 fail", () => {
+    const body = (n: number): string =>
+      Array.from({ length: n }, (_, i) => `component=c${i}`).join("&");
+    const ok = parseForm(body(1000), [], LIMITS);
+    expect(ok.isOk && ok.lists.component?.length).toBe(1000);
+    expect(ok.isOk && ok.lists.component?.[999]).toBe("c999");
+    expect(parseForm(body(1001), [], LIMITS)).toEqual({ isOk: false, repeated: "component" });
+  });
+  test("a known field, csrf or form_token, never becomes a list", () => {
+    const known = ["title", "csrf", "form_token"];
+    const limits = { title: 5, csrf: 5, form_token: 5 };
+    for (const name of known) {
+      expect(parseForm(`${name}=a&${name}=b`, known, limits)).toEqual({
+        isOk: false,
+        repeated: name,
+      });
+    }
+    expect(parseForm("title=a&csrf=c&form_token=t", known, limits)).toEqual({
+      isOk: true,
+      fields: { title: "a", csrf: "c", form_token: "t" },
+      lists: {},
+    });
+  });
+});
+
+describe("form limits", () => {
+  test("the limits are 8192, 524288, 32768 and 131072 bytes", () => {
+    expect(MAX_FORM_BYTES).toBe(8192);
+    expect(MAX_CHECK_FORM_BYTES).toBe(524288);
+    expect(MAX_INCIDENT_FORM_BYTES).toBe(32768);
+    expect(MAX_MAINTENANCE_FORM_BYTES).toBe(131072);
+  });
+  test("the largest valid incident form fits 32768 bytes", () => {
+    const emoji = "\u{1F600}";
+    const params = new URLSearchParams({
+      csrf: "c".repeat(43),
+      form_token: "t".repeat(43),
+      title: emoji.repeat(200),
+      impact: "major_outage",
+      status: "investigating",
+      message: emoji.repeat(2000),
+      action: "publish",
+    });
+    for (let i = 0; i < 50; i++) params.append("component", `${i}`.padStart(64, "a"));
+    const bytes = new TextEncoder().encode(params.toString()).length;
+    expect(bytes).toBeGreaterThan(30000);
+    expect(bytes).toBeLessThanOrEqual(32768);
   });
 });
 

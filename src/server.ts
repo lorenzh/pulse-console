@@ -51,6 +51,7 @@ import {
   pushSessionCookie,
   readFormFields,
   readPostForm,
+  readPostLists,
   redirect,
   roleOfUser,
   type State,
@@ -951,7 +952,7 @@ function pageRequest(
   ctx: Ctx,
   signedIn: SignedIn,
   method: PageMethod,
-  fields: PageRequest["fields"],
+  form: { fields: PageRequest["fields"]; lists: PageRequest["lists"] },
 ): PageRequest {
   return {
     method,
@@ -961,7 +962,8 @@ function pageRequest(
     linkOrigin: linkOrigin(ctx.deps.publicOrigin, ctx.req.headers.host),
     role: roleOfUser(ctx, signedIn.user),
     csrf: signedIn.session.csrfToken,
-    fields,
+    fields: form.fields,
+    lists: form.lists,
     query: ctx.query,
     issueFormToken: (actionPath) => issueFormToken(ctx, sessionBinding(signedIn.id), actionPath),
   };
@@ -1022,12 +1024,16 @@ async function handleProtected(
   if (!passesGate(ctx, "full")) return;
   const signedIn = signedInOf(ctx);
   if (signedIn === undefined) return;
-  let fields: PageRequest["fields"] = {};
+  let form: { fields: PageRequest["fields"]; lists: PageRequest["lists"] } = {
+    fields: {},
+    lists: {},
+  };
   if (method === "POST") {
     const known = [...(route.knownFields ?? []), "form_token"];
-    const read = await readPostForm(ctx, known, signedIn.session.csrfToken, route.maxFormBytes);
+    const csrf = signedIn.session.csrfToken;
+    const read = await readPostLists(ctx, known, csrf, route.maxFormBytes, route.listFields);
     if (read === undefined) return;
-    fields = read;
+    form = read;
   }
   const role = roleOfUser(ctx, signedIn.user);
   if (!hasRole(role, route.requiredRole)) {
@@ -1037,7 +1043,7 @@ async function handleProtected(
     });
     return;
   }
-  const request = pageRequest(ctx, signedIn, method, fields);
+  const request = pageRequest(ctx, signedIn, method, form);
   if (method === "POST" && !isProtectedTokenAccepted(ctx, signedIn, route, request)) return;
   sendPageResult(ctx, signedIn, route, await route.handle(request));
 }

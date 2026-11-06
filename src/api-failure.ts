@@ -12,7 +12,11 @@ export type ApiCall =
   | "tokens"
   | "self"
   | "token"
-  | "locations";
+  | "locations"
+  | "manual-incidents"
+  | "manual-incident"
+  | "incidents"
+  | "maintenance";
 
 /** A failed pulse-api read, without any upstream body, exception text or token. */
 export type ApiFailure =

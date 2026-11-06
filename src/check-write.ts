@@ -3,7 +3,7 @@ import type { Logger } from "@lorenzh/pulse-kit";
 import type { AccountStore, User } from "./account-store.ts";
 import type { FetchLike } from "./api-read.ts";
 import { type CheckOutcome, checkOutcome } from "./check-outcome.ts";
-import type { PeopleAction } from "./people-log.ts";
+import type { PeopleAction, PeopleEvent } from "./people-log.ts";
 import type { PageRequest, PageResult } from "./protected-route.ts";
 import { type ConsoleRole, hasRole } from "./roles.ts";
 import { forbiddenState } from "./states.ts";
@@ -27,7 +27,7 @@ export function isWithinApiBodyLimit(body: string): boolean {
 }
 
 export type CheckWriteDeps = {
-  store: AccountStore;
+  store: Pick<AccountStore, "isGuardHeld" | "userById" | "appendPeople">;
   fetch: FetchLike;
   adminToken: string | undefined;
   schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
@@ -69,6 +69,25 @@ export function writeGuardProblem(
   return undefined;
 }
 
+/** The texts of one resource's write answers. */
+export type WriteTexts = {
+  /** The text of a `403` answer. */
+  scope: string;
+  /** The text of a `404` answer. */
+  gone: string;
+  /** The text of an unknown outcome without any answer. */
+  unknown: string;
+  /** What to open to see the result, in the redirect and foreign-answer texts. */
+  unknownHint: string;
+};
+
+export const CHECK_WRITE_TEXTS: WriteTexts = {
+  scope: WRITE_SCOPE_TEXT,
+  gone: GONE_TEXT,
+  unknown: UNKNOWN_TEXT,
+  unknownHint: "open the check to see whether the change was saved.",
+};
+
 /** One outbound check write. `path` is built by the caller with `apiIdSegment`. */
 export type CheckWrite = {
   action: PeopleAction & `check.${string}`;
@@ -80,13 +99,32 @@ export type CheckWrite = {
   body?: string | undefined;
 };
 
+/** One outbound write of any resource; never retried, never redirected. */
+export type ApiWrite = {
+  action: PeopleAction;
+  /** The People-log target; `answer` is the body of a saved answer, else undefined. */
+  targetOf: (answer: unknown) => PeopleEvent["target"];
+  /** The message of the outcome log line, for example `incident change`. */
+  logMessage: string;
+  /** The ids of the outcome log line, for example `{ checkId }`; never a title or text. */
+  logIds: Readonly<Record<string, string | number>>;
+  method: "POST" | "PUT" | "DELETE";
+  url: string;
+  /** The revision for `If-Match`, unquoted; no header when undefined. */
+  revision?: string | undefined;
+  body?: string | undefined;
+  /** The People-log value of a saved write: the new `ETag` revision, or none. */
+  savedValue: "revision" | "none";
+  texts: WriteTexts;
+};
+
 /**
  * What the route shows for an outcome. `form` re-renders the form with `message` in the summary;
  * `text` shows `message` with the kept non-secret input as text; `saved` redirects unless the
- * People-log row failed.
+ * People-log row failed. `answer` is the body of a saved answer when it could be read.
  */
 export type WriteAnswer =
-  | { kind: "saved"; isLogged: boolean }
+  | { kind: "saved"; isLogged: boolean; answer?: unknown }
   | { kind: "form"; status: number; message: string }
   | {
       kind: "text";
@@ -100,13 +138,16 @@ function messageOf(message: string | undefined): string {
 }
 
 /** The R8 answer of a refused write. */
-export function refusedAnswer(status: number, message: string | undefined): WriteAnswer {
+export function refusedAnswer(
+  status: number,
+  message: string | undefined,
+  texts: WriteTexts = CHECK_WRITE_TEXTS,
+): WriteAnswer {
   if (status === 401) {
     return { kind: "text", status: 502, message: "", reason: "token-rejected" };
   }
-  if (status === 403)
-    return { kind: "text", status: 502, message: WRITE_SCOPE_TEXT, reason: "other" };
-  if (status === 404) return { kind: "text", status: 404, message: GONE_TEXT, reason: "gone" };
+  if (status === 403) return { kind: "text", status: 502, message: texts.scope, reason: "other" };
+  if (status === 404) return { kind: "text", status: 404, message: texts.gone, reason: "gone" };
   if (status === 409) return { kind: "form", status: 409, message: messageOf(message) };
   if (status === 412) return { kind: "text", status: 412, message: "", reason: "stale" };
   if (status === 413 || status === 422) {
@@ -130,24 +171,28 @@ export function refusedAnswer(status: number, message: string | undefined): Writ
 }
 
 /** The R8 answer of an unknown outcome. */
-export function unknownAnswer(status: number | null, isRedirect: boolean): WriteAnswer {
-  if (status === null) return { kind: "text", status: 504, message: UNKNOWN_TEXT, reason: "other" };
+export function unknownAnswer(
+  status: number | null,
+  isRedirect: boolean,
+  texts: WriteTexts = CHECK_WRITE_TEXTS,
+): WriteAnswer {
+  if (status === null) {
+    return { kind: "text", status: 504, message: texts.unknown, reason: "other" };
+  }
   const message = isRedirect
-    ? `pulse-api answered with a redirect (${status}); redirects are not followed. The result is unknown: open the check to see whether the change was saved. Check that PULSE_API_URL points at pulse-api itself.`
-    : `The answer did not come from a matching pulse-api (${status}). The result is unknown: open the check to see whether the change was saved.`;
+    ? `pulse-api answered with a redirect (${status}); redirects are not followed. The result is unknown: ${texts.unknownHint} Check that PULSE_API_URL points at pulse-api itself.`
+    : `The answer did not come from a matching pulse-api (${status}). The result is unknown: ${texts.unknownHint}`;
   return { kind: "text", status: 502, message, reason: "other" };
 }
 
-function send(deps: CheckWriteDeps, write: CheckWrite): Promise<RequestJsonResult<unknown>> {
-  const headers: Record<string, string> = {
-    authorization: `Bearer ${deps.adminToken ?? ""}`,
-    "if-match": `"${write.revision}"`,
-  };
+function send(deps: CheckWriteDeps, write: ApiWrite): Promise<RequestJsonResult<unknown>> {
+  const headers: Record<string, string> = { authorization: `Bearer ${deps.adminToken ?? ""}` };
+  if (write.revision !== undefined) headers["if-match"] = `"${write.revision}"`;
   return requestJson<unknown>(write.url, {
     method: write.method,
     fetch: deps.fetch,
     headers,
-    // The body of a write answer is never used: the next page reads fresh data.
+    // The caller validates a saved answer's body itself; other bodies are never used.
     validate: (raw) => ({ ok: true, value: raw }),
     timeoutMs: WRITE_TIMEOUT_MS,
     ...(write.body === undefined ? {} : { body: write.body }),
@@ -157,64 +202,112 @@ function send(deps: CheckWriteDeps, write: CheckWrite): Promise<RequestJsonResul
 
 function logOutcome(
   deps: CheckWriteDeps,
-  write: CheckWrite,
+  write: ApiWrite,
   actorId: number,
   outcome: CheckOutcome,
 ): void {
   const fields: Record<string, unknown> = {
     action: write.action,
     actorId,
-    checkId: write.checkId,
+    ...write.logIds,
     outcome: outcome.class,
   };
   if (outcome.class === "refused") fields.status = outcome.status;
-  deps.log.info("check change", fields);
+  deps.log.info(write.logMessage, fields);
   if (outcome.class === "saved" && outcome.unreadable !== undefined) {
     deps.log.warn("api answer unreadable", { call: "write", kind: outcome.unreadable });
   }
 }
 
 /** Appends the People-log row of a saved or unknown write; false when the insert failed. */
-function isLogged(deps: CheckWriteDeps, write: CheckWrite, user: User, value: string): boolean {
+function isLogged(
+  deps: CheckWriteDeps,
+  write: ApiWrite,
+  user: User,
+  answer: unknown,
+  value: string | undefined,
+): boolean {
   try {
     deps.store.appendPeople({
       at: deps.now(),
       actor: { kind: "user", person: { id: user.id, email: user.email, name: user.name } },
       action: write.action,
-      target: { kind: "check", id: write.checkId },
+      target: write.targetOf(answer),
       value,
     });
     return true;
   } catch (err) {
-    deps.log.error("check change not logged", {
+    deps.log.error(`${write.logMessage} not logged`, {
       error: err instanceof Error ? err.name : "unknown",
     });
     return false;
   }
 }
 
-/** Sends one write (never retried, never redirected) and maps its outcome (Decision 10, R8). */
-export async function sendCheckWrite(
+function savedValueOf(write: ApiWrite, revision: string | null): string | undefined {
+  switch (write.savedValue) {
+    case "revision":
+      return revision ?? "unknown";
+    case "none":
+      return undefined;
+    default: {
+      const never: never = write.savedValue;
+      return never;
+    }
+  }
+}
+
+/**
+ * Sends one write (never retried, never redirected), maps its outcome (Decision 10, R8) and
+ * appends one People-log row for a saved or unknown outcome.
+ */
+export async function sendApiWrite(
   deps: CheckWriteDeps,
-  write: CheckWrite,
+  write: ApiWrite,
   user: User,
 ): Promise<WriteAnswer> {
-  const outcome = checkOutcome(await send(deps, write));
+  const result = await send(deps, write);
+  const outcome = checkOutcome(result);
   logOutcome(deps, write, user.id, outcome);
   switch (outcome.class) {
     case "saved": {
-      const logged = isLogged(deps, write, user, outcome.revision ?? "unknown");
-      return { kind: "saved", isLogged: logged };
+      const answer = result.ok ? result.value : undefined;
+      const value = savedValueOf(write, outcome.revision);
+      return { kind: "saved", isLogged: isLogged(deps, write, user, answer, value), answer };
     }
     case "refused":
-      return refusedAnswer(outcome.status, outcome.message);
+      return refusedAnswer(outcome.status, outcome.message, write.texts);
     case "unknown":
       // A failed row is logged as an error; the unknown answer already says to check.
-      isLogged(deps, write, user, "unknown");
-      return unknownAnswer(outcome.status, outcome.isRedirect);
+      isLogged(deps, write, user, undefined, "unknown");
+      return unknownAnswer(outcome.status, outcome.isRedirect, write.texts);
     default: {
       const never: never = outcome;
       return never;
     }
   }
+}
+
+/** Sends one check write with `If-Match` and the check texts. */
+export function sendCheckWrite(
+  deps: CheckWriteDeps,
+  write: CheckWrite,
+  user: User,
+): Promise<WriteAnswer> {
+  return sendApiWrite(
+    deps,
+    {
+      action: write.action,
+      targetOf: () => ({ kind: "check", id: write.checkId }),
+      logMessage: "check change",
+      logIds: { checkId: write.checkId },
+      method: write.method,
+      url: write.url,
+      revision: write.revision,
+      body: write.body,
+      savedValue: "revision",
+      texts: CHECK_WRITE_TEXTS,
+    },
+    user,
+  );
 }
