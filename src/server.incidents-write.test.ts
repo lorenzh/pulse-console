@@ -258,6 +258,70 @@ describe("POST /incidents/new", () => {
     });
   }
 
+  for (const [status, expected, text] of [
+    [400, 422, "title is bad sentinel"],
+    [413, 422, "title is bad sentinel"],
+    [409, 409, "title is bad sentinel"],
+    [404, 404, "This incident does not exist or is not public."],
+  ] as const) {
+    test(`an api ${status} answers ${expected} end to end`, async () => {
+      const a = api();
+      const c = await team(a);
+      a.override(
+        "POST",
+        "/manual-incidents",
+        () => new Response('{"error":"title is bad sentinel"}', { status, headers: WIRE_HEADERS }),
+      );
+      const res = await submit(c, a, composer(PUBLISH));
+      expect(res.status).toBe(expected);
+      expect(res.body).toContain(text);
+      expect(res.body).not.toContain(TOKEN);
+      expect(a.writes()).toBe(1);
+      expect(peopleRows(c)).toEqual([]);
+    });
+  }
+
+  test("a zero-width-space title is refused as untitled with zero writes", async () => {
+    const a = api();
+    const c = await team(a);
+    const entries = PUBLISH.map(([k, v]) => [k, k === "title" ? "​" : v] as const);
+    const res = await submit(c, a, composer(entries));
+    expect(res.status).toBe(422);
+    expect(res.body).toContain(
+      "The title needs at least one letter, digit, punctuation mark or symbol.",
+    );
+    expect(a.writes()).toBe(0);
+  });
+
+  test("a mixed-emoji title of 200 code points is accepted", async () => {
+    const a = api();
+    const c = await team(a);
+    const title = "a😀".repeat(100);
+    const entries = PUBLISH.map(([k, v]) => [k, k === "title" ? title : v] as const);
+    const res = await submit(c, a, composer(entries));
+    expect(res.status).toBe(303);
+    const [body] = writeBodies(a);
+    expect(body).toMatchObject({ title });
+  });
+
+  test("a session removed before the write sends zero writes", async () => {
+    const a = api();
+    const c = await team(a);
+    const opened = await getPage(c, "/incidents/new", c.cookies.member);
+    const token = formTokenOf(opened.body, "/incidents/new");
+    c.db.query("DELETE FROM sessions WHERE user_id = ?").run(c.ids.member);
+    a.seen.length = 0;
+    const res = await post(
+      c,
+      "/incidents/new",
+      [["csrf", c.csrfs.member], ["form_token", token], ...PUBLISH],
+      "member",
+    );
+    expect(res.headers.get("location") ?? "").not.toContain("/incidents");
+    expect(a.writes()).toBe(0);
+    expect(peopleRows(c)).toEqual([]);
+  });
+
   test("a foreign answer shows the unknown text with the input and logs one row", async () => {
     const a = api();
     const c = await team(a);
