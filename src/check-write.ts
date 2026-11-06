@@ -79,6 +79,10 @@ export type WriteTexts = {
   unknown: string;
   /** What to open to see the result, in the redirect and foreign-answer texts. */
   unknownHint: string;
+  /** The one text of every answered unknown outcome; the composed texts when undefined. */
+  unknownAnswered?: string | undefined;
+  /** True when a `400` re-renders the form, as `413` and `422` do. */
+  isBadRequestForm?: boolean | undefined;
 };
 
 export const CHECK_WRITE_TEXTS: WriteTexts = {
@@ -150,7 +154,7 @@ export function refusedAnswer(
   if (status === 404) return { kind: "text", status: 404, message: texts.gone, reason: "gone" };
   if (status === 409) return { kind: "form", status: 409, message: messageOf(message) };
   if (status === 412) return { kind: "text", status: 412, message: "", reason: "stale" };
-  if (status === 413 || status === 422) {
+  if (status === 413 || status === 422 || (status === 400 && texts.isBadRequestForm === true)) {
     return { kind: "form", status: 422, message: messageOf(message) };
   }
   if (status === 429) return { kind: "form", status: 503, message: THROTTLED_TEXT };
@@ -178,6 +182,9 @@ export function unknownAnswer(
 ): WriteAnswer {
   if (status === null) {
     return { kind: "text", status: 504, message: texts.unknown, reason: "other" };
+  }
+  if (texts.unknownAnswered !== undefined) {
+    return { kind: "text", status: 502, message: texts.unknownAnswered, reason: "other" };
   }
   const message = isRedirect
     ? `pulse-api answered with a redirect (${status}); redirects are not followed. The result is unknown: ${texts.unknownHint} Check that PULSE_API_URL points at pulse-api itself.`
