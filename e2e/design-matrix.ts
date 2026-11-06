@@ -623,9 +623,10 @@ export async function assertWordsIntact(
   label: string,
 ): Promise<number> {
   await page.evaluate(() => document.fonts.ready);
-  const reports = await page
-    .locator(tableSelector)
-    .evaluateAll((tables) => tables.map(measureWords));
+  const reports: WordsReport[] = [];
+  for (const table of await page.locator(tableSelector).all()) {
+    reports.push(await table.evaluate(measureWords));
+  }
   check(reports.length > 0, `${label}: no table ${tableSelector}`);
   const texts = reports.flatMap((r) => r.texts);
   for (const want of required) {

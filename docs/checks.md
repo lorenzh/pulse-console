@@ -12,10 +12,14 @@ without it, at the same time, 5000 ms each, with no redirect followed. Each fail
 the Overview, and an api without check sources shows `This pulse-api is too old for the Checks
 pages. It needs check sources (pulse-api with #565).`
 
-Rows are the effective checks in api order, then the shadowed database definitions. Columns:
-name, id, type, target, source (`checks.json (read-only)` or `Console`), state (the text of
-`/checks`; `Unknown` when `/checks` does not list the check; `Shadowed by checks.json` for a
-shadowed definition) and the last result time. The counts above the table count only effective
+Rows are the effective checks in api order, then the shadowed database definitions. The table
+has four columns. Check holds the name, then the id in code with the source tag (`checks.json
+(read-only)` or `Console`). Target holds the type and the target. State holds the state (the text
+of `/checks`; `Unknown` when `/checks` does not list the check; `Shadowed by checks.json` for a
+shadowed definition) and the last result time. Actions holds the row actions. At 1280 px the
+table fits its box; a long name, id or target is cut with an ellipsis and stays whole in the page
+and on the detail page. Narrower screens scroll the table sideways. Words never break inside a
+table cell. The counts above the table count only effective
 checks (`6 checks`), plus `<m> shadowed definitions` when there are any.
 
 Row actions: View for everyone; Edit for a Member or higher on a Console check that is not
