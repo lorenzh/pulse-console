@@ -6,6 +6,7 @@ pulse-console is the web console of pulse. It is a small web server that will ma
 - [checks.md](checks.md): the Checks list, its filters, the export and the shell lines.
 - [tokens.md](tokens.md): the Tokens and Probes screens: presets, show once, rotation overlap, the console's own token, location states and probe snippets.
 - [incidents.md](incidents.md): the Incidents pages: routes, roles, MTTR, text limits, untitled incidents, the preview and the outcomes.
+- [maintenance.md](maintenance.md): the Maintenance pages: sections, phases, sources, the selection snapshot, UTC times and kept milliseconds, the note limit, stale input and the outcomes.
 - [team.md](team.md): roles, the permission matrix, target rules, the two-factor requirement and the People log.
 - [development.md](development.md): local run, layout, tests, lint and CI.
 

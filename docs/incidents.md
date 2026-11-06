@@ -29,7 +29,7 @@ Durations read `under 1 min`, `<m> min`, `<h> h <m> min` or `<d> d <h> h`. No sa
 
 ## Text limits
 
-The title has 1 to 200 characters and a message 1 to 2000 characters. Characters are Unicode code points, as pulse-api counts them, so an emoji counts once. The console adds no other length rule. A message keeps its line breaks (CRLF and CR become LF) and is never trimmed; the title is not trimmed either.
+The title has 1 to 200 characters and a message 1 to 2000 characters. Characters are Unicode code points, as pulse-api counts them, so an emoji counts once. The console adds no other length rule. The contract comments may describe the limit in other words; the console follows the runtime validator, so a contract change could move it. The maintenance note counts UTF-16 units instead ([maintenance.md](maintenance.md)). A message keeps its line breaks (CRLF and CR become LF) and is never trimmed; the title is not trimmed either.
 
 ## Untitled incidents
 
