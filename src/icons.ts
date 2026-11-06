@@ -55,6 +55,10 @@ export function navIcon(id: NavId): string {
       return icon(
         '<rect x="1.75" y="2.5" width="12.5" height="11" rx="1.5"/><path d="M1.75 5.5h12.5"/><circle cx="5" cy="9.5" r="1.25"/><path d="M8 9.5h3.5"/>',
       );
+    case "notifications":
+      return icon(
+        '<path d="M4 11.5V7a4 4 0 0 1 8 0v4.5l1.25 1.25H2.75z"/><path d="M6.5 14.25a1.5 1.5 0 0 0 3 0"/>',
+      );
     case "team":
       return icon(
         '<circle cx="6" cy="5.5" r="2.5"/><path d="M1.75 13.5a4.25 4.25 0 0 1 8.5 0"/><path d="M11 3.25a2.25 2.25 0 0 1 0 4.5"/><path d="M12.25 9.5a4 4 0 0 1 2 4"/>',

@@ -1,4 +1,9 @@
-import { type RequestJsonResult, requestJson } from "@lorenzh/pulse-contract";
+import {
+  type RequestJsonResult,
+  type ResendRequest,
+  requestJson,
+  validateResendCommand,
+} from "@lorenzh/pulse-contract";
 import type { User } from "./account-store.ts";
 import { type CheckOutcome, checkOutcome } from "./check-outcome.ts";
 import {
@@ -125,4 +130,85 @@ export async function sendRuntimeWrite(
       return never;
     }
   }
+}
+
+/** The outcome of a resend create: the command to open, or the answer to show. */
+export type ResendAnswer =
+  | { kind: "created"; commandId: string; isLogged: boolean }
+  | { kind: "unknown"; status: number; message: string }
+  | { kind: "busy"; message: string }
+  | { kind: "refused"; answer: WriteAnswer };
+
+export const RESEND_BUSY_TEXT = "pulse-api cannot take a resend now";
+
+function resendAnswerOf(
+  deps: CheckWriteDeps,
+  write: RuntimeWrite,
+  result: RequestJsonResult<{ id: string }>,
+  user: User,
+): ResendAnswer {
+  // Decision 14: 202 is a new command, 200 a repeat or an open command; both name the command.
+  if (
+    result.ok &&
+    result.wire === "ok" &&
+    result.value !== undefined &&
+    (result.status === 200 || result.status === 202)
+  ) {
+    return {
+      kind: "created",
+      commandId: result.value.id,
+      isLogged: isLogged(deps, write, user, result.value.id),
+    };
+  }
+  const outcome = checkOutcome(result);
+  logOutcome(deps, write, user.id, outcome);
+  if (outcome.class === "refused" && outcome.status === 503) {
+    const reason = outcome.message === undefined ? "" : `: ${outcome.message.slice(0, 300)}`;
+    return { kind: "busy", message: `${RESEND_BUSY_TEXT}${reason}. Try again later.` };
+  }
+  if (outcome.class === "refused") {
+    return { kind: "refused", answer: runtimeRefused(outcome.status, outcome.message) };
+  }
+  // A saved status without a usable command is unknown too: the command id is not known.
+  isLogged(deps, write, user, "unknown");
+  const answer =
+    outcome.class === "unknown"
+      ? runtimeUnknown(outcome.status, outcome.isRedirect)
+      : runtimeUnknown(null, false);
+  return {
+    kind: "unknown",
+    status: answer.kind === "text" ? answer.status : 502,
+    message: answer.kind === "text" ? answer.message : RUNTIME_UNKNOWN_TEXT,
+  };
+}
+
+/**
+ * Decision 14: `POST /admin/notify/resends` without `If-Match`, never retried. A repeat with
+ * the same `requestId` after a lost answer gets the same command from pulse-api.
+ */
+export async function sendResend(
+  deps: CheckWriteDeps,
+  apiUrl: string,
+  request: ResendRequest,
+  user: User,
+): Promise<ResendAnswer> {
+  const write: RuntimeWrite = {
+    action: "notify-resend.create",
+    target: { kind: "notify-resend", channelId: request.channelId },
+    method: "POST",
+    url: `${apiUrl}/admin/notify/resends`,
+    revision: undefined,
+    body: JSON.stringify(request),
+  };
+  const result = await requestJson<{ id: string }>(write.url, {
+    method: "POST",
+    fetch: deps.fetch,
+    headers: { authorization: `Bearer ${deps.adminToken ?? ""}` },
+    validate: (raw) => validateResendCommand(raw),
+    timeoutMs: WRITE_TIMEOUT_MS,
+    body: write.body ?? "",
+    ...(deps.schedule === undefined ? {} : { schedule: deps.schedule }),
+  });
+  if (result.ok) logOutcome(deps, write, user.id, { class: "saved", revision: null });
+  return resendAnswerOf(deps, write, result, user);
 }

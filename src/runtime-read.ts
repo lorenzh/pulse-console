@@ -1,7 +1,13 @@
 import {
+  type AdminNotifyChannelsView,
+  type AdminNotifyFailedView,
   type AdminStatusSettingsView,
   type FetchJsonResult,
+  type ResendCommand,
+  validateAdminNotifyChannelsView,
+  validateAdminNotifyFailedView,
   validateAdminStatusSettingsView,
+  validateResendCommand,
 } from "@lorenzh/pulse-contract";
 import type { ApiCall, ApiFailure } from "./api-failure.ts";
 import { type ApiReadDeps, isReadWireAbsent, readApi, readFailureOf } from "./api-read.ts";
@@ -18,6 +24,13 @@ export type RuntimeReadProblem =
   | { kind: "failed"; failure: ApiFailure };
 
 export type StatusSettingsRead = RuntimeReadProblem | { kind: "ok"; view: AdminStatusSettingsView };
+export type NotifyChannelsRead = RuntimeReadProblem | { kind: "ok"; view: AdminNotifyChannelsView };
+export type NotifyFailedRead = RuntimeReadProblem | { kind: "ok"; view: AdminNotifyFailedView };
+/** A resend command read; `not-found` is a `404` for an unknown or expired command id. */
+export type ResendCommandRead =
+  | Exclude<RuntimeReadProblem, { kind: "old-api" }>
+  | { kind: "not-found" }
+  | { kind: "ok"; command: ResendCommand };
 
 function problemOf<T>(
   call: ApiCall,
@@ -54,4 +67,69 @@ export async function readStatusSettings(
   if (problem !== undefined) return problem;
   if (!outcome.result.ok) return { kind: "failed", failure: { kind: "invalid" } };
   return { kind: "ok", view: outcome.result.value };
+}
+
+async function readRuntime<T>(
+  call: ApiCall,
+  url: string,
+  validate: (raw: unknown) => { ok: true; value: T } | { ok: false; error: string },
+  apiUrl: string,
+  deps: ApiReadDeps,
+): Promise<RuntimeReadProblem | { kind: "ok"; value: T }> {
+  if (deps.token === undefined) return { kind: "no-token" };
+  const outcome = await readApi(url, validate, deps, `Bearer ${deps.token}`);
+  const problem = problemOf(call, outcome, apiUrl, deps);
+  if (problem !== undefined) return problem;
+  if (!outcome.result.ok) return { kind: "failed", failure: { kind: "invalid" } };
+  return { kind: "ok", value: outcome.result.value };
+}
+
+/**
+ * R2: `GET /admin/notify/channels`. Every database channel passes the admin record validator
+ * (`validateAdminNotifyChannelsView`), not only the service envelope. A `404` is an older api.
+ */
+export async function readNotifyChannels(
+  apiUrl: string,
+  deps: ApiReadDeps,
+): Promise<NotifyChannelsRead> {
+  const read = await readRuntime(
+    "notify-channels",
+    `${apiUrl}/admin/notify/channels`,
+    (raw) => validateAdminNotifyChannelsView(raw),
+    apiUrl,
+    deps,
+  );
+  return read.kind === "ok" ? { kind: "ok", view: read.value } : read;
+}
+
+/** R2: `GET /admin/notify/failed`, the failed list of the last report without the rest of it. */
+export async function readNotifyFailed(
+  apiUrl: string,
+  deps: ApiReadDeps,
+): Promise<NotifyFailedRead> {
+  const read = await readRuntime(
+    "notify-failed",
+    `${apiUrl}/admin/notify/failed`,
+    (raw) => validateAdminNotifyFailedView(raw),
+    apiUrl,
+    deps,
+  );
+  return read.kind === "ok" ? { kind: "ok", view: read.value } : read;
+}
+
+/** R2: `GET /admin/notify/resends/:id`; `commandId` must already match the command id rule. */
+export async function readResendCommand(
+  apiUrl: string,
+  commandId: string,
+  deps: ApiReadDeps,
+): Promise<ResendCommandRead> {
+  const read = await readRuntime(
+    "notify-resend",
+    `${apiUrl}/admin/notify/resends/${encodeURIComponent(commandId)}`,
+    (raw) => validateResendCommand(raw),
+    apiUrl,
+    deps,
+  );
+  if (read.kind === "old-api") return { kind: "not-found" };
+  return read.kind === "ok" ? { kind: "ok", command: read.value } : read;
 }

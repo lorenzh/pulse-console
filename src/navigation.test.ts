@@ -8,8 +8,8 @@ const labels = (role: ConsoleRole, registry = NAVIGATION) =>
   visibleNavigation(role, registry).map((e) => e.label);
 
 describe("navigation registry", () => {
-  test("has exactly 10 entries, 4 of them unavailable; Tokens, Probes and Status page are available", () => {
-    expect(NAVIGATION).toHaveLength(10);
+  test("has exactly 11 entries, 4 of them unavailable; Tokens, Probes, Status page and Notifications are available", () => {
+    expect(NAVIGATION).toHaveLength(11);
     expect(NAVIGATION.filter((e) => !e.isAvailable)).toHaveLength(4);
     expect(NAVIGATION.find((e) => e.id === "tokens")).toMatchObject({
       isAvailable: true,
@@ -25,13 +25,19 @@ describe("navigation registry", () => {
       isAvailable: true,
       minRole: "owner",
     });
+    expect(NAVIGATION.find((e) => e.id === "notifications")).toMatchObject({
+      label: "Notifications",
+      path: "/notifications",
+      isAvailable: true,
+      minRole: "owner",
+    });
   });
 
   test.each([
     ["viewer", ["Overview", "Checks"]],
     ["member", ["Overview", "Checks"]],
     ["admin", ["Overview", "Checks", "Tokens", "Probes", "Team"]],
-    ["owner", ["Overview", "Checks", "Tokens", "Probes", "Status page", "Team"]],
+    ["owner", ["Overview", "Checks", "Tokens", "Probes", "Status page", "Notifications", "Team"]],
   ] as const)("today %s sees its available entries", (role, expected) => {
     expect(labels(role)).toEqual([...expected]);
   });
@@ -63,6 +69,7 @@ describe("navigation registry", () => {
         "Tokens",
         "Probes",
         "Status page",
+        "Notifications",
         "Team",
         "Activity",
         "System",
@@ -89,6 +96,7 @@ describe("navigation registry", () => {
       '<a class="nav-item" href="/tokens"',
       '<a class="nav-item" href="/probes"',
       '<a class="nav-item" href="/status-page"',
+      '<a class="nav-item" href="/notifications"',
       '<a class="nav-item" href="/team"',
       '<a href="/account/security"',
     ]);
@@ -112,6 +120,7 @@ describe("navigationGroups", () => {
       "Tokens",
       "Probes",
       "Status page",
+      "Notifications",
       "Team",
       "Activity",
       "System",

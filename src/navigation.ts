@@ -8,6 +8,7 @@ export type NavId =
   | "tokens"
   | "probes"
   | "status-page"
+  | "notifications"
   | "team"
   | "activity"
   | "system";
@@ -45,6 +46,13 @@ export const NAVIGATION: readonly NavEntry[] = [
     id: "status-page",
     label: "Status page",
     path: "/status-page",
+    minRole: "owner",
+    isAvailable: true,
+  },
+  {
+    id: "notifications",
+    label: "Notifications",
+    path: "/notifications",
     minRole: "owner",
     isAvailable: true,
   },
