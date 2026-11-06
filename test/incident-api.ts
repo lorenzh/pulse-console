@@ -2,8 +2,10 @@
 // One Bun server on 127.0.0.1 port 0. It keeps public manual incidents in memory, validates
 // write bodies with the pinned contract and records every request.
 import {
+  type AdminMaintenanceWindow,
   type Incident,
   type ManualIncident,
+  validateAdminMaintenanceWindowInput,
   validateManualIncidentInput,
   validateManualIncidentUpdateInput,
 } from "@lorenzh/pulse-contract";
@@ -84,7 +86,14 @@ export type IncidentApiOptions = {
   results?: Record<string, unknown>;
   /** The clock of `at`, `createdAt` and `resolvedAt` of writes. */
   now: () => number;
+  /** Maintenance windows of `/admin/maintenance`; `phase` is computed from `now`. */
+  maintenance?: SeedWindow[];
+  /** Database windows whose id a file window also defines. */
+  shadowed?: SeedWindow[];
 };
+
+/** A seeded window: everything but the phase, which the fake computes. */
+export type SeedWindow = Omit<AdminMaintenanceWindow, "phase">;
 
 export type IncidentApi = {
   url: string;
@@ -102,6 +111,15 @@ export type IncidentApi = {
   resolveAfterNextRead: (id: number) => void;
   /** Holds every write until the promise resolves. */
   holdWrites: (gate: Promise<void> | undefined) => void;
+  /** The current database and file windows, and the shadowed database copies. */
+  windows: SeedWindow[];
+  shadowed: SeedWindow[];
+  /** The shared admin revision of `/admin/config` and `/admin/maintenance`. */
+  revision: () => string;
+  /** Changes the shared revision, as another client's write would. */
+  bumpRevision: () => void;
+  /** Runs once right before the answer of the next request of `method` and `path`. */
+  beforeAnswer: (method: string, path: string, fn: () => void | Promise<void>) => void;
   /** Answers one method and path prefix with a fixed reply instead of the state. */
   override: (method: string, prefix: string, reply: () => Response) => void;
   stop: () => void;
@@ -132,6 +150,9 @@ const PRIVATE_ITEM = {
 
 type State = {
   options: IncidentApiOptions;
+  windows: SeedWindow[];
+  shadowed: SeedWindow[];
+  revision: number;
   manual: ManualIncident[];
   nextId: number;
   isPrivateItem: boolean;
@@ -169,8 +190,36 @@ function results(state: State, checkId: string): Response {
   return list === undefined ? error(404, "check not found") : json(200, list);
 }
 
+function revisionOf(state: State): string {
+  // Revision 0 is the fixtures' REVISION; every saved write changes it.
+  const count = state.revision === 0 ? "" : state.revision.toString(16);
+  return `sha256-${count.padStart(64, "b")}`;
+}
+
+function phaseOf(window: SeedWindow, now: number): AdminMaintenanceWindow {
+  if (now < window.start) return { ...window, phase: "planned" };
+  return { ...window, phase: now < window.end ? "current" : "past" };
+}
+
+function maintenanceList(state: State): Response {
+  const now = state.options.now();
+  return json(200, {
+    revision: revisionOf(state),
+    windows: state.windows.map((w) => phaseOf(w, now)),
+    shadowed: state.shadowed.map((w) => phaseOf(w, now)),
+  });
+}
+
+function configOf(state: State): unknown {
+  const config = state.options.config;
+  return typeof config === "object" && config !== null
+    ? { ...config, revision: revisionOf(state) }
+    : config;
+}
+
 function handleRead(state: State, path: string, query: URLSearchParams): Response {
-  if (path === "/admin/config") return json(200, state.options.config);
+  if (path === "/admin/config") return json(200, configOf(state));
+  if (path === "/admin/maintenance") return maintenanceList(state);
   if (path === "/manual-incidents") return listManual(state);
   if (path === "/incidents") return automaticList(state, query);
   const one = /^\/manual-incidents\/(\d+)$/.exec(path);
@@ -225,7 +274,98 @@ function remove(state: State, id: number): Response {
   return new Response(null, { status: 204, headers: WIRE_HEADERS });
 }
 
-function handleWrite(state: State, method: string, path: string, body: unknown): Response {
+function saved(state: State, status: number, body: unknown): Response {
+  state.revision += 1;
+  const headers = { ...WIRE_HEADERS, etag: `"${revisionOf(state)}"` };
+  return body === undefined
+    ? new Response(null, { status, headers })
+    : new Response(JSON.stringify(body), { status, headers });
+}
+
+/** The If-Match rule of pulse-api's admin writes; undefined when it holds. */
+function ifMatchProblem(state: State, ifMatch: string | null): Response | undefined {
+  if (ifMatch === null) return error(428, "If-Match is required");
+  if (ifMatch === "*") return error(400, "If-Match must name a revision");
+  if (ifMatch !== `"${revisionOf(state)}"`) return error(412, "revision changed");
+  return undefined;
+}
+
+function missingWindow(state: State, id: string): Response {
+  const isFile = state.windows.some((w) => w.source === "file" && w.id === id);
+  return error(isFile ? 409 : 404, isFile ? "the checks file defines this id" : "not found");
+}
+
+function databaseIndex(state: State, id: string): number {
+  return state.windows.findIndex((w) => w.source === "database" && w.id === id);
+}
+
+function deleteWindow(state: State, id: string): Response {
+  const shadowedAt = state.shadowed.findIndex((w) => w.id === id);
+  if (shadowedAt >= 0) {
+    state.shadowed.splice(shadowedAt, 1);
+    return saved(state, 204, undefined);
+  }
+  const at = databaseIndex(state, id);
+  if (at < 0) return missingWindow(state, id);
+  state.windows.splice(at, 1);
+  return saved(state, 204, undefined);
+}
+
+function windowOf(body: unknown): SeedWindow | Response {
+  const checked = validateAdminMaintenanceWindowInput(body);
+  if (!checked.ok) return error(400, checked.error);
+  return { ...checked.value, index: null, source: "database" };
+}
+
+function createWindow(state: State, body: unknown): Response {
+  const window = windowOf(body);
+  if (window instanceof Response) return window;
+  const id = window.id;
+  if (state.windows.some((w) => w.id === id) || state.shadowed.some((w) => w.id === id)) {
+    return error(409, "a window with this id exists");
+  }
+  state.windows.push(window);
+  return saved(state, 201, phaseOf(window, state.options.now()));
+}
+
+function replaceWindow(state: State, id: string, body: unknown): Response {
+  const window = windowOf(body);
+  if (window instanceof Response) return window;
+  if (window.id !== id) return error(400, "id must equal the path id");
+  const at = databaseIndex(state, id);
+  if (at < 0) return missingWindow(state, id);
+  state.windows[at] = window;
+  return saved(state, 200, phaseOf(window, state.options.now()));
+}
+
+/** The maintenance writes: If-Match first, then the body, then the state. */
+function maintenanceWrite(
+  state: State,
+  method: string,
+  id: string | undefined,
+  body: unknown,
+  ifMatch: string | null,
+): Response {
+  const problem = ifMatchProblem(state, ifMatch);
+  if (problem !== undefined) return problem;
+  if (id === undefined) return createWindow(state, body);
+  return method === "DELETE" ? deleteWindow(state, id) : replaceWindow(state, id, body);
+}
+
+function handleWrite(
+  state: State,
+  method: string,
+  path: string,
+  body: unknown,
+  ifMatch: string | null,
+): Response {
+  if (method === "POST" && path === "/admin/maintenance") {
+    return maintenanceWrite(state, method, undefined, body, ifMatch);
+  }
+  const window = /^\/admin\/maintenance\/([^/]+)$/.exec(path);
+  if (window?.[1] !== undefined && (method === "PUT" || method === "DELETE")) {
+    return maintenanceWrite(state, method, decodeURIComponent(window[1]), body, ifMatch);
+  }
   if (method === "POST" && path === "/manual-incidents") return create(state, body);
   const match = /^\/manual-incidents\/(\d+)(\/updates|\/resolve)?$/.exec(path);
   const id = Number(match?.[1] ?? "0");
@@ -249,10 +389,14 @@ function parsed(text: string): unknown {
 export function startIncidentApi(options: IncidentApiOptions): IncidentApi {
   const seen: IncidentApiSeen[] = [];
   const overrides = new Map<string, () => Response>();
+  const hooks = new Map<string, () => void | Promise<void>>();
   let writeGate: Promise<void> | undefined;
   const state: State = {
     options,
     manual: [...(options.manual ?? [])],
+    windows: [...(options.maintenance ?? [])],
+    shadowed: [...(options.shadowed ?? [])],
+    revision: 0,
     nextId: Math.max(0, ...(options.manual ?? []).map((m) => m.id)) + 1,
     isPrivateItem: false,
     resolveAfterRead: new Set(),
@@ -265,6 +409,12 @@ export function startIncidentApi(options: IncidentApiOptions): IncidentApi {
       const isWrite = req.method !== "GET" && req.method !== "HEAD";
       const body = isWrite ? parsed(await req.text()) : undefined;
       seen.push({ method: req.method, path: url.pathname, query: url.search, body });
+      const hookKey = `${req.method} ${url.pathname}`;
+      const hook = hooks.get(hookKey);
+      if (hook !== undefined) {
+        hooks.delete(hookKey);
+        await hook();
+      }
       for (const [key, reply] of overrides) {
         const [method, prefix] = key.split(" ");
         if (method === req.method && prefix !== undefined && url.pathname.startsWith(prefix)) {
@@ -277,7 +427,7 @@ export function startIncidentApi(options: IncidentApiOptions): IncidentApi {
       }
       if (!isWrite) return handleRead(state, url.pathname, url.searchParams);
       if (writeGate !== undefined) await writeGate;
-      return handleWrite(state, req.method, url.pathname, body);
+      return handleWrite(state, req.method, url.pathname, body, req.headers.get("if-match"));
     },
   });
   const count = (method: string, prefix: string): number =>
@@ -289,6 +439,15 @@ export function startIncidentApi(options: IncidentApiOptions): IncidentApi {
     count,
     reads: () => seen.filter((s) => s.method === "GET").length,
     writes: () => seen.filter((s) => ["POST", "PUT", "DELETE"].includes(s.method)).length,
+    windows: state.windows,
+    shadowed: state.shadowed,
+    revision: () => revisionOf(state),
+    bumpRevision: () => {
+      state.revision += 1;
+    },
+    beforeAnswer: (method, path, fn) => {
+      hooks.set(`${method} ${path}`, fn);
+    },
     setPrivateItem: (isOn) => {
       state.isPrivateItem = isOn;
     },

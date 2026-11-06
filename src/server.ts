@@ -61,6 +61,7 @@ import {
 } from "./http-context.ts";
 import { incidentRoutes } from "./incident-routes.ts";
 import { postInvite, postReset, sendInviteForm, sendResetForm } from "./link-routes.ts";
+import { maintenanceRoutes } from "./maintenance-routes.ts";
 import type { PathLabel } from "./metrics.ts";
 import type { NavId } from "./navigation.ts";
 import { overviewView } from "./overview.ts";
@@ -1159,6 +1160,7 @@ function protectedRoutesOf(deps: ConsoleServerDeps): Map<string, ProtectedRoute>
   for (const route of teamRoutes(deps)) routes.set(route.path, route);
   for (const route of checkRoutes(deps)) routes.set(route.path, route);
   for (const route of incidentRoutes(deps)) routes.set(route.path, route);
+  for (const route of maintenanceRoutes(deps)) routes.set(route.path, route);
   for (const route of tokenRoutes(deps)) routes.set(route.path, route);
   for (const route of probeRoutes(deps)) routes.set(route.path, route);
   for (const [key, route] of deps.testRoutes ?? []) {
