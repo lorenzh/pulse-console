@@ -312,7 +312,7 @@ describe("editor", () => {
       (m) => m[1],
     );
     // csrf, form_token and the 28 channel form fields.
-    expect(names.length).toBe(30);
+    expect(names).toHaveLength(30);
     expect(new Set(names).size).toBe(names.length);
   });
 
