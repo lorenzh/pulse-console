@@ -14,7 +14,37 @@ function definitionOf(channel: NotifyDatabaseChannelView): Record<string, unknow
   return Object.fromEntries(Object.entries(channel).filter(([key]) => !(key in stamps)));
 }
 
+const EMAIL_FORM = {
+  id: "mail",
+  type: "email",
+  smtp_host: "smtp.example.com",
+  smtp_port: "587",
+  smtp_client_name: "pulse.example.com",
+  from: "Pulse <pulse@example.com>",
+  to: "a@example.com",
+} as const;
+
 describe("parseChannelForm", () => {
+  test("the email control input stays valid", () => {
+    expect(parseChannelForm({ ...EMAIL_FORM }).isOk).toBe(true);
+  });
+
+  test("an smtp client name that is no host name is refused with the contract text", () => {
+    const parsed = parseChannelForm({ ...EMAIL_FORM, smtp_client_name: "pulse_console" });
+    expect(parsed.isOk).toBe(false);
+    expect(JSON.stringify(parsed)).toContain("channel.smtp.clientName: must be a host name");
+  });
+
+  test("a from address with trailing text is refused", () => {
+    const parsed = parseChannelForm({ ...EMAIL_FORM, from: "Ops <ops@example.test> trailing" });
+    expect(parsed.isOk).toBe(false);
+  });
+
+  test("a from address with spaces inside the angle brackets is accepted", () => {
+    const parsed = parseChannelForm({ ...EMAIL_FORM, from: "Ops < ops@example.test >" });
+    expect(parsed.isOk).toBe(true);
+  });
+
   test("an email channel keeps only its own fields and adds the env prefix", () => {
     const parsed = parseChannelForm({
       id: "mail",
