@@ -116,6 +116,41 @@ describe("notify reads", () => {
     expect(read.kind === "ok" && read.view.channels.map((c) => c.id)).toEqual(["a"]);
   });
 
+  const mailRecord = (from: string): Record<string, unknown> => ({
+    id: "mail",
+    type: "email",
+    smtp: { host: "smtp.test", port: 587 },
+    from,
+    to: ["ops@example.test"],
+    createdAt: 1,
+    updatedAt: 1,
+    source: "database",
+  });
+
+  test("a stored email record with spaces inside the angle brackets reads as stored", async () => {
+    api.reply(
+      "/admin/notify/channels",
+      jsonReply(notifyChannelsView({ channels: [mailRecord("Ops < ops@example.test >")] })),
+    );
+    const read = await readNotifyChannels(api.url, deps);
+    expect(read.kind).toBe("ok");
+    const channel = read.kind === "ok" ? read.view.channels[0] : undefined;
+    expect(channel !== undefined && "from" in channel && channel.from).toBe(
+      "Ops < ops@example.test >",
+    );
+  });
+
+  test("a stored email record with trailing text after the address is an invalid answer", async () => {
+    api.reply(
+      "/admin/notify/channels",
+      jsonReply(notifyChannelsView({ channels: [mailRecord("Ops <ops@example.test> trailing")] })),
+    );
+    expect(await readNotifyChannels(api.url, deps)).toEqual({
+      kind: "failed",
+      failure: { kind: "invalid" },
+    });
+  });
+
   test("a record with a secret value field is an invalid answer", async () => {
     const view = notifyChannelsView({ channels: [webhookChannel("a", { secret: "s" })] });
     api.reply("/admin/notify/channels", jsonReply(view));
