@@ -22,6 +22,13 @@ export type PeopleAction =
   | "token.create"
   | "token.rotate"
   | "token.revoke"
+  | "manual-incident.create"
+  | "manual-incident.update"
+  | "manual-incident.resolve"
+  | "manual-incident.delete"
+  | "maintenance.create"
+  | "maintenance.replace"
+  | "maintenance.delete"
   | "status-settings.replace"
   | "notify-channel.create"
   | "notify-channel.replace"
@@ -44,6 +51,10 @@ export type PeopleEvent = {
     | { kind: "check"; id: string }
     /** A pulse-api token: `target_name` is its id, or `unknown` when the answer had none. */
     | { kind: "token"; id: string | undefined }
+    /** A public manual incident: `target_name` is its id, or `unknown` when the answer had none. */
+    | { kind: "incident"; id: number | undefined }
+    /** A database maintenance window: `target_name` is its id. */
+    | { kind: "maintenance"; id: string }
     /** The status page settings of pulse-api: one document, no id. */
     | { kind: "status-settings" }
     /** A database notify channel: `target_name` is the channel id. */
@@ -93,6 +104,10 @@ function targetColumns(
       return ["check", null, null, target.id];
     case "token":
       return ["token", null, null, target.id ?? "unknown"];
+    case "incident":
+      return ["incident", null, null, target.id === undefined ? "unknown" : String(target.id)];
+    case "maintenance":
+      return ["maintenance", null, null, target.id];
     case "status-settings":
       return ["status-settings", null, null, null];
     case "notify-channel":

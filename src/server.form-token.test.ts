@@ -20,8 +20,10 @@ import { selfToken } from "../test/token-fixtures.ts";
 import { type AccountStore, createAccountStore } from "./account-store.ts";
 import { openDatabase } from "./database.ts";
 import { createFactorStore } from "./factor-store.ts";
+import { MAX_INCIDENT_FORM_BYTES } from "./forms.ts";
 import { createMetrics, type Metrics } from "./metrics.ts";
 import { createCredentialVerifier, PASSWORD_HASH_OPTIONS } from "./passwords.ts";
+import type { PageRequest, ProtectedRoute } from "./protected-route.ts";
 import { createConsoleServer, listen } from "./server.ts";
 import { createSetupGate } from "./setup-code.ts";
 import { createTeamStore } from "./team-store.ts";
@@ -740,5 +742,137 @@ describe("form tokens on protected routes", () => {
     }
     expect((await postForm(c, BUSY, busyBody(token))).status).toBe(200);
     expect(recorder.actions).toHaveLength(1);
+  });
+});
+
+describe("list fields on protected routes", () => {
+  const LISTS = "/__test/lists";
+  type Seen = { fields: PageRequest["fields"]; lists: PageRequest["lists"] }[];
+
+  async function listConsole(role: "viewer" | "member" = "member"): Promise<{
+    c: SignedInConsole;
+    seen: Seen;
+  }> {
+    const seen: Seen = [];
+    const route: ProtectedRoute = {
+      path: LISTS,
+      methods: ["GET", "POST"],
+      requiredRole: "member",
+      knownFields: ["title"],
+      listFields: { component: 3 },
+      maxFormBytes: MAX_INCIDENT_FORM_BYTES,
+      handle: (request) => {
+        seen.push({ fields: request.fields, lists: request.lists });
+        const token = request.issueFormToken(LISTS);
+        return Promise.resolve({
+          kind: "page",
+          status: 200,
+          title: "Lists",
+          body: `<form method="post" action="${LISTS}"><input type="hidden" name="form_token" value="${token}"></form>`,
+        });
+      },
+    };
+    const c = await startSignedInConsole({
+      apiUrl: "http://127.0.0.1:9",
+      testRoutes: new Map([[LISTS, route]]),
+      roleOf: () => role,
+    });
+    cleanups.push(() => c.close());
+    return { c, seen };
+  }
+
+  function postRaw(c: SignedInConsole, body: string, origin = c.base): Promise<Reply> {
+    return fetch(c.base + LISTS, {
+      method: "POST",
+      redirect: "manual",
+      headers: { cookie: c.cookie, origin, "content-type": "application/x-www-form-urlencoded" },
+      body,
+    }).then(async (res) => ({ status: res.status, headers: res.headers, body: await res.text() }));
+  }
+
+  async function tokenOfLists(c: SignedInConsole): Promise<string> {
+    return formTokenOf((await getPage(c, LISTS)).body, LISTS);
+  }
+
+  test("GET and HEAD give empty lists; a POST gets its ordered distinct values", async () => {
+    const { c, seen } = await listConsole();
+    const token = await tokenOfLists(c);
+    expect(seen[0]).toEqual({ fields: {}, lists: {} });
+    const head = await fetch(c.base + LISTS, { method: "HEAD", headers: { cookie: c.cookie } });
+    expect(head.status).toBe(200);
+    expect(seen[1]).toEqual({ fields: {}, lists: {} });
+    const body = `csrf=${SESSION_CSRF}&form_token=${token}&component=web&title=T&component=db`;
+    const res = await postRaw(c, body);
+    expect(res.status).toBe(200);
+    expect(seen[2]?.lists).toEqual({ component: ["web", "db"] });
+    expect(seen[2]?.fields.title).toBe("T");
+  });
+
+  const refused: Array<[string, string]> = [
+    ["one list value twice", "component=web&component=web"],
+    ["more list values than the limit", "component=a&component=b&component=c&component=d"],
+    ["a repeated single field", "title=a&title=b"],
+    ["a repeated csrf", `csrf=${SESSION_CSRF}`],
+    ["a repeated form_token", "form_token=x"],
+  ];
+  for (const [name, extra] of refused) {
+    test(`${name} answers 400 before the handler and keeps the token`, async () => {
+      const { c, seen } = await listConsole();
+      const token = await tokenOfLists(c);
+      const res = await postRaw(c, `csrf=${SESSION_CSRF}&form_token=${token}&${extra}`);
+      expect(res.status).toBe(400);
+      expect(res.body).toBe("repeated form field\n");
+      expect(seen).toHaveLength(1);
+      const ok = await postRaw(c, `csrf=${SESSION_CSRF}&form_token=${token}&component=a`);
+      expect(ok.status).toBe(200);
+    });
+  }
+
+  test("the order holds: Origin 403, content type 415, size 413, list 400, CSRF 403", async () => {
+    const { c, seen } = await listConsole();
+    const token = await tokenOfLists(c);
+    const twice = `form_token=${token}&component=a&component=a`;
+    expect((await postRaw(c, `csrf=wrong&${twice}`, "http://evil.example")).status).toBe(403);
+    const json = await fetch(c.base + LISTS, {
+      method: "POST",
+      headers: { cookie: c.cookie, origin: c.base, "content-type": "application/json" },
+      body: `csrf=wrong&${twice}`,
+    });
+    expect(json.status).toBe(415);
+    const big = `csrf=wrong&${twice}&pad=${"x".repeat(MAX_INCIDENT_FORM_BYTES)}`;
+    expect((await postRaw(c, big)).status).toBe(413);
+    expect((await postRaw(c, `csrf=wrong&${twice}`)).status).toBe(400);
+    const csrf = await postRaw(c, `csrf=wrong&form_token=${token}&component=a`);
+    expect(csrf.status).toBe(403);
+    expect(csrf.body).toContain("Request refused");
+    expect(seen).toHaveLength(1);
+  });
+
+  test("a body within the route's 32768-byte limit is read", async () => {
+    const { c, seen } = await listConsole();
+    const token = await tokenOfLists(c);
+    const head = `csrf=${SESSION_CSRF}&form_token=${token}&title=`;
+    const res = await postRaw(c, head + "x".repeat(MAX_INCIDENT_FORM_BYTES - head.length));
+    expect(res.status).toBe(200);
+    expect(seen).toHaveLength(2);
+  });
+
+  test("a Viewer's list POST is 403 after CSRF, before the handler and the token", async () => {
+    const { c, seen } = await listConsole("viewer");
+    const res = await postRaw(c, `csrf=${SESSION_CSRF}&form_token=x&component=a&component=b`);
+    expect(res.status).toBe(403);
+    expect(res.body).toContain("Access denied");
+    expect(seen).toHaveLength(0);
+  });
+
+  test("a replayed list POST is 409 Already submitted without a second handler run", async () => {
+    const { c, seen } = await listConsole();
+    const token = await tokenOfLists(c);
+    const body = `csrf=${SESSION_CSRF}&form_token=${token}&component=a&component=b`;
+    expect((await postRaw(c, body)).status).toBe(200);
+    const replay = await postRaw(c, body);
+    expect(replay.status).toBe(409);
+    expect(replay.body).toContain("Already submitted");
+    expect(seen).toHaveLength(2);
   });
 });

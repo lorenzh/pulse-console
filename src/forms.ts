@@ -4,6 +4,10 @@ import { type PasswordProblem, passwordProblem } from "./passwords.ts";
 export const MAX_FORM_BYTES = 8192;
 /** Decision 9: the form limit of `POST /checks/new` and `POST /checks/edit` only. */
 export const MAX_CHECK_FORM_BYTES = 524288;
+/** The form limit of the incident composer, update and resolve forms. */
+export const MAX_INCIDENT_FORM_BYTES = 32768;
+/** The form limit of the maintenance create and edit forms. */
+export const MAX_MAINTENANCE_FORM_BYTES = 131072;
 const MAX_API_URL_LENGTH = 2048;
 const WHITESPACE_OR_CONTROL = /[\s\p{Cc}]/u;
 const CONTROL = /\p{Cc}/u;
@@ -17,12 +21,33 @@ export function isFormContentType(header: string | undefined): boolean {
 
 export type FormFields<K extends string> = Partial<Record<K, string>>;
 
-export type ParsedForm<K extends string> =
-  | { isOk: true; fields: FormFields<K> }
-  | { isOk: false; repeated: K };
+/** List fields of a form: the values of each named field in body order. */
+export type FormLists = Readonly<Partial<Record<string, readonly string[]>>>;
 
-/** Reads the known fields of a form body. A repeated known field fails; unknown ones are ignored. */
-export function parseForm<K extends string>(body: string, known: readonly K[]): ParsedForm<K> {
+export type ParsedForm<K extends string> =
+  | { isOk: true; fields: FormFields<K>; lists: FormLists }
+  | { isOk: false; repeated: string };
+
+/** Field name to the most values that the field may carry. */
+export type ListLimits = Readonly<Record<string, number>>;
+
+/** The values of one list field, or undefined when over its limit or a value repeats. */
+function listOf(params: URLSearchParams, name: string, limit: number): string[] | undefined {
+  const values = params.getAll(name);
+  if (values.length > limit || new Set(values).size !== values.length) return undefined;
+  return values;
+}
+
+/**
+ * Reads the known fields and the list fields of a form body. A repeated known field fails; a
+ * list field fails over its limit or with one value twice; unknown fields are ignored. A known
+ * name is never a list, so `csrf` and `form_token` stay single fields.
+ */
+export function parseForm<K extends string>(
+  body: string,
+  known: readonly K[],
+  listLimits: ListLimits = {},
+): ParsedForm<K> {
   const params = new URLSearchParams(body);
   const fields: FormFields<K> = {};
   for (const name of known) {
@@ -30,7 +55,15 @@ export function parseForm<K extends string>(body: string, known: readonly K[]): 
     if (values.length > 1) return { isOk: false, repeated: name };
     if (values.length === 1) fields[name] = values[0];
   }
-  return { isOk: true, fields };
+  const knownNames: ReadonlySet<string> = new Set(known);
+  const lists: Partial<Record<string, readonly string[]>> = {};
+  for (const [name, limit] of Object.entries(listLimits)) {
+    if (knownNames.has(name)) continue;
+    const values = listOf(params, name, limit);
+    if (values === undefined) return { isOk: false, repeated: name };
+    lists[name] = values;
+  }
+  return { isOk: true, fields, lists };
 }
 
 export type ApiUrlCheck = { isOk: true; url: string } | { isOk: false; text: string };

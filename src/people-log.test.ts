@@ -4,7 +4,7 @@ import { chmodSync, closeSync, mkdtempSync, openSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDatabase } from "./database.ts";
-import { appendPeopleEvent, PeopleLogError } from "./people-log.ts";
+import { appendPeopleEvent, type PeopleEvent, PeopleLogError } from "./people-log.ts";
 
 const dirs: string[] = [];
 const dbs: Database[] = [];
@@ -318,6 +318,52 @@ test("check events keep the check id as target name and no target id", () => {
       target_name: "web",
       value: "unknown",
     },
+  ]);
+});
+
+test("incident and maintenance events store their id as target_name and no text", () => {
+  const db = fresh();
+  const actor = { kind: "user", person: OWNER } as const;
+  const events: PeopleEvent[] = [
+    { at: 30, actor, action: "manual-incident.create", target: { kind: "incident", id: 7 } },
+    {
+      at: 31,
+      actor,
+      action: "manual-incident.update",
+      target: { kind: "incident", id: undefined },
+      value: "unknown",
+    },
+    { at: 32, actor, action: "manual-incident.resolve", target: { kind: "incident", id: 7 } },
+    { at: 33, actor, action: "manual-incident.delete", target: { kind: "incident", id: 7 } },
+    {
+      at: 34,
+      actor,
+      action: "maintenance.create",
+      target: { kind: "maintenance", id: "db-upgrade" },
+      value: `sha256-${"a".repeat(64)}`,
+    },
+    {
+      at: 35,
+      actor,
+      action: "maintenance.replace",
+      target: { kind: "maintenance", id: "db-upgrade" },
+    },
+    { at: 36, actor, action: "maintenance.delete", target: { kind: "maintenance", id: "db-up" } },
+  ];
+  for (const event of events) appendPeopleEvent(db, event);
+  const columns: unknown[] = db
+    .query(
+      "SELECT action, target_kind, target_id, target_email, target_name, value FROM people_events ORDER BY id",
+    )
+    .values();
+  expect(columns).toEqual([
+    ["manual-incident.create", "incident", null, null, "7", null],
+    ["manual-incident.update", "incident", null, null, "unknown", "unknown"],
+    ["manual-incident.resolve", "incident", null, null, "7", null],
+    ["manual-incident.delete", "incident", null, null, "7", null],
+    ["maintenance.create", "maintenance", null, null, "db-upgrade", `sha256-${"a".repeat(64)}`],
+    ["maintenance.replace", "maintenance", null, null, "db-upgrade", null],
+    ["maintenance.delete", "maintenance", null, null, "db-up", null],
   ]);
 });
 

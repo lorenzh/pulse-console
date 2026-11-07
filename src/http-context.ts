@@ -14,7 +14,14 @@ import type { FetchLike } from "./connection-test.ts";
 import { readCookie, serializeCookie, serializeSessionCookie } from "./cookies.ts";
 import type { FactorStore } from "./factor-store.ts";
 import type { FormTokens } from "./form-tokens.ts";
-import { type FormFields, isFormContentType, MAX_FORM_BYTES, parseForm } from "./forms.ts";
+import {
+  type FormFields,
+  type FormLists,
+  isFormContentType,
+  type ListLimits,
+  MAX_FORM_BYTES,
+  parseForm,
+} from "./forms.ts";
 import type { Metrics } from "./metrics.ts";
 import { alreadySubmittedPage, messagePage } from "./pages.ts";
 import type { CredentialVerifier, HashPassword } from "./passwords.ts";
@@ -163,15 +170,19 @@ export function sendRefused(ctx: Ctx): void {
   sendHtml(ctx, 403, messagePage("Request refused", REFUSED));
 }
 
+/** The known fields and the list fields of a read form. */
+export type ReadForm<K extends string> = { fields: FormFields<K | "csrf">; lists: FormLists };
+
 /**
- * The POST order after the gate: Origin, content type, body size, repeated fields and the CSRF
- * token. It answers the first failure and returns undefined then.
+ * The POST order after the gate: Origin, content type, body size, repeated or list fields. It
+ * answers the first failure and returns undefined then.
  */
-export async function readFormFields<K extends string>(
+async function readForm<K extends string>(
   ctx: Ctx,
   known: readonly K[],
-  maxBytes: number = MAX_FORM_BYTES,
-): Promise<FormFields<K | "csrf"> | undefined> {
+  maxBytes: number,
+  listLimits: ListLimits,
+): Promise<ReadForm<K> | undefined> {
   const { req, deps } = ctx;
   const origin = expectedOrigin(deps.mode, req.headers.host, deps.publicOrigin);
   if (!isOriginAllowed(req.headers.origin, origin)) {
@@ -184,12 +195,38 @@ export async function readFormFields<K extends string>(
   }
   const body = await readBodyOrFail(ctx, maxBytes);
   if (body === undefined) return undefined;
-  const parsed = parseForm<K | "csrf">(body, [...known, "csrf"]);
+  const parsed = parseForm<K | "csrf">(body, [...known, "csrf"], listLimits);
   if (!parsed.isOk) {
     sendText(ctx, 400, "repeated form field\n");
     return undefined;
   }
-  return parsed.fields;
+  return { fields: parsed.fields, lists: parsed.lists };
+}
+
+/** `readForm` without list fields, for forms that check CSRF themselves. */
+export async function readFormFields<K extends string>(
+  ctx: Ctx,
+  known: readonly K[],
+  maxBytes: number = MAX_FORM_BYTES,
+): Promise<FormFields<K | "csrf"> | undefined> {
+  return (await readForm(ctx, known, maxBytes, {}))?.fields;
+}
+
+/** The POST order with list fields, then the CSRF token. */
+export async function readPostLists<K extends string>(
+  ctx: Ctx,
+  known: readonly K[],
+  expectedCsrf: string | undefined,
+  maxBytes: number = MAX_FORM_BYTES,
+  listLimits: ListLimits = {},
+): Promise<ReadForm<K> | undefined> {
+  const form = await readForm(ctx, known, maxBytes, listLimits);
+  if (form === undefined) return undefined;
+  if (!isCsrfTokenValid(form.fields.csrf, expectedCsrf)) {
+    sendRefused(ctx);
+    return undefined;
+  }
+  return form;
 }
 
 export async function readPostForm<K extends string>(
@@ -198,13 +235,7 @@ export async function readPostForm<K extends string>(
   expectedCsrf: string | undefined = cookieOf(ctx, "csrf"),
   maxBytes: number = MAX_FORM_BYTES,
 ): Promise<FormFields<K | "csrf"> | undefined> {
-  const fields = await readFormFields(ctx, known, maxBytes);
-  if (fields === undefined) return undefined;
-  if (!isCsrfTokenValid(fields.csrf, expectedCsrf)) {
-    sendRefused(ctx);
-    return undefined;
-  }
-  return fields;
+  return (await readPostLists(ctx, known, expectedCsrf, maxBytes))?.fields;
 }
 
 /** The current session that the gate admitted; a handler behind the gate always has one. */

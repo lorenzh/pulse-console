@@ -542,12 +542,27 @@ describe("/console.js", () => {
     );
     expectSecurityHeaders(res);
     const js = await res.text();
-    for (const part of ["data-busy-label", "aria-busy", "pageshow", "setTimeout"]) {
+    for (const part of [
+      "data-busy-label",
+      "aria-busy",
+      "pageshow",
+      "setTimeout",
+      "data-preview-form",
+      ".incident-preview",
+    ]) {
       expect(js).toContain(part);
     }
     for (const part of ["eval", "innerHTML", "fetch(", "XMLHttpRequest", "localStorage"]) {
       expect(js).not.toContain(part);
     }
+  });
+
+  test("the served script parses and keeps its regular expression on one line", async () => {
+    const { base } = await start();
+    const js = await (await fetch(`${base}/console.js`)).text();
+    expect(() => new Bun.Transpiler({ loader: "js" }).transformSync(js)).not.toThrow();
+    expect(js).toContain('message.value.replace(/\\r\\n?/g, "\\n")');
+    expect(js).not.toContain("\r");
   });
 
   test("HEAD has no body, POST is 405, and GET is counted under its own path", async () => {
