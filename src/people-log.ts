@@ -28,7 +28,12 @@ export type PeopleAction =
   | "manual-incident.delete"
   | "maintenance.create"
   | "maintenance.replace"
-  | "maintenance.delete";
+  | "maintenance.delete"
+  | "status-settings.replace"
+  | "notify-channel.create"
+  | "notify-channel.replace"
+  | "notify-channel.delete"
+  | "notify-resend.create";
 
 /** Email and name as they were at the time of the change. */
 export type PeoplePerson = { id: number; email: string; name: string };
@@ -49,7 +54,13 @@ export type PeopleEvent = {
     /** A public manual incident: `target_name` is its id, or `unknown` when the answer had none. */
     | { kind: "incident"; id: number | undefined }
     /** A database maintenance window: `target_name` is its id. */
-    | { kind: "maintenance"; id: string };
+    | { kind: "maintenance"; id: string }
+    /** The status page settings of pulse-api: one document, no id. */
+    | { kind: "status-settings" }
+    /** A database notify channel: `target_name` is the channel id. */
+    | { kind: "notify-channel"; id: string }
+    /** A resend: `target_name` is the channel id of the failed delivery. */
+    | { kind: "notify-resend"; channelId: string };
   fromRole?: ConsoleRole | undefined;
   toRole?: ConsoleRole | undefined;
   value?: string | undefined;
@@ -97,6 +108,12 @@ function targetColumns(
       return ["incident", null, null, target.id === undefined ? "unknown" : String(target.id)];
     case "maintenance":
       return ["maintenance", null, null, target.id];
+    case "status-settings":
+      return ["status-settings", null, null, null];
+    case "notify-channel":
+      return ["notify-channel", null, null, target.id];
+    case "notify-resend":
+      return ["notify-resend", null, null, target.channelId];
     default: {
       const unknown: never = target;
       return unknown;

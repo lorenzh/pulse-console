@@ -820,6 +820,8 @@ export const PRESET_CARDS = [
   ["checks", "Reads checks and creates, changes and deletes them."],
   ["incidents", "Reads checks and posts incidents."],
   ["full", "Reads and changes checks and posts incidents."],
+  ["status", "For pulse-status: reads the status page settings and reports what it applied."],
+  ["notify", "For pulse-notify: reads the notify channels, reports them and runs resends."],
 ] as const;
 
 export const PRESET_NOTE =
@@ -872,7 +874,7 @@ export async function assertPresetCards(page: Page, label: string): Promise<void
       };
     }),
   );
-  check(cards.length === 4, `${label}: ${cards.length} option cards, want 4`);
+  check(cards.length === 6, `${label}: ${cards.length} option cards, want 6`);
   PRESET_CARDS.forEach(([id, text], n) => {
     const card = cards[n];
     check(card !== undefined, `${label}: card ${n + 1} missing`);

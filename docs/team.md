@@ -8,35 +8,35 @@ The policy is `src/permissions.ts`. Every production page takes its required rol
 
 Y allowed, N denied. Every row with a Y is monotonic in viewer < member < admin < owner.
 
-| #   | Action id            | Role x action                                             | Viewer | Member | Admin | Owner |
-| --- | -------------------- | --------------------------------------------------------- | ------ | ------ | ----- | ----- |
-| 1   | `overview.view`      | View status, checks, incidents, maintenance               | Y      | Y      | Y     | Y     |
-| 2   | `check.write`        | Create and edit console checks, export                    | N      | Y      | Y     | Y     |
-| 3   | `check.delete`       | Delete console checks                                     | N      | N      | Y     | Y     |
-| 4   | `incident.write`     | Declare incidents, post updates, resolve manual incidents | N      | Y      | Y     | Y     |
-| 5   | `incident.delete`    | Delete manual incidents                                   | N      | N      | Y     | Y     |
-| 6   | `incident.edit-text` | Edit existing incident text                               | N      | N      | N     | N     |
-| 7   | `maintenance.create` | Plan maintenance                                          | N      | Y      | Y     | Y     |
-| 8   | `maintenance.edit`   | Edit a maintenance window                                 | N      | Y      | Y     | Y     |
-| 9   | `maintenance.delete` | Delete a maintenance window                               | N      | N      | Y     | Y     |
-| 10  | `settings.edit`      | Edit status and notify settings (not built)               | N      | N      | N     | Y     |
-| 11  | `token.write`        | Create, rotate, revoke tokens                             | N      | N      | Y     | Y     |
-| 12  | `probe.write`        | Add and rotate probe locations                            | N      | N      | Y     | Y     |
-| 13  | `activity.view`      | Activity log, System page                                 | N      | N      | Y     | Y     |
-| 14  | `invite.member`      | Invite members and viewers                                | N      | N      | Y     | Y     |
-| 15  | `invite.admin`       | Invite admins                                             | N      | N      | N     | Y     |
-| 16  | `remove.member`      | Remove a member or viewer                                 | N      | N      | Y     | Y     |
-| 17  | `remove.admin`       | Remove an admin                                           | N      | N      | N     | Y     |
-| 18  | `role.member-viewer` | Change role member <-> viewer                             | N      | N      | N     | Y     |
-| 19  | `role.admin`         | Change role to or from admin                              | N      | N      | N     | Y     |
-| 20  | `reset-link.member`  | Password reset link, member or viewer                     | N      | N      | Y     | Y     |
-| 21  | `reset-link.admin`   | Password reset link, admin                                | N      | N      | N     | Y     |
-| 22  | `reset-link.owner`   | Password reset, owner (container command only)            | N      | N      | N     | N     |
-| 23  | `2fa-reset.member`   | Reset 2FA of a member or viewer                           | N      | N      | Y     | Y     |
-| 24  | `2fa-reset.admin`    | Reset 2FA of an admin                                     | N      | N      | N     | Y     |
-| 25  | `owner.transfer`     | Transfer ownership                                        | N      | N      | N     | Y     |
-| 26  | `org.delete`         | Delete the organisation                                   | N      | N      | N     | N     |
-| 27  | `account.self`       | Own 2FA, password, sessions                               | Y      | Y      | Y     | Y     |
+| #   | Action id            | Role x action                                                                      | Viewer | Member | Admin | Owner |
+| --- | -------------------- | ---------------------------------------------------------------------------------- | ------ | ------ | ----- | ----- |
+| 1   | `overview.view`      | View status, checks, incidents, maintenance                                        | Y      | Y      | Y     | Y     |
+| 2   | `check.write`        | Create and edit console checks, export                                             | N      | Y      | Y     | Y     |
+| 3   | `check.delete`       | Delete console checks                                                              | N      | N      | Y     | Y     |
+| 4   | `incident.write`     | Declare incidents, post updates, resolve manual incidents                          | N      | Y      | Y     | Y     |
+| 5   | `incident.delete`    | Delete manual incidents                                                            | N      | N      | Y     | Y     |
+| 6   | `incident.edit-text` | Edit existing incident text                                                        | N      | N      | N     | N     |
+| 7   | `maintenance.create` | Plan maintenance                                                                   | N      | Y      | Y     | Y     |
+| 8   | `maintenance.edit`   | Edit a maintenance window                                                          | N      | Y      | Y     | Y     |
+| 9   | `maintenance.delete` | Delete a maintenance window                                                        | N      | N      | Y     | Y     |
+| 10  | `settings.edit`      | Edit status settings (`/status-page`) and notification channels (`/notifications`) | N      | N      | N     | Y     |
+| 11  | `token.write`        | Create, rotate, revoke tokens                                                      | N      | N      | Y     | Y     |
+| 12  | `probe.write`        | Add and rotate probe locations                                                     | N      | N      | Y     | Y     |
+| 13  | `activity.view`      | Activity log, System page                                                          | N      | N      | Y     | Y     |
+| 14  | `invite.member`      | Invite members and viewers                                                         | N      | N      | Y     | Y     |
+| 15  | `invite.admin`       | Invite admins                                                                      | N      | N      | N     | Y     |
+| 16  | `remove.member`      | Remove a member or viewer                                                          | N      | N      | Y     | Y     |
+| 17  | `remove.admin`       | Remove an admin                                                                    | N      | N      | N     | Y     |
+| 18  | `role.member-viewer` | Change role member <-> viewer                                                      | N      | N      | N     | Y     |
+| 19  | `role.admin`         | Change role to or from admin                                                       | N      | N      | N     | Y     |
+| 20  | `reset-link.member`  | Password reset link, member or viewer                                              | N      | N      | Y     | Y     |
+| 21  | `reset-link.admin`   | Password reset link, admin                                                         | N      | N      | N     | Y     |
+| 22  | `reset-link.owner`   | Password reset, owner (container command only)                                     | N      | N      | N     | N     |
+| 23  | `2fa-reset.member`   | Reset 2FA of a member or viewer                                                    | N      | N      | Y     | Y     |
+| 24  | `2fa-reset.admin`    | Reset 2FA of an admin                                                              | N      | N      | N     | Y     |
+| 25  | `owner.transfer`     | Transfer ownership                                                                 | N      | N      | N     | Y     |
+| 26  | `org.delete`         | Delete the organisation                                                            | N      | N      | N     | N     |
+| 27  | `account.self`       | Own 2FA, password, sessions                                                        | Y      | Y      | Y     | Y     |
 
 Two console actions name where a row's rule applies: `team.view` (the Team page, Admin and Owner) and `team.require-2fa` (the organisation-wide 2FA switch, Owner only).
 

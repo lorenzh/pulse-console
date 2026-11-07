@@ -22,7 +22,19 @@ import {
   webResults,
   webState,
 } from "../test/check-fixtures.ts";
-import { checkWithState, emptyConfig, jsonReply, startFakeApi } from "../test/fake-api.ts";
+import {
+  checkWithState,
+  emptyConfig,
+  jsonReply,
+  NOTIFY_REVISION,
+  notifyChannelsView,
+  notifyReport,
+  STATUS_REVISION,
+  startFakeApi,
+  statusSettingsView,
+  WIRE_HEADERS,
+  webhookChannel,
+} from "../test/fake-api.ts";
 import {
   type ConfirmTargetHolder,
   createFixtureRoutes,
@@ -383,7 +395,7 @@ async function closedOrigin(): Promise<string> {
 
 async function overviewText(page: Page, base: string): Promise<string> {
   await page.goto(`${base}/`);
-  return (await page.locator("main").textContent()) ?? "";
+  return (await page.locator("body").textContent()) ?? "";
 }
 
 /** Each failure kind through `/`, `readOverview` and the real `fetchJson`, then recovery. */
@@ -702,6 +714,8 @@ async function checkFocus(env: Env, browser: Browser): Promise<void> {
     "Maintenance",
     "Tokens",
     "Probes",
+    "Status page",
+    "Notifications",
     "Team",
     "Account security",
     "Sign out",
@@ -754,7 +768,7 @@ async function checkMobileNavIcons(env: Env, browser: Browser): Promise<void> {
           : `${r.width}x${r.height} icon ${r.left}-${r.right},${r.top}-${r.bottom} label ${label.left},${label.top}-${label.bottom}`;
       }),
     );
-    assert(icons.length === 7, `mobile nav ${colorScheme}: ${icons.length} items`);
+    assert(icons.length === 9, `mobile nav ${colorScheme}: ${icons.length} items`);
     assert(
       icons.every((x) => x === "ok"),
       `mobile nav ${colorScheme}: icons ${icons.join(",")}`,
@@ -796,6 +810,8 @@ async function checkMobileNavFocusAt(env: Env, browser: Browser, width: number):
     "Maintenance",
     "Tokens",
     "Probes",
+    "Status page",
+    "Notifications",
     "Team",
   ]) {
     await page.keyboard.press("Tab");
@@ -1314,6 +1330,134 @@ async function assertQuorumText(page: Page, url: string, isHeartbeat: boolean): 
   );
 }
 
+type TabStop = { key: string; style: string; width: string; inForm: boolean };
+
+/** The focused element as one stop: a radio by name and value, a summary or button by text. */
+async function focusedStop(page: Page): Promise<TabStop> {
+  return page.evaluate(() => {
+    const el = document.activeElement;
+    if (!(el instanceof HTMLElement)) return { key: "", style: "", width: "", inForm: false };
+    const style = getComputedStyle(el);
+    const name = el.getAttribute("name") ?? "";
+    const text = el.textContent?.trim() ?? "";
+    let key = name;
+    if (el instanceof HTMLInputElement && el.type === "radio") key = `${name}=${el.value}`;
+    else if (el.tagName === "SUMMARY") key = `summary:${text}`;
+    else if (el.tagName === "BUTTON") key = `button:${text}`;
+    return {
+      key,
+      style: style.outlineStyle,
+      width: style.outlineWidth,
+      inForm: el.closest("form.check-editor") !== null,
+    };
+  });
+}
+
+/** Rows 0 to 4 of the free header rows, written from the template, never from the DOM. */
+function freeHeaderStops(from: number): string[] {
+  const stops: string[] = [];
+  for (let i = from; i < 5; i += 1)
+    stops.push(`header_${i}_name`, `header_${i}_kind=plain`, `header_${i}_value`);
+  return stops;
+}
+
+function assertStops(): string[] {
+  const stops = ["summary:JSON assertions"];
+  for (let i = 0; i < 10; i += 1)
+    stops.push(`assert_${i}_pointer`, `assert_${i}_mode=none`, `assert_${i}_equals`);
+  return stops;
+}
+
+const HTTP_TIMING = [
+  "availability_target",
+  "url",
+  "method",
+  "interval_ms",
+  "timeout_ms",
+  "retries",
+  "retry_delay_ms",
+  "latency_objective_ms",
+  "expected_status",
+  "keyword",
+];
+
+function createTabStops(): string[] {
+  return [
+    "id",
+    "name",
+    ...HTTP_TIMING,
+    "body",
+    "summary:Headers",
+    ...freeHeaderStops(0),
+    "summary:More rows",
+    ...assertStops(),
+    "button:Create check",
+  ];
+}
+
+function editTabStops(hasScript: boolean): string[] {
+  return [
+    "name",
+    ...HTTP_TIMING,
+    "body_intent=keep",
+    "body",
+    "summary:Headers",
+    "header_0_intent=keep",
+    "header_0_value",
+    "header_1_name",
+    "header_1_kind=env",
+    "header_1_value",
+    ...freeHeaderStops(2),
+    "summary:More rows",
+    ...(hasScript ? ["button:Copy"] : []),
+    ...assertStops(),
+    "button:Save check",
+  ];
+}
+
+/** Tab from the page top into the editor, then one Tab per expected stop, then out of the form. */
+async function assertEditorTabOrder(page: Page, url: string, expected: string[]): Promise<void> {
+  await page.goto(url);
+  let stop = await focusedStop(page);
+  for (let i = 0; i < 40 && !stop.inForm; i += 1) {
+    await page.keyboard.press("Tab");
+    stop = await focusedStop(page);
+  }
+  const seen: string[] = [];
+  for (const [i, key] of expected.entries()) {
+    if (i > 0) {
+      await page.keyboard.press("Tab");
+      stop = await focusedStop(page);
+    }
+    seen.push(stop.key);
+    assert(
+      stop.key === key && stop.inForm,
+      `${url}: Tab stop ${i} is "${stop.key}", expected "${key}"; seen ${seen.join(", ")}`,
+    );
+    assert(
+      stop.style === "solid" && stop.width === "2px",
+      `${url}: ${key} focus outline is ${stop.width} ${stop.style}`,
+    );
+  }
+  await page.keyboard.press("Tab");
+  assert(!(await focusedStop(page)).inForm, `${url}: Tab after Submit leaves the form`);
+}
+
+/** Every editor fits a 1280 px window: no sideways scroll and the form inside the viewport. */
+async function assertEditorFits(page: Page, url: string, label: string): Promise<void> {
+  await page.goto(url);
+  await assertFits(page, 1280, `${label} 1280px ${url}`);
+  const box = await page.evaluate(() => {
+    const rect = document.querySelector("form.check-editor")?.getBoundingClientRect();
+    return rect === undefined ? null : { left: rect.left, right: rect.right, width: rect.width };
+  });
+  if (box === null) throw new CheckError(`${label} ${url}: no form.check-editor`);
+  assert(
+    box.width > 0 && box.left >= 0 && box.right <= 1280 && box.width <= 1280,
+    `${label} ${url}: editor box ${box.left}..${box.right} fits 1280 px`,
+  );
+}
+
 function startChecksApi(): ReturnType<typeof startFakeApi> {
   const api = startFakeApi();
   replyChecks(api, []);
@@ -1413,7 +1557,7 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     await assertFits(page, 390, `${label} detail`);
     const pre = await page.locator("pre").first().textContent();
     assert(pre === HOST_LINE, `${label}: detail host line is the literal`);
-    const detailText = (await page.locator("main").textContent()) ?? "";
+    const detailText = (await page.locator("body").textContent()) ?? "";
     assert(
       detailText.includes("latency 1501ms over objective 500ms") &&
         !detailText.includes("1501.4197810000041"),
@@ -1449,6 +1593,9 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     }
     await page.setViewportSize({ width: 1280, height: 800 });
     for (const [url, isHeartbeat] of EDITORS) await assertQuorumText(page, base + url, isHeartbeat);
+    for (const [url] of EDITORS) await assertEditorFits(page, base + url, label);
+    await assertEditorTabOrder(page, `${base}/checks/new?type=http`, createTabStops());
+    await assertEditorTabOrder(page, `${base}/checks/edit?id=web`, editTabStops(hasScript));
     await page.goto(`${base}/checks/edit?id=web`);
     const editorPre = await page.locator("#editor-host-binding-line").textContent();
     assert(editorPre === HOST_LINE, `${label}: editor host line is the literal`);
@@ -1464,7 +1611,7 @@ async function checkScreensWith(browser: Browser, hasScript: boolean): Promise<v
     }
     assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
     ok(
-      `Checks, ${label}: entered through the Checks nav link, list and detail fit 390 px, the Checks table region scrolls by ArrowRight under its hint, literal host-binding${hasScript ? " and heartbeat copy" : " line selectable, copy hidden"}, fixed quorum or heartbeat rule on ${EDITORS.length} editors${hasScript ? ", axe 0 on list/detail/shadowed/delete/editors" : ""}, 0 CSP violations`,
+      `Checks, ${label}: entered through the Checks nav link, list and detail fit 390 px, the Checks table region scrolls by ArrowRight under its hint, literal host-binding${hasScript ? " and heartbeat copy" : " line selectable, copy hidden"}, fixed quorum or heartbeat rule on ${EDITORS.length} editors, ${EDITORS.length} editors fit 1280 px, Tab through the HTTP create and edit editors reaches each control with a 2px solid outline and leaves the form after Submit${hasScript ? ", axe 0 on list/detail/shadowed/delete/editors" : ""}, 0 CSP violations`,
     );
   } finally {
     await context.close();
@@ -2782,6 +2929,170 @@ async function checkProbesWith(browser: Browser, hasScript: boolean): Promise<vo
   }
 }
 
+/** Presses Tab until the focused button has this `value`. */
+async function tabToValue(page: Page, value: string): Promise<void> {
+  for (let i = 0; i < 200; i += 1) {
+    await page.keyboard.press("Tab");
+    const got = await page.evaluate(() =>
+      document.activeElement instanceof HTMLButtonElement ? document.activeElement.value : "",
+    );
+    if (got === value) return;
+  }
+  throw new CheckError(`Tab never reached the button ${value}`);
+}
+
+/** Presses the button `value` by keyboard and waits for the next page. */
+async function pressByKeyboard(page: Page, value: string): Promise<void> {
+  await page.locator("body").focus();
+  await tabToValue(page, value);
+  // The form posts to the same URL, so wait for the next load event, not the current state.
+  await Promise.all([page.waitForEvent("load"), page.keyboard.press("Enter")]);
+}
+
+async function hiddenOrderOf(page: Page): Promise<string> {
+  return (await page.locator('input[name="order"]').getAttribute("value")) ?? "";
+}
+
+/** R3: keyboard-only Reset order, Move down and Move up of 3 components, then Save. */
+async function checkStatusPageKeyboard(browser: Browser, hasScript: boolean): Promise<void> {
+  const env = await startEnv(0);
+  env.api.replyTo(
+    "GET",
+    "/admin/status/settings",
+    jsonReply(statusSettingsView({ componentOrder: ["cdn", "db", "web"] })),
+  );
+  env.api.replyTo("PUT", "/admin/status/settings", {
+    status: 200,
+    body: "{}",
+    headers: { ...WIRE_HEADERS, etag: `"${STATUS_REVISION}"` },
+  });
+  const components = ["web", "db", "cdn"].map((id) => ({
+    id,
+    name: id.toUpperCase(),
+    checkIds: ["web"],
+  }));
+  env.api.reply("/admin/config", jsonReply({ ...checkConfig, components }));
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+  });
+  const page = await newPage(context, violations);
+  try {
+    await signIn(page, env);
+    await page.goto(`${env.console.base}/status-page`);
+    // axeOn reloads the page, so it runs before the unsaved moves.
+    if (hasScript) await axeOn(page, page.url(), "/status-page");
+    assert((await hiddenOrderOf(page)) === "cdn,db,web", `${label}: stored order shown`);
+    await pressByKeyboard(page, "reset-order");
+    assert(
+      (await hiddenOrderOf(page)) === "web,db,cdn",
+      `${label}: Reset order lists the api order`,
+    );
+    await pressByKeyboard(page, "down:0");
+    assert((await hiddenOrderOf(page)) === "db,web,cdn", `${label}: Move down`);
+    await pressByKeyboard(page, "up:2");
+    assert((await hiddenOrderOf(page)) === "db,cdn,web", `${label}: Move up`);
+    await pressByKeyboard(page, "save");
+    const puts = env.api.seen.filter((s) => s.method === "PUT");
+    assert(puts.length === 1, `${label}: one PUT, got ${puts.length}`);
+    const sent = JSON.stringify(JSON.parse(puts[0]?.body ?? "{}"));
+    assert(sent === '{"componentOrder":["db","cdn","web"]}', `${label}: saved ${sent}`);
+    assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
+    ok(
+      `Status page, ${label}: keyboard-only Reset order, Move down and Move up saved ["db","cdn","web"]${hasScript ? ", axe 0" : ""}`,
+    );
+  } finally {
+    await context.close();
+    await env.console.close();
+    env.api.stop();
+  }
+}
+
+function notificationsApi(env: { api: ReturnType<typeof startFakeApi> }): void {
+  const report = notifyReport({
+    fileChannels: [{ source: "file", id: "ops", type: "slack", refs: ["PULSE_NOTIFY_SECRET_OPS"] }],
+    fileChannelsTotal: 1,
+    shadowedIds: ["old"],
+    rejected: [{ channelId: "b", reason: "channels[1]: must be at most 16384 bytes as JSON" }],
+  });
+  env.api.replyTo(
+    "GET",
+    "/admin/notify/channels",
+    jsonReply(
+      notifyChannelsView({
+        channels: [webhookChannel("a"), webhookChannel("b")],
+        shadowed: [webhookChannel("old")],
+        report,
+      }),
+    ),
+  );
+  env.api.replyTo("POST", "/admin/notify/channels", {
+    status: 201,
+    body: "{}",
+    headers: { ...WIRE_HEADERS, etag: `"${NOTIFY_REVISION}"` },
+  });
+  const failed = ["opened", "update"].map((event, i) => ({
+    channelId: "a",
+    key: `${i}:${event}`,
+    event,
+    isManual: i === 1,
+    failedAt: 1_700_000_000_000,
+    hasPayload: i === 0,
+  }));
+  env.api.replyTo(
+    "GET",
+    "/admin/notify/failed",
+    jsonReply({ state: "fresh", receivedAt: 1000, failed, failedTotal: 2 }),
+  );
+}
+
+/** R3: the notification pages pass axe, and a channel is created by keyboard only. */
+async function checkNotificationsWith(browser: Browser, hasScript: boolean): Promise<void> {
+  const env = await startEnv(0);
+  notificationsApi(env);
+  const label = hasScript ? "JavaScript on" : "JavaScript off";
+  const violations: string[] = [];
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    javaScriptEnabled: hasScript,
+  });
+  const page = await newPage(context, violations);
+  try {
+    await signIn(page, env);
+    for (const path of ["/notifications", "/notifications/failed", "/notifications/new"]) {
+      await page.goto(`${env.console.base}${path}`);
+      if (hasScript) await axeOn(page, page.url(), path);
+    }
+    await page.locator("#field-id").focus();
+    await page.keyboard.type("hook");
+    await page.locator("#field-url_env").focus();
+    await page.keyboard.type("HOOK");
+    await Promise.all([page.waitForEvent("load"), page.keyboard.press("Enter")]);
+    const posts = env.api.seen.filter((s) => s.method === "POST");
+    const summary = (await page.locator("body").textContent()) ?? "";
+    assert(
+      posts.length === 1,
+      `${label}: one POST, got ${posts.length}: ${page.url()} ${summary.slice(0, 300)}`,
+    );
+    const sent = JSON.stringify(JSON.parse(posts[0]?.body ?? "{}"));
+    assert(
+      sent === '{"id":"hook","type":"webhook","urlEnv":"PULSE_NOTIFY_SECRET_HOOK"}',
+      `${label}: created ${sent}`,
+    );
+    assert(page.url().endsWith("/notifications?saved=1"), `${label}: saved page ${page.url()}`);
+    assert(violations.length === 0, `${label}: CSP violations ${violations.join(" | ")}`);
+    ok(
+      `Notifications, ${label}: list, failed and editor${hasScript ? " axe 0" : ""}; keyboard create saved`,
+    );
+  } finally {
+    await context.close();
+    await env.console.close();
+    env.api.stop();
+  }
+}
+
 const HOSTILE_NAME = "<img src=x onerror=alert(1)>";
 const UNBROKEN_NAME = `Unbroken${"n".repeat(92)}`;
 const UNBROKEN_ID = `unbroken${"x".repeat(56)}`;
@@ -3253,6 +3564,10 @@ async function runChecks(): Promise<void> {
     await checkIncidentsWith(browser, false);
     await checkMaintenanceWith(browser, true);
     await checkMaintenanceWith(browser, false);
+    await checkStatusPageKeyboard(browser, true);
+    await checkStatusPageKeyboard(browser, false);
+    await checkNotificationsWith(browser, true);
+    await checkNotificationsWith(browser, false);
     // A console of its own: each check signs in with a fixture recovery code.
     const shellEnv = await startEnv(0);
     try {

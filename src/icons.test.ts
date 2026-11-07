@@ -12,6 +12,8 @@ test("every nav entry has its own 16 px icon without a style or data URI", () =>
     "maintenance",
     "tokens",
     "probes",
+    "status-page",
+    "notifications",
     "team",
     "activity",
     "system",
@@ -22,7 +24,7 @@ test("every nav entry has its own 16 px icon without a style or data URI", () =>
     expect(icon).toEndWith("</svg>");
     expect(icon).not.toMatch(/style|data:/);
   }
-  expect(new Set(icons).size).toBe(9);
+  expect(new Set(icons).size).toBe(11);
 });
 
 test("every callout kind has its own icon", () => {

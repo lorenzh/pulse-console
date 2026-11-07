@@ -16,7 +16,11 @@ export type ApiCall =
   | "manual-incidents"
   | "manual-incident"
   | "incidents"
-  | "maintenance";
+  | "maintenance"
+  | "status-settings"
+  | "notify-channels"
+  | "notify-failed"
+  | "notify-resend";
 
 /** A failed pulse-api read, without any upstream body, exception text or token. */
 export type ApiFailure =
@@ -92,6 +96,16 @@ export function apiFailureOf(
   }
 }
 
+const ADMIN_CALLS: ReadonlySet<ApiCall> = new Set<ApiCall>([
+  "tokens",
+  "self",
+  "token",
+  "status-settings",
+  "notify-channels",
+  "notify-failed",
+  "notify-resend",
+]);
+
 function httpText(call: ApiCall, status: number): string {
   if (status >= 300 && status < 400) {
     return `pulse-api answered with a redirect (${status}); redirects are not followed.`;
@@ -99,7 +113,7 @@ function httpText(call: ApiCall, status: number): string {
   if (status === 403 && (call === "config" || call === "export")) {
     return "The console token lacks the read or checks scope.";
   }
-  if (status === 403 && (call === "tokens" || call === "self" || call === "token")) {
+  if (status === 403 && ADMIN_CALLS.has(call)) {
     return "The console token lacks the admin scope.";
   }
   if (status === 429) {

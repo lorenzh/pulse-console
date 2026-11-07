@@ -26,6 +26,8 @@ describe("presets", () => {
       checks: "Reads checks and creates, changes and deletes them.",
       incidents: "Reads checks and posts incidents.",
       full: "Reads and changes checks and posts incidents.",
+      status: "For pulse-status: reads the status page settings and reports what it applied.",
+      notify: "For pulse-notify: reads the notify channels, reports them and runs resends.",
     });
     expect(ADMIN_PRESET_TEXT).toBe(
       "Manage checks, Post incidents and Full access can also create, rotate and revoke tokens with the same or fewer scopes, and read the audit log.",
@@ -38,6 +40,8 @@ describe("presets", () => {
       ["checks", "Manage checks", ["read", "checks", "admin"]],
       ["incidents", "Post incidents", ["read", "incidents", "admin"]],
       ["full", "Full access", ["read", "checks", "incidents", "admin"]],
+      ["status", "Status service", ["status"]],
+      ["notify", "Notify service", ["notify"]],
     ]);
   });
 
@@ -61,6 +65,15 @@ describe("presets", () => {
     expect(missingScope(["read", "incidents", "admin"], held)).toBe("incidents");
     expect(missingScope(["probe"], held)).toBe("checks");
     expect(missingScope(["probe"], ["read", "checks", "admin"])).toBeUndefined();
+  });
+
+  test("grant: the status and notify service presets need admin", () => {
+    expect(missingScope(["status"], ["read", "checks"])).toBe("admin");
+    expect(missingScope(["notify"], ["read", "checks"])).toBe("admin");
+    expect(missingScope(["status"], ["read", "admin"])).toBeUndefined();
+    expect(missingScope(["notify"], ["admin"])).toBeUndefined();
+    expect(accessText(["status"])).toBe("Status service");
+    expect(accessText(["notify"])).toBe("Notify service");
   });
 });
 
