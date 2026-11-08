@@ -12,5 +12,6 @@ pulse-console is the web console of pulse. It is a small web server that will ma
 
 Related pages in other repositories:
 
-- [pulse-api configuration](https://github.com/lorenzh/pulse-api/blob/main/docs/configuration.md), the service that the console will call, and the Compose variables of the stack.
+- [pulse-api configuration](https://github.com/lorenzh/pulse-api/blob/main/docs/configuration.md), the service that the console will call.
+- [pulse-deploy `full` setup](https://github.com/lorenzh/pulse-deploy/blob/main/full/README.md#variables): the Compose variables of the stack, in [`full/compose.yaml`](https://github.com/lorenzh/pulse-deploy/blob/main/full/compose.yaml).
 - [pulse architecture](https://github.com/lorenzh/pulse-meta/blob/main/docs/architecture.md).
