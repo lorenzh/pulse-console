@@ -39,6 +39,8 @@ A title with no letter, digit, punctuation mark or symbol (for example only spac
 
 Each form has a status-card preview. The server renders it after `Update preview` with zero writes; with JavaScript on, the console script updates the same parts as you type, without a request, storage or timer. The open preview shows only the newest update; the resolved preview shows all updates. Times are not part of the preview, and the container layout of the status page is not compared.
 
+While the title is empty, the server preview renders the title heading with `hidden`, and the script hides it again when you clear the title. Once the title has a character, the heading shows the raw title as text, outer spaces included. A title of only spaces or only `U+200B` counts as not empty. The resolve and update forms have no title field, so their preview keeps the stored title.
+
 ## Automatic shortcut
 
 An automatic incident links to `/incidents/new?from=<id>`. The composer preselects every component that holds that check. Publishing creates a manual incident and leaves the automatic one unchanged. A check id of `.` or `..` has no addressable results path, so the detail shows the unavailable-results text and reads no results.
