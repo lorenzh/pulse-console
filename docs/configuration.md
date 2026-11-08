@@ -98,9 +98,9 @@ The token value and the file content never appear in a log line, an error, `/met
 
 Unset: the start logs `warn` `PULSE_CONSOLE_SECRET_KEY_FILE is not set: authenticator enrolment and TOTP sign-in are unavailable`. Enrolment and a TOTP code then answer `503`; recovery codes still work. A seed that the key cannot open answers `500` (`The authenticator secret cannot be read. Sign in with a recovery code.`), logs `error` `authenticator secret cannot be decrypted` with `userId`, does not count as a failed guess and never changes the stored seed. Back up the database and the key file together.
 
-## In the pulse Compose stack
+## In the pulse-deploy `full` setup
 
-In pulse-api's `compose.yaml`, `PULSE_CONSOLE_PORT` is also the Compose variable for the host port. Compose does not pass `.env` values into the container, so the container always listens on the image default `8082`, and the host port `${PULSE_CONSOLE_PORT:-8082}` on `127.0.0.1` is mapped to it. Compose sets `PULSE_API_URL: http://api:3000`. See the [pulse-api configuration](https://github.com/lorenzh/pulse-api/blob/main/docs/configuration.md).
+The `full` setup of pulse-deploy starts the whole stack: [`full/compose.yaml`](https://github.com/lorenzh/pulse-deploy/blob/main/full/compose.yaml), described in [`full/README.md`](https://github.com/lorenzh/pulse-deploy/blob/main/full/README.md#variables). There `PULSE_CONSOLE_PORT` is also the Compose variable for the host port. `full` uses it only to interpolate the port mapping and does not pass it into the container. So the container listens on the image default `8082`, and the host port `${PULSE_CONSOLE_PORT:-8082}` on `127.0.0.1` is mapped to it. `full` sets `PULSE_API_URL: http://api:3000`. The api has no published host port; it is reachable only inside the Compose network.
 
 ## Image defaults
 
