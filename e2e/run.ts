@@ -2622,6 +2622,144 @@ async function incidentLivePreview(
   );
 }
 
+const TITLE_PART = '.incident-preview [data-part="title"]';
+
+/** The preview title heading: its text and whether it carries `hidden`. */
+async function titlePart(page: Page): Promise<{ text: string; isHidden: boolean }> {
+  const heading = page.locator(TITLE_PART);
+  return {
+    text: (await heading.textContent()) ?? "",
+    isHidden: (await heading.getAttribute("hidden")) !== null,
+  };
+}
+
+/** The preview parts without the title entry. */
+async function previewPartsBesideTitle(page: Page): Promise<string> {
+  const parts: unknown = JSON.parse(await previewParts(page));
+  if (!Array.isArray(parts)) return "";
+  return JSON.stringify(parts.filter((p) => !Array.isArray(p) || p[0] !== "title"));
+}
+
+async function assertTitleState(page: Page, want: string | null, label: string): Promise<void> {
+  const part = await titlePart(page);
+  const isVisible = await page.locator(TITLE_PART).isVisible();
+  if (want === null) {
+    assert(part.isHidden && !isVisible, `${label}: title heading hidden ${JSON.stringify(part)}`);
+    return;
+  }
+  assert(
+    !part.isHidden && isVisible && part.text === want,
+    `${label}: title heading visible with ${JSON.stringify(want)}, got ${JSON.stringify(part)}`,
+  );
+}
+
+async function axeDefault(page: Page, label: string): Promise<void> {
+  // All default rules on the whole page, unlike axeOn: empty-heading is not in AXE_TAGS,
+  // and axeOn navigates, which would reset the typed title.
+  const result = await new AxeBuilder({ page }).analyze();
+  const ids = result.violations.map((v) => v.id);
+  assert(ids.length === 0, `incident composer, ${label}: axe ${ids.join(", ")}`);
+}
+
+/** Fill the title and count the page requests that the fill sends. */
+async function fillTitleCounted(page: Page, value: string): Promise<number> {
+  let requests = 0;
+  const count = (): void => {
+    requests += 1;
+  };
+  page.on("request", count);
+  await page.fill('input[name="title"]', value);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  page.off("request", count);
+  return requests;
+}
+
+/** Submit Update preview past native validation and require exactly one answered POST. */
+async function postPreview(page: Page, base: string, label: string): Promise<void> {
+  let posts = 0;
+  const count = (request: { method(): string }): void => {
+    if (request.method() === "POST") posts += 1;
+  };
+  const button = page.getByRole("button", { name: "Update preview", exact: true });
+  await button.evaluate((b) => {
+    if (b instanceof HTMLButtonElement && b.form !== null) b.form.noValidate = true;
+  });
+  page.on("request", count);
+  const [response] = await Promise.all([
+    page
+      .waitForResponse(
+        (r) => r.request().method() === "POST" && r.url() === `${base}/incidents/new`,
+        { timeout: 5000 },
+      )
+      .catch(() => null),
+    button.click(),
+  ]);
+  await page.waitForLoadState("load");
+  page.off("request", count);
+  assert(posts === 1 && response !== null, `${label}: expected 1 POST, got ${posts}`);
+}
+
+/** The empty title hides its heading, live and on the server, with all default axe rules. */
+async function incidentEmptyTitle(
+  page: Page,
+  base: string,
+  api: IncidentApi,
+  violations: string[],
+): Promise<void> {
+  await page.goto(`${base}/incidents/new`);
+  assert((await page.inputValue('input[name="title"]')) === "", "empty title: input is empty");
+  await axeDefault(page, "empty title");
+  await assertTitleState(page, null, "empty title");
+  ok("incident composer, empty title: axe default rules 0 violations");
+  const before = api.writes();
+  const rest = await previewPartsBesideTitle(page);
+  let requests = await fillTitleCounted(page, "A");
+  await assertTitleState(page, "A", "title A");
+  await axeDefault(page, "filled title");
+  requests += await fillTitleCounted(page, "");
+  await assertTitleState(page, null, "cleared title");
+  await axeDefault(page, "cleared title");
+  requests += await fillTitleCounted(page, "<b>B</b> ");
+  await assertTitleState(page, "<b>B</b> ", "refilled title");
+  assert((await page.locator(".incident-preview b").count()) === 0, "refilled title: inert");
+  assert(requests === 0, `empty title steps: ${requests} requests`);
+  assert(api.writes() === before, "empty title steps: 0 writes");
+  assert((await previewPartsBesideTitle(page)) === rest, "empty title steps: other parts kept");
+  assert(violations.length === 0, `empty title steps: ${violations.join(" | ")}`);
+  ok("incident composer: title A visible, cleared hidden, <b>B</b> visible as text, 0 requests");
+  await page.fill('input[name="title"]', "");
+  await page.dispatchEvent('input[name="title"]', "change");
+  const live = await previewParts(page);
+  await postPreview(page, base, "empty title Update preview");
+  const server = await previewParts(page);
+  assert(server === live, `empty title: live ${live} != server ${server}`);
+  await assertTitleState(page, null, "empty title after Update preview");
+  assert(api.writes() === before, "empty title Update preview: 0 writes");
+  ok("incident composer, empty title: Update preview equals the live preview, heading hidden");
+  await page.goto(`${base}/incidents/resolve?id=40`);
+  await page.fill('textarea[name="message"]', "Fixed");
+  await assertTitleState(page, "x".repeat(200), "resolve id=40");
+  ok("incident resolve: the stored title stays visible while the message changes");
+}
+
+/** JavaScript off: the server hides the empty title and shows a filled one. */
+async function incidentEmptyTitleNoScript(page: Page, base: string, api: IncidentApi) {
+  const before = api.writes();
+  await page.goto(`${base}/incidents/new`);
+  assert((await titlePart(page)).isHidden, "no JavaScript: initial title heading hidden");
+  await postPreview(page, base, "no JavaScript: empty Update preview");
+  assert((await titlePart(page)).isHidden, "no JavaScript: empty Update preview hidden");
+  await page.fill('input[name="title"]', "Checkout slow");
+  await postPreview(page, base, "no JavaScript: filled Update preview");
+  const filled = await titlePart(page);
+  assert(
+    !filled.isHidden && filled.text === "Checkout slow",
+    `no JavaScript: filled title ${JSON.stringify(filled)}`,
+  );
+  assert(api.writes() === before, "no JavaScript: title preview 0 writes");
+  ok("incident composer, JavaScript off: empty title hidden, Checkout slow shown, 0 writes");
+}
+
 function lastBody(api: IncidentApi, method: string, path: string): unknown {
   const rows = api.seen.filter((s) => s.method === method && s.path === path);
   return rows.at(-1)?.body;
@@ -2870,6 +3008,9 @@ async function checkIncidentsWith(browser: Browser, hasScript: boolean): Promise
     if (hasScript) {
       await incidentLayout(page, server.base, label);
       await incidentLivePreview(page, server.base, api, violations);
+      await incidentEmptyTitle(page, server.base, api, violations);
+    } else {
+      await incidentEmptyTitleNoScript(page, server.base, api);
     }
     await incidentLeadingLf(page, server.base, api, label);
     await incidentResolveDelete(page, server.base, api, label);

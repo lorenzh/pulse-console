@@ -68,7 +68,11 @@ export const CONSOLE_JS = `"use strict";
     var preview = document.querySelector(".incident-preview");
     if (!preview) return;
     var title = form.querySelector('input[name="title"]');
-    if (title) setPart(preview, "title", title.value);
+    if (title) {
+      setPart(preview, "title", title.value);
+      var heading = preview.querySelector('[data-part="title"]');
+      if (heading) heading.hidden = title.value === "";
+    }
     var impact = checkedValue(form, "impact");
     if (impact !== null) setPart(preview, "impact", "Impact: " + impact);
     var status = checkedValue(form, "status");
