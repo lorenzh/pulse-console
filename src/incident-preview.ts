@@ -77,11 +77,12 @@ function updateHtml(update: PreviewUpdate): string {
 export function previewSection(parts: PreviewParts): string {
   const affects = `Affects: ${parts.affects.join(", ")}`;
   const hidden = parts.affects.length === 0 ? " hidden" : "";
+  const titleHidden = parts.title === "" ? " hidden" : "";
   return `<section aria-labelledby="preview-heading">
 <h2 id="preview-heading">Status page preview</h2>
 <div class="incident-preview" data-preview="${parts.state}">
 <p><span data-part="impact">Impact: ${escapeHtml(parts.impact)}</span> <span data-part="status">Status: ${escapeHtml(parts.status)}</span></p>
-<h3 data-part="title">${escapeHtml(parts.title)}</h3>
+<h3 data-part="title"${titleHidden}>${escapeHtml(parts.title)}</h3>
 <p data-part="affects"${hidden}>${escapeHtml(affects)}</p>
 <div class="preview-updates">${parts.updates.map(updateHtml).join("")}</div>
 </div>

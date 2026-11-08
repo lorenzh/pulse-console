@@ -81,4 +81,32 @@ describe("previewSection", () => {
     expect(partTexts(html, "message")).toEqual(["first", "second", "Resolved."]);
     expect(partTexts(html, "time").at(-1)).toBe("when published");
   });
+
+  test("empty title hides its heading", () => {
+    const html = previewSection(
+      openPreview(
+        { title: "", impact: "minor", status: "investigating", components: [], message: "m" },
+        COMPONENTS,
+      ),
+    );
+    expect(html).not.toContain('<h3 data-part="title"></h3>');
+    expect(html).toContain('<h3 data-part="title" hidden></h3>');
+  });
+
+  test("filled title keeps escaped text and outer spaces", () => {
+    const html = previewSection(
+      openPreview(
+        {
+          title: " <b>x</b> ",
+          impact: "minor",
+          status: "investigating",
+          components: [],
+          message: "m",
+        },
+        COMPONENTS,
+      ),
+    );
+    expect(html).toContain('<h3 data-part="title"> &lt;b&gt;x&lt;/b&gt; </h3>');
+    expect(html).not.toContain("<b>");
+  });
 });
