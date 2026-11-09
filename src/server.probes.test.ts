@@ -9,10 +9,42 @@ import {
   startFakeApi,
   WIRE_HEADERS,
 } from "../test/fake-api.ts";
-import { formTokenOf, getPage, postForm, type Reply, START } from "../test/signed-in-console.ts";
+import { expectCalloutsOnly } from "../test/rendered-audit.ts";
+import {
+  getPage as fetchPage,
+  formTokenOf,
+  type Reply,
+  START,
+  postForm as sendForm,
+} from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import { adminToken, FAKE_SECRET, probeToken, selfToken } from "../test/token-fixtures.ts";
 import type { ProbePrefill } from "./settings.ts";
+
+/** Every HTML page this suite reads passes the shared callout audit. */
+async function audited(reply: Promise<Reply>): Promise<Reply> {
+  const r = await reply;
+  if ((r.headers.get("content-type") ?? "").includes("text/html")) expectCalloutsOnly(r.body);
+  return r;
+}
+
+function getPage(...args: Parameters<typeof fetchPage>): Promise<Reply> {
+  return audited(fetchPage(...args));
+}
+
+function postForm(...args: Parameters<typeof sendForm>): Promise<Reply> {
+  return audited(sendForm(...args));
+}
+
+/** Some callout of `kind` and `role` holds `text` (already escaped as on the page). */
+function expectCallout(body: string, kind: string, role: string, text: string): void {
+  const open = `<section class="callout callout-${kind}" role="${role}">`;
+  const sections = body.split(open).slice(1);
+  expect(sections.length).toBeGreaterThan(0);
+  expect(sections.some((part) => part.slice(0, part.indexOf("</section>")).includes(text))).toBe(
+    true,
+  );
+}
 
 const TOKEN = "probes-admin-token-sentinel-0123456789";
 const EU_ID = "tok_b0be00000000000000000003";
@@ -111,8 +143,16 @@ function postChange(
 function groupOf(html: string, name: string): string {
   const start = html.indexOf(`<h2>${name}</h2>`) + 1 || html.indexOf(`<h3>${name}</h3>`) + 1;
   if (start === 0) return "";
-  const end = html.indexOf("</section>", start);
-  return html.slice(start - 1, end);
+  // A nested callout is a section too: skip to the close of the group itself.
+  const tags = /<section\b|<\/section>/g;
+  tags.lastIndex = start;
+  let depth = 0;
+  for (let tag = tags.exec(html); tag !== null; tag = tags.exec(html)) {
+    if (tag[0] !== "</section>") depth += 1;
+    else if (depth === 0) return html.slice(start - 1, tag.index);
+    else depth -= 1;
+  }
+  return html.slice(start - 1, -1);
 }
 
 describe("GET /probes", () => {
@@ -141,6 +181,8 @@ describe("GET /probes", () => {
     expect(groupOf(body, "a-rep")).toContain("Reporting, last result 2026-01-01 09:00:00 UTC");
     expect(groupOf(body, "b-rep0")).toContain("Reporting, last result 2026-01-01 09:01:00 UTC");
     expect(groupOf(body, "b-rep0")).toContain("No active token: new results will be refused.");
+    expectCallout(groupOf(body, "b-rep0"), "warning", "alert", "No active token: new results");
+    expect(groupOf(body, "b-rep0")).toContain("tok_b20000000000000000000002");
     expect(groupOf(body, "a-rep")).not.toContain("No active token");
     expect(groupOf(body, "c-sil")).toContain("Silent since 2026-01-01 08:00:00 UTC");
     expect(groupOf(body, "d-sil0")).toContain("Silent, no active token");
@@ -185,6 +227,7 @@ describe("GET /probes", () => {
     const c = await probesConsole(api);
     const res = await getPage(c, `/probes?revoked=${EU_ID}`, c.cookies.admin);
     expect(res.body).toContain(`Revoked probe eu (${EU_ID}). Its results stay in pulse-api.`);
+    expectCallout(res.body, "success", "status", `Revoked probe eu (${EU_ID}).`);
   });
 });
 
@@ -390,6 +433,7 @@ describe("add location", () => {
     expect(form.body).toContain(
       "The console token lacks the checks scope, so it cannot create probe tokens.",
     );
+    expectCallout(form.body, "error", "alert", "The console token lacks the checks scope");
     expect(form.body).not.toContain('<form method="post" action="/probes/new"');
     const res = await postForm(
       c,
@@ -400,6 +444,7 @@ describe("add location", () => {
     expect(res.status).toBe(403);
     expect(res.body).toContain("The console token lacks checks.");
     expect(writes(api)).toEqual([]);
+    expectCallout(res.body, "error", "alert", "The console token lacks checks.");
   });
 
   test("api 422 shows the form again with the message", async () => {
@@ -619,6 +664,7 @@ describe("self failures", () => {
     expect(list.body).toContain(
       "The console cannot tell which token it uses (pulse-api answered 404). Changes are off until it can. pulse-api needs GET /admin/tokens/self.",
     );
+    expectCallout(list.body, "error", "alert", "(pulse-api answered 404)");
     expect(list.body).toContain(EU_ID);
     expect(list.body).not.toContain('href="/probes/new"');
     expect(list.body).not.toContain("Rotate this token");
@@ -676,5 +722,102 @@ describe("secrets", () => {
         expect(text).not.toContain(secret);
       }
     }
+  });
+});
+
+describe("callouts", () => {
+  const EXPIRED_CHANGE =
+    "This form has expired. Nothing was sent. Open it again to see the current version.";
+  const EXPIRED_ADD = "This form has expired. Your input is kept below. Send it again.";
+  const NOT_LOGGED = "Saved in pulse-api. The People log row could not be written.";
+
+  test("a People insert failure after a revoke warns next to the success notice", async () => {
+    const api = probeApi([self, eu]);
+    api.replyTo(
+      "POST",
+      `/admin/tokens/${EU_ID}/revoke`,
+      jsonReply({ token: { ...eu, revokedAt: START } }),
+    );
+    const c = await probesConsole(api);
+    const open = await openChange(c, "revoke", EU_ID);
+    c.db.run("DROP TABLE people_events");
+    const res = await postChange(c, "revoke", EU_ID, {
+      form_token: open.formToken,
+      revision: open.revision,
+      confirm_name: "eu",
+    });
+    expect(res.status).toBe(200);
+    expectCallout(res.body, "warning", "alert", NOT_LOGGED);
+    expectCallout(res.body, "success", "status", `Revoked probe eu (${EU_ID}).`);
+  });
+
+  for (const change of ["rotate", "revoke"] as const) {
+    test(`an expired ${change} form is a warning callout with 0 writes`, async () => {
+      const api = probeApi([self, eu]);
+      const c = await probesConsole(api);
+      const open = await openChange(c, change, EU_ID);
+      const res = await postChange(c, change, EU_ID, {
+        form_token: "x",
+        revision: open.revision,
+        confirm_name: "eu",
+      });
+      expect(res.status).toBe(409);
+      expectCallout(res.body, "warning", "alert", EXPIRED_CHANGE);
+      expect(writes(api)).toEqual([]);
+    });
+  }
+
+  test("an expired add-location form keeps the input under a warning callout", async () => {
+    const api = probeApi([self]);
+    const c = await probesConsole(api);
+    const res = await postForm(
+      c,
+      "/probes/new",
+      { csrf: c.csrfs.admin, form_token: "x", ...VALID },
+      { cookie: c.cookies.admin },
+    );
+    expect(res.status).toBe(409);
+    expectCallout(res.body, "warning", "alert", EXPIRED_ADD);
+    expect(writes(api)).toEqual([]);
+  });
+
+  test("a People insert failure after an add warns on the secret page", async () => {
+    const api = probeApi([self]);
+    api.replyTo(
+      "POST",
+      "/admin/tokens",
+      secretReply(probeToken("eu-west", { id: NEW_ID }), FAKE_SECRET, null),
+    );
+    const c = await probesConsole(api);
+    const page = await getPage(c, "/probes/new", c.cookies.admin);
+    c.db.run("DROP TABLE people_events");
+    const res = await postForm(
+      c,
+      "/probes/new",
+      { csrf: c.csrfs.admin, form_token: formTokenOf(page.body, "/probes/new"), ...VALID },
+      { cookie: c.cookies.admin },
+    );
+    expect(res.status).toBe(200);
+    expectCallout(res.body, "warning", "alert", NOT_LOGGED);
+  });
+
+  test("the revoked notice and the group warning escape a hostile location", async () => {
+    const hostile = probeToken('<script>"><img src=x>&amp;', {
+      id: "tok_b20000000000000000000002",
+      revokedAt: START - 1,
+    });
+    const api = probeApi(
+      [self, hostile],
+      [{ name: '<script>"><img src=x>&amp;', lastResultAt: START - 60_000, state: "reporting" }],
+    );
+    const c = await probesConsole(api);
+    const res = await getPage(c, `/probes?revoked=${hostile.id}`, c.cookies.admin);
+    expect(res.status).toBe(200);
+    expect(res.body).not.toContain("<script>");
+    expect(res.body).not.toContain("<img src=x>");
+    const escaped = "&lt;script&gt;&quot;&gt;&lt;img src=x&gt;&amp;amp;";
+    expectCallout(res.body, "success", "status", `Revoked probe ${escaped}`);
+    const group = groupOf(res.body, escaped);
+    expectCallout(group, "warning", "alert", "No active token: new results will be refused.");
   });
 });

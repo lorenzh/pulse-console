@@ -8,9 +8,30 @@ import {
   seedManual,
   startIncidentApi,
 } from "../test/incident-api.ts";
-import { formTokenOf, getPage, type Reply, replyOf } from "../test/signed-in-console.ts";
+import { expectCalloutsOnly } from "../test/rendered-audit.ts";
+import {
+  getPage as fetchPage,
+  formTokenOf,
+  type Reply,
+  replyOf as readReply,
+} from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import type { ConsoleRole } from "./roles.ts";
+
+/** Every HTML page this suite reads passes the shared callout audit. */
+async function audited(reply: Promise<Reply>): Promise<Reply> {
+  const r = await reply;
+  if ((r.headers.get("content-type") ?? "").includes("text/html")) expectCalloutsOnly(r.body);
+  return r;
+}
+
+function getPage(...args: Parameters<typeof fetchPage>): Promise<Reply> {
+  return audited(fetchPage(...args));
+}
+
+function replyOf(res: Response): Promise<Reply> {
+  return audited(readReply(res));
+}
 
 const TOKEN = "incidents-write-admin-token-sentinel-0123456789";
 
@@ -926,7 +947,8 @@ describe("incident review follow-ups", () => {
           },
           body,
         });
-        await res.text();
+        const page = await replyOf(res);
+        expect(page.body).not.toBe("");
         if (isTooLarge) expect(res.status).toBe(413);
         else expect(res.status).not.toBe(413);
         expect(a.writes()).toBe(0);

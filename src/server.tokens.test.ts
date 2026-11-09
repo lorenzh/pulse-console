@@ -8,10 +8,42 @@ import {
   startFakeApi,
   WIRE_HEADERS,
 } from "../test/fake-api.ts";
-import { formTokenOf, getPage, postForm, type Reply, START } from "../test/signed-in-console.ts";
+import { expectCalloutsOnly } from "../test/rendered-audit.ts";
+import {
+  getPage as fetchPage,
+  formTokenOf,
+  type Reply,
+  START,
+  postForm as sendForm,
+} from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import { adminToken, FAKE_SECRET, probeToken, SELF_ID, selfToken } from "../test/token-fixtures.ts";
 import type { ConsoleRole } from "./roles.ts";
+
+/** Every HTML page this suite reads passes the shared callout audit. */
+async function audited(reply: Promise<Reply>): Promise<Reply> {
+  const r = await reply;
+  if ((r.headers.get("content-type") ?? "").includes("text/html")) expectCalloutsOnly(r.body);
+  return r;
+}
+
+function getPage(...args: Parameters<typeof fetchPage>): Promise<Reply> {
+  return audited(fetchPage(...args));
+}
+
+function postForm(...args: Parameters<typeof sendForm>): Promise<Reply> {
+  return audited(sendForm(...args));
+}
+
+/** Some callout of `kind` and `role` holds `text` (already escaped as on the page). */
+function expectCallout(body: string, kind: string, role: string, text: string): void {
+  const open = `<section class="callout callout-${kind}" role="${role}">`;
+  const sections = body.split(open).slice(1);
+  expect(sections.length).toBeGreaterThan(0);
+  expect(sections.some((part) => part.slice(0, part.indexOf("</section>")).includes(text))).toBe(
+    true,
+  );
+}
 
 const TOKEN = "tokens-admin-token-sentinel-0123456789";
 const OPS_ID = "tok_ad0000000000000000000002";
@@ -184,6 +216,12 @@ describe("GET /tokens", () => {
     expect(res.body).not.toContain(`href="/tokens/revoke?id=${OPS_ID}"`);
     expect(res.body).toContain(
       "The last active admin token expires at 1970-01-02 02:30:00 UTC. After that nobody can manage pulse-api tokens.",
+    );
+    expectCallout(
+      res.body,
+      "warning",
+      "alert",
+      "The last active admin token expires at 1970-01-02 02:30:00 UTC.",
     );
     const get = await getPage(c, `/tokens/revoke?id=${OPS_ID}`, c.cookies.admin);
     expect(get.status).toBe(409);
@@ -478,6 +516,7 @@ describe("POST /tokens/new", () => {
       expect(res.status).toBe(status);
       expect(res.body).toContain(text);
       expect(res.body).not.toContain("Saved in pulse-api.");
+      expectCallout(res.body, "error", "alert", text);
       expect(writes(api)).toEqual(["POST /admin/tokens"]);
     });
   }
@@ -542,6 +581,7 @@ describe("self failures", () => {
       expect(list.body).toContain(
         `The console cannot tell which token it uses (${reason}). Changes are off until it can. pulse-api needs GET /admin/tokens/self.`,
       );
+      expectCallout(list.body, "error", "alert", `which token it uses (${reason}).`);
       expect(list.body).toContain(OPS_ID);
       expect(list.body).not.toContain('href="/tokens/new"');
       expect(list.body).not.toContain('href="/tokens/rotate');
@@ -560,6 +600,7 @@ describe("self failures", () => {
       });
       expect(res.status).toBe(503);
       expect(res.body).toContain("The console cannot tell which token it uses");
+      expectCallout(res.body, "error", "alert", "The console cannot tell which token it uses");
       expect(writes(api)).toEqual([]);
     });
   }
@@ -657,6 +698,7 @@ describe("rotate and revoke", () => {
     expect(res.headers.get("location")).toBe(`/tokens?revoked=${OTHER_ID}`);
     const list = await getPage(c, res.headers.get("location") ?? "", c.cookies.admin);
     expect(list.body).toContain(`Revoked deploy (${OTHER_ID}).`);
+    expectCallout(list.body, "success", "status", `Revoked deploy (${OTHER_ID}).`);
     expect(writes(api)).toEqual([`POST /admin/tokens/${OTHER_ID}/revoke`]);
     const row = c.db
       .query("SELECT action, target_name, value FROM people_events WHERE action = 'token.revoke'")
@@ -706,6 +748,7 @@ describe("rotate and revoke", () => {
       );
       expect(forged.status).toBe(409);
       expect(forged.body).toContain("This is the console&#39;s own token. Nothing was changed.");
+      expectCallout(forged.body, "error", "alert", "This is the console&#39;s own token.");
       expect(writes(api)).toEqual([]);
     });
 
@@ -852,6 +895,8 @@ describe("rotate and revoke", () => {
     });
     expect(res.status).toBe(200);
     expect(res.body).toContain("Saved in pulse-api. The People log row could not be written.");
+    expectCallout(res.body, "warning", "alert", "The People log row could not be written.");
+    expectCallout(res.body, "success", "status", `Revoked deploy (${OTHER_ID}).`);
     expect(c.logs.some((l) => l.includes("token change not logged"))).toBe(true);
   });
 });
@@ -888,5 +933,91 @@ describe("secrets", () => {
         expect(text).not.toContain(secret);
       }
     }
+  });
+});
+
+describe("callouts", () => {
+  const NO_TOKEN =
+    "The console has no pulse-api token. Set PULSE_CONSOLE_ADMIN_TOKEN_FILE and restart the console.";
+  const EXPIRED_CHANGE =
+    "This form has expired. Nothing was sent. Open it again to see the current version.";
+  const EXPIRED_CREATE = "This form has expired. Your input is kept below. Send it again.";
+  const NOT_LOGGED = "Saved in pulse-api. The People log row could not be written.";
+
+  test("no admin token: the banner and the body are error callouts", async () => {
+    const api = tokenApi([self, ops]);
+    const c = await startTeamConsole({ apiUrl: api.url, adminToken: undefined });
+    cleanups.push(() => c.close());
+    const res = await getPage(c, "/tokens", c.cookies.admin);
+    expect(res.status).toBe(200);
+    expect(res.body.split(NO_TOKEN).length - 1).toBe(2);
+    expectCallout(res.body, "error", "alert", NO_TOKEN);
+    expect(res.body).not.toContain('class="state state-');
+  });
+
+  for (const change of ["rotate", "revoke"] as const) {
+    test(`an expired ${change} form is a warning callout with 0 writes`, async () => {
+      const api = tokenApi([self, ops, other]);
+      const c = await tokensConsole(api);
+      const open = await openChange(c, change, OTHER_ID);
+      const res = await postChange(c, change, OTHER_ID, {
+        form_token: "x",
+        revision: open.revision,
+        confirm_name: "deploy",
+      });
+      expect(res.status).toBe(409);
+      expectCallout(res.body, "warning", "alert", EXPIRED_CHANGE);
+      expect(writes(api)).toEqual([]);
+    });
+  }
+
+  test("an expired create form keeps the input under a warning callout", async () => {
+    const api = tokenApi([self]);
+    const c = await tokensConsole(api);
+    const res = await postForm(
+      c,
+      "/tokens/new",
+      { csrf: c.csrfs.admin, form_token: "x", name: "ci", preset: "read" },
+      { cookie: c.cookies.admin },
+    );
+    expect(res.status).toBe(409);
+    expectCallout(res.body, "warning", "alert", EXPIRED_CREATE);
+    expect(writes(api)).toEqual([]);
+  });
+
+  test("a People insert failure after a create warns on the secret page", async () => {
+    const api = tokenApi([self]);
+    api.replyTo("POST", "/admin/tokens", created(adminToken({ id: OTHER_ID, name: "ci" })));
+    const c = await tokensConsole(api);
+    const page = await getPage(c, "/tokens/new", c.cookies.admin);
+    c.db.run("DROP TABLE people_events");
+    const res = await postForm(
+      c,
+      "/tokens/new",
+      {
+        csrf: c.csrfs.admin,
+        form_token: formTokenOf(page.body, "/tokens/new"),
+        name: "ci",
+        preset: "read",
+      },
+      { cookie: c.cookies.admin },
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toContain(FAKE_SECRET);
+    expectCallout(res.body, "warning", "alert", NOT_LOGGED);
+  });
+
+  test("the revoked notice escapes the token name", async () => {
+    const hostile = adminToken({ id: OTHER_ID, name: "<b>x</b> & co", revokedAt: START - 1 });
+    const api = tokenApi([self, ops, hostile]);
+    const c = await tokensConsole(api);
+    const res = await getPage(c, `/tokens?revoked=${OTHER_ID}`, c.cookies.admin);
+    expectCallout(
+      res.body,
+      "success",
+      "status",
+      `Revoked &lt;b&gt;x&lt;/b&gt; &amp; co (${OTHER_ID}).`,
+    );
+    expect(res.body).not.toContain("<b>x</b>");
   });
 });

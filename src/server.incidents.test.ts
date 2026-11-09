@@ -8,9 +8,29 @@ import {
   seedResults,
   startIncidentApi,
 } from "../test/incident-api.ts";
-import { getPage, postForm, type Reply } from "../test/signed-in-console.ts";
+import { expectCalloutsOnly } from "../test/rendered-audit.ts";
+import {
+  getPage as fetchPage,
+  type Reply,
+  postForm as sendForm,
+} from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import type { ConsoleRole } from "./roles.ts";
+
+/** Every HTML page this suite reads passes the shared callout audit. */
+async function audited(reply: Promise<Reply>): Promise<Reply> {
+  const r = await reply;
+  if ((r.headers.get("content-type") ?? "").includes("text/html")) expectCalloutsOnly(r.body);
+  return r;
+}
+
+function getPage(...args: Parameters<typeof fetchPage>): Promise<Reply> {
+  return audited(fetchPage(...args));
+}
+
+function postForm(...args: Parameters<typeof sendForm>): Promise<Reply> {
+  return audited(sendForm(...args));
+}
 
 const TOKEN = "incidents-admin-token-sentinel-0123456789";
 
