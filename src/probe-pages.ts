@@ -21,6 +21,7 @@ import {
   type ProbeSnippetInput,
   probeBase,
 } from "./probe-snippet.ts";
+import { alertCallout, callout } from "./states.ts";
 import {
   countdownSeconds,
   countdownText,
@@ -105,7 +106,10 @@ ${group.credentials.map((t) => credentialRow(model, t)).join("\n")}
 }
 
 function groupHtml(model: ProbeListModel, group: LocationGroup, level: "h2" | "h3"): string {
-  const warning = group.warning === undefined ? "" : paragraph(group.warning, ' role="alert"');
+  const warning =
+    group.warning === undefined
+      ? ""
+      : callout({ kind: "warning", body: paragraph(group.warning), role: "alert" });
   return `<section class="location">
 <${level}>${escapeHtml(group.name)}</${level}>
 ${paragraph(group.stateText)}${warning}${credentialTable(model, group)}</section>
@@ -179,7 +183,7 @@ function inputHtml(view: {
 export function probeFormHtml(model: ProbeFormModel): string {
   const errorOf = (name: string): string | undefined =>
     model.errors.find((e) => e.name === name)?.text;
-  const notice = model.notice === undefined ? "" : paragraph(model.notice, ' role="alert"');
+  const notice = alertCallout(model.notice);
   const { input } = model;
   return `${notice}${formErrorSummary(model.errors)}<form method="post" action="/probes/new">
 ${csrfField(model.csrf)}
@@ -203,7 +207,9 @@ function preBlock(id: string, text: string, isSecret: boolean): string {
 }
 
 function notLoggedHtml(notLogged: string | undefined): string {
-  return notLogged === undefined ? "" : paragraph(notLogged, ' role="alert"');
+  return notLogged === undefined
+    ? ""
+    : callout({ kind: "warning", body: paragraph(notLogged), role: "alert" });
 }
 
 export type ProbeAddedModel = {
