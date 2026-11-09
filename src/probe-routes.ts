@@ -24,7 +24,7 @@ import {
 } from "./probe-snippet.ts";
 import type { PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
 import type { ProbePrefill } from "./settings.ts";
-import { notFoundState, staleState, tokenRejectedBanner } from "./states.ts";
+import { alertCallout, callout, notFoundState, staleState, tokenRejectedBanner } from "./states.ts";
 import { lacksScopeText } from "./token-pages.ts";
 import {
   type OneTokenRead,
@@ -72,10 +72,6 @@ function notFound(): PageResult {
   return page(404, "Page not found", notFoundState());
 }
 
-function alert(text: string): string {
-  return paragraph(text, ' role="alert"');
-}
-
 function backLink(): string {
   return `<p><a href="${LIST}">Back to Probes</a></p>\n`;
 }
@@ -118,10 +114,13 @@ async function listPage(deps: ProbeRouteDeps, request: PageRequest): Promise<Pag
   const notice =
     revoked === undefined
       ? ""
-      : paragraph(
-          `Revoked ${revoked.name} (${revoked.id}). Its results stay in pulse-api.`,
-          ' role="status"',
-        );
+      : callout({
+          kind: "success",
+          body: paragraph(
+            `Revoked ${revoked.name} (${revoked.id}). Its results stay in pulse-api.`,
+          ),
+          role: "status",
+        });
   return page(200, "Probes", notice + body, banners.join("") || undefined);
 }
 
@@ -195,7 +194,7 @@ async function showCreate(deps: ProbeRouteDeps, request: PageRequest): Promise<P
   const self = await readSelf(apiUrlOf(deps), readDeps(deps));
   if (self.kind !== "ok") return selfRefused(self, "Add location");
   if (missingScope(["probe"], self.value.scopes) !== undefined) {
-    return page(200, "Add location", alert(PROBE_LACKS_CHECKS_TEXT) + backLink());
+    return page(200, "Add location", alertCallout(PROBE_LACKS_CHECKS_TEXT) + backLink());
   }
   return formPage(deps, request, prefillOf(deps), { status: 200, errors: [] });
 }
@@ -216,7 +215,7 @@ function answerPage(
       if (answer.reason === "token-rejected") {
         return page(answer.status, title, backLink(), tokenRejectedBanner());
       }
-      return page(answer.status, title, alert(answer.message) + backLink());
+      return page(answer.status, title, alertCallout(answer.message) + backLink());
     default: {
       const never: never = answer;
       return never;
@@ -243,7 +242,7 @@ async function createProbe(deps: ProbeRouteDeps, request: PageRequest): Promise<
   if (self.kind !== "ok") return selfRefused(self, "Add location");
   const lacks = missingScope(["probe"], self.value.scopes);
   if (lacks !== undefined) {
-    return page(403, "Add location", alert(lacksScopeText(lacks)) + backLink());
+    return page(403, "Add location", alertCallout(lacksScopeText(lacks)) + backLink());
   }
   const before = await activeBefore(deps, checked.location);
   const write: TokenWrite = {
@@ -301,7 +300,7 @@ function pathOf(change: Change): string {
 }
 
 function conflict(change: Change, text: string): PageResult {
-  return page(409, titleOf(change), alert(text) + backLink());
+  return page(409, titleOf(change), alertCallout(text) + backLink());
 }
 
 function tokenReadPage(read: Exclude<OneTokenRead, { kind: "ok" }>, change: Change, id: string) {
@@ -380,7 +379,7 @@ function changeRefusal(
   }
   const lacks = missingScope(target.token.scopes, target.self.scopes);
   if (lacks !== undefined) {
-    return page(403, titleOf(change), alert(lacksScopeText(lacks)) + backLink());
+    return page(403, titleOf(change), alertCallout(lacksScopeText(lacks)) + backLink());
   }
   return undefined;
 }
@@ -393,7 +392,9 @@ function revokedPage(token: TokenMetadata, notLogged: string | undefined): PageR
   return page(
     200,
     "Probe token revoked",
-    paragraph(text, ' role="status"') + alert(notLogged) + backLink(),
+    callout({ kind: "success", body: paragraph(text), role: "status" }) +
+      callout({ kind: "warning", body: paragraph(notLogged), role: "alert" }) +
+      backLink(),
   );
 }
 
@@ -464,7 +465,11 @@ function changeRoute(deps: ProbeRouteDeps, change: Change): ProtectedRoute {
         id === undefined
           ? ""
           : `<p><a href="${escapeHtml(path + idQuery(id))}">Open it again</a></p>\n`;
-      return page(409, "Form expired", alert(FORM_EXPIRED_TEXT) + reopen);
+      return page(
+        409,
+        "Form expired",
+        callout({ kind: "warning", body: paragraph(FORM_EXPIRED_TEXT), role: "alert" }) + reopen,
+      );
     },
   };
 }
