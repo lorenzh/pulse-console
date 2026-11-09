@@ -58,6 +58,14 @@ for this repository. Bun 1.4.0 (runtime, package manager, test runner), ESM, str
 - Name a function by its effect (`postResult`, `applyResult`); a pure query reads as a noun or question (`quorumStatus`, `isStale`).
 - Booleans start with `is`, `has`, or `can`. Files are kebab-case.
 
+## Code conventions
+
+The pulse [code conventions](https://github.com/lorenzh/pulse-meta/blob/main/docs/code-conventions.md) apply to every change. Search `src/html.ts`, `src/states.ts`, `@lorenzh/pulse-kit` and `test/` before writing a helper or test setup, and move the second copy of markup or logic into a shared helper; keep functions small and pure.
+
+- `*-pages.ts` modules are pure: data in, markup out, no I/O.
+- Inputs, selects, choices, field errors, tables, callouts, empty states and outcome pages come from shared helpers (`src/html.ts` for form controls, `src/states.ts` for callouts and states). A screen does not write its own copy; when a helper is missing, add it there with its test.
+- Every `src/server.*.test.ts` that renders a page runs `expectCalloutsOnly` (`test/rendered-audit.ts`) on the rendered body.
+
 ## Errors
 
 - Throw only `Error` subclasses with a `name`. Wrap with `{ cause }` instead of losing the original.
