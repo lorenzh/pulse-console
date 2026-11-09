@@ -190,6 +190,7 @@ describe("POST /incidents/new", () => {
     const c = await team(a);
     const long = PUBLISH.map(([k, v]) => [k, k === "title" ? "😀".repeat(201) : v] as const);
     const refused = await submit(c, a, composer(long));
+    expectCalloutsOnly(refused.body);
     expect(refused.status).toBe(422);
     expect(a.writes()).toBe(0);
     const fits = PUBLISH.map(([k, v]) => [k, k === "title" ? "😀".repeat(200) : v] as const);
@@ -205,7 +206,9 @@ describe("POST /incidents/new", () => {
     expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, "/incidents/new");
     const entries: Entries = [["csrf", c.csrfs.member], ["form_token", token], ...PUBLISH];
-    expect((await post(c, "/incidents/new", entries, "member")).status).toBe(303);
+    const reply = await post(c, "/incidents/new", entries, "member");
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(303);
     const before = a.seen.length;
     const replay = await post(c, "/incidents/new", entries, "member");
     expectCalloutsOnly(replay.body);
@@ -379,6 +382,7 @@ describe("POST /incidents/new", () => {
     }
     for (const fn of [...pending]) fn();
     const answer = await res;
+    expectCalloutsOnly(answer.body);
     expect(answer.status).toBe(504);
     expect(answer.body).toContain(
       "The result is unknown. Open the incident list to see whether the change was published before you send it again.",
@@ -534,7 +538,9 @@ describe("/incidents/resolve", () => {
     const a = api();
     const c = await team(a);
     const first = await getPage(c, "/incidents/resolve?id=1", c.cookies.member);
+    expectCalloutsOnly(first.body);
     const second = await getPage(c, "/incidents/resolve?id=1", c.cookies.member);
+    expectCalloutsOnly(second.body);
     const tokenOf = (r: Reply) => formTokenOf(r.body, "/incidents/resolve?id=1");
     const base: Entries = resolveEntries();
     const send = (r: Reply) =>
@@ -544,7 +550,9 @@ describe("/incidents/resolve", () => {
         [["csrf", c.csrfs.member], ["form_token", tokenOf(r)], ...base],
         "member",
       );
-    expect((await send(first)).status).toBe(303);
+    const reply = await send(first);
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(303);
     a.seen.length = 0;
     const again = await send(second);
     expectCalloutsOnly(again.body);
@@ -766,7 +774,9 @@ describe("request counting", () => {
       const role = row.role ?? "member";
       if (row.method === "GET") {
         a.seen.length = 0;
-        expect((await getPage(c, row.path, c.cookies[role])).status).toBe(200);
+        const reply = await getPage(c, row.path, c.cookies[role]);
+        expectCalloutsOnly(reply.body);
+        expect(reply.status).toBe(200);
       } else {
         const isUpdate = row.path.startsWith("/incidents/manual");
         const action = isUpdate ? "/incidents/update" : row.path;
@@ -857,7 +867,9 @@ describe("incident review follow-ups", () => {
         seedTitle(a, title);
         const c = await team(a);
         for (const path of ["/incidents", "/incidents/manual?id=12", "/incidents/resolve?id=12"]) {
-          expect((await getPage(c, path, c.cookies.admin)).body).toContain("Untitled incident #12");
+          const reply = await getPage(c, path, c.cookies.admin);
+          expectCalloutsOnly(reply.body);
+          expect(reply.body).toContain("Untitled incident #12");
         }
         const del = await getPage(c, "/incidents/delete?id=12", c.cookies.admin);
         expectCalloutsOnly(del.body);

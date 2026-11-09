@@ -126,8 +126,12 @@ async function post(
   fields: Record<string, string>,
   options: { token?: string; csrf?: string; origin?: string } = {},
 ): Promise<Reply> {
-  const token =
-    options.token ?? formTokenOf((await getPage(c, from, c.cookies.owner)).body, action);
+  let token = options.token;
+  if (token === undefined) {
+    const form = await getPage(c, from, c.cookies.owner);
+    expectCalloutsOnly(form.body);
+    token = formTokenOf(form.body, action);
+  }
   const params = new URLSearchParams({ csrf: options.csrf ?? c.csrfs.owner, form_token: token });
   for (const [name, value] of Object.entries(fields)) params.append(name, value);
   return send(c, action, params.toString(), "owner", options.origin);
@@ -156,10 +160,16 @@ describe("access", () => {
     async (role) => {
       const api = fakeApi();
       const c = await teamConsole(api);
-      for (const path of PATHS) expect((await getPage(c, path, c.cookies[role])).status).toBe(403);
+      for (const path of PATHS) {
+        const reply = await getPage(c, path, c.cookies[role]);
+        expectCalloutsOnly(reply.body);
+        expect(reply.status).toBe(403);
+      }
       for (const path of POST_PATHS) {
         const body = new URLSearchParams({ csrf: c.csrfs[role], form_token: "x" }).toString();
-        expect((await send(c, path, body, role)).status).toBe(403);
+        const reply = await send(c, path, body, role);
+        expectCalloutsOnly(reply.body);
+        expect(reply.status).toBe(403);
       }
       expect(writes(api)).toEqual([]);
     },
@@ -191,13 +201,21 @@ describe("access", () => {
     const api = fakeApi();
     const c = await teamConsole(api);
     const from = "/notifications/new";
-    expect((await post(c, from, from, webhookFields, { origin: "http://evil.test" })).status).toBe(
-      403,
-    );
-    expect((await post(c, from, from, webhookFields, { csrf: "wrong" })).status).toBe(403);
-    const token = formTokenOf((await getPage(c, from, c.cookies.owner)).body, from);
-    expect((await post(c, from, from, webhookFields, { token })).status).toBe(303);
-    expect((await post(c, from, from, webhookFields, { token })).status).toBe(409);
+    const reply = await post(c, from, from, webhookFields, { origin: "http://evil.test" });
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(403);
+    const reply2 = await post(c, from, from, webhookFields, { csrf: "wrong" });
+    expectCalloutsOnly(reply2.body);
+    expect(reply2.status).toBe(403);
+    const form = await getPage(c, from, c.cookies.owner);
+    expectCalloutsOnly(form.body);
+    const token = formTokenOf(form.body, from);
+    const reply3 = await post(c, from, from, webhookFields, { token });
+    expectCalloutsOnly(reply3.body);
+    expect(reply3.status).toBe(303);
+    const reply4 = await post(c, from, from, webhookFields, { token });
+    expectCalloutsOnly(reply4.body);
+    expect(reply4.status).toBe(409);
     expect(writes(api)).toEqual([`POST ${CHANNELS}`]);
   });
 });
@@ -215,6 +233,7 @@ describe("list", () => {
     });
     const c = await teamConsole(fakeApi(view));
     const html = (await getPage(c, "/notifications", c.cookies.owner)).body;
+    expectCalloutsOnly(html);
     const ops = rowOf(html, "ops");
     expect(ops).toContain("From the notify channel file");
     expect(ops).toContain("<code>SLACK_OPS</code>");
@@ -240,6 +259,7 @@ describe("list", () => {
     });
     const c = await teamConsole(fakeApi(view));
     const html = (await getPage(c, "/notifications", c.cookies.owner)).body;
+    expectCalloutsOnly(html);
     expect(rowOf(html, "b")).toContain(`Rejected by pulse-notify: ${reason}`);
     expect(html.split(`Rejected by pulse-notify: ${reason}`)).toHaveLength(2);
     expect(rowOf(html, "a")).not.toContain("Rejected by pulse-notify");
@@ -256,9 +276,9 @@ describe("list", () => {
       }),
     );
     const c = await teamConsole(api);
-    expect((await getPage(c, "/notifications", c.cookies.owner)).body).toContain(
-      "Saved, not yet applied",
-    );
+    const reply = await getPage(c, "/notifications", c.cookies.owner);
+    expectCalloutsOnly(reply.body);
+    expect(reply.body).toContain("Saved, not yet applied");
     const stale = notifyChannelsView({
       channels: [webhookChannel("a")],
       state: "stale",
@@ -266,10 +286,12 @@ describe("list", () => {
     });
     api.replyTo("GET", CHANNELS, jsonReply(stale));
     const staleHtml = (await getPage(c, "/notifications", c.cookies.owner)).body;
+    expectCalloutsOnly(staleHtml);
     expect(staleHtml).toContain("pulse-notify has not reported");
     expect(staleHtml).not.toContain("Rejected by pulse-notify");
     api.replyTo("GET", CHANNELS, jsonReply(notifyChannelsView({ state: "never" })));
     const zero = (await getPage(c, "/notifications", c.cookies.owner)).body;
+    expectCalloutsOnly(zero);
     expect(zero).toContain("No notification channels yet");
     expect(zero).toContain("pulse-notify has not reported");
   });
@@ -278,9 +300,9 @@ describe("list", () => {
     const api = fakeApi();
     const c = await teamConsole(api);
     api.replyTo("GET", CHANNELS, { status: 401, headers: WIRE_HEADERS, body: "{}" });
-    expect((await getPage(c, "/notifications", c.cookies.owner)).body).toContain(
-      "pulse-api rejected the console token",
-    );
+    const reply = await getPage(c, "/notifications", c.cookies.owner);
+    expectCalloutsOnly(reply.body);
+    expect(reply.body).toContain("pulse-api rejected the console token");
     api.replyTo("GET", CHANNELS, { status: 404, headers: WIRE_HEADERS, body: "{}" });
     const old = await getPage(c, "/notifications", c.cookies.owner);
     expectCalloutsOnly(old.body);
@@ -292,9 +314,9 @@ describe("list", () => {
       CHANNELS,
       jsonReply(notifyChannelsView({ channels: [webhookChannel("a", { url: "https://x" })] })),
     );
-    expect((await getPage(c, "/notifications", c.cookies.owner)).body).toContain(
-      "pulse-api sent an invalid answer.",
-    );
+    const reply2 = await getPage(c, "/notifications", c.cookies.owner);
+    expectCalloutsOnly(reply2.body);
+    expect(reply2.body).toContain("pulse-api sent an invalid answer.");
   });
 });
 
@@ -302,6 +324,7 @@ describe("editor", () => {
   test("has no secret value field and offers reference names only", async () => {
     const c = await teamConsole(fakeApi());
     const html = (await getPage(c, "/notifications/new", c.cookies.owner)).body;
+    expectCalloutsOnly(html);
     expect(html).not.toMatch(/name="(url|secret|password|smtp_password)"/);
     expect(html).not.toContain('type="password"');
     expect(html).toContain("PULSE_NOTIFY_SECRET_");
@@ -311,6 +334,7 @@ describe("editor", () => {
   test("every form field name appears once, so a browser submit never repeats one", async () => {
     const c = await teamConsole(fakeApi());
     const page = (await getPage(c, "/notifications/new", c.cookies.owner)).body;
+    expectCalloutsOnly(page);
     const start = page.indexOf('action="/notifications/new"');
     const html = page.slice(start, page.indexOf("</form>", start));
     const names = [...html.matchAll(/<(?:input|select|textarea)[^>]* name="([^"]*)"/g)].map(
@@ -373,10 +397,9 @@ describe("editor", () => {
     while (bytes({ ...base, checks: [...base.checks, `${last}a`] }) <= 16_384) last += "a";
     base.checks.push(last);
     expect(bytes(base)).toBe(16_384);
-    const token = formTokenOf(
-      (await getPage(c, "/notifications/new", c.cookies.owner)).body,
-      "/notifications/new",
-    );
+    const form = await getPage(c, "/notifications/new", c.cookies.owner);
+    expectCalloutsOnly(form.body);
+    const token = formTokenOf(form.body, "/notifications/new");
     const params = new URLSearchParams({ csrf: c.csrfs.owner, form_token: token });
     for (const [k, v] of Object.entries({
       revision: NOTIFY_REVISION,
@@ -403,10 +426,14 @@ describe("editor", () => {
     };
     for (const path of ["/notifications/new", "/notifications/edit"]) {
       expect(Buffer.byteLength(over(65_537))).toBe(65_537);
-      expect((await send(c, path, over(65_537))).status).toBe(413);
+      const reply = await send(c, path, over(65_537));
+      expectCalloutsOnly(reply.body);
+      expect(reply.status).toBe(413);
     }
     for (const path of ["/notifications/delete", "/notifications/resend"]) {
-      expect((await send(c, path, over(8193))).status).toBe(413);
+      const reply2 = await send(c, path, over(8193));
+      expectCalloutsOnly(reply2.body);
+      expect(reply2.status).toBe(413);
     }
     expect(writes(api)).toEqual([]);
   });
@@ -467,7 +494,9 @@ describe("editor", () => {
     expectCalloutsOnly(res.body);
     expect(res.status).toBe(409);
     expect(res.body).toContain("Shadowed by the channel file: only Delete is possible.");
-    expect((await getPage(c, "/notifications/edit?id=zz", c.cookies.owner)).status).toBe(404);
+    const reply = await getPage(c, "/notifications/edit?id=zz", c.cookies.owner);
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(404);
   });
 
   test("delete sends DELETE with If-Match and logs the channel id", async () => {
@@ -510,6 +539,7 @@ describe("failed and resend", () => {
     );
     const c = await teamConsole(api);
     const html = (await getPage(c, "/notifications/failed", c.cookies.owner)).body;
+    expectCalloutsOnly(html);
     const cells = [...html.matchAll(/<td>([^<]*)<\/td><td><time/g)].map((m) => m[1]);
     expect(cells).toEqual([...events, "update manual"]);
     expect(html.match(/name="request_id" value="[A-Za-z0-9_-]{24}"/g)).toHaveLength(1);
@@ -525,6 +555,7 @@ describe("failed and resend", () => {
       return () => timers.delete(fn);
     });
     const failed = (await getPage(c, "/notifications/failed", c.cookies.owner)).body;
+    expectCalloutsOnly(failed);
     const requestId = /name="request_id" value="([^"]*)"/.exec(failed)?.[1] ?? "";
     const fields = { channel_id: "a", key: "1:opened", request_id: requestId };
     const firstToken = formTokenOf(failed, "/notifications/resend");
@@ -534,6 +565,7 @@ describe("failed and resend", () => {
     }
     for (const fn of timers) fn();
     const first = await pending;
+    expectCalloutsOnly(first.body);
     expect(first.status).toBe(504);
     expect(first.body).toContain(`name="request_id" value="${requestId}"`);
     const retryToken = formTokenOf(first.body, "/notifications/resend");
@@ -551,6 +583,7 @@ describe("failed and resend", () => {
       false,
     );
     const replay = await post(c, "", "/notifications/resend", fields, { token: retryToken });
+    expectCalloutsOnly(replay.body);
     expect(replay.status).toBe(409);
     const rows = c.db
       .query(
@@ -582,6 +615,7 @@ describe("failed and resend", () => {
     });
     const c = await teamConsole(api);
     const failed = (await getPage(c, "/notifications/failed", c.cookies.owner)).body;
+    expectCalloutsOnly(failed);
     const requestId = /name="request_id" value="([^"]*)"/.exec(failed)?.[1] ?? "";
     const res = await post(c, "/notifications/failed", "/notifications/resend", {
       channel_id: "a",
@@ -595,7 +629,9 @@ describe("failed and resend", () => {
     expectCalloutsOnly(state.body);
     expect(state.status).toBe(200);
     expect(state.body).toContain("Delivered.");
-    expect((await getPage(c, "/notifications/resend?id=bad", c.cookies.owner)).status).toBe(404);
+    const reply = await getPage(c, "/notifications/resend?id=bad", c.cookies.owner);
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(404);
   });
 
   for (const [label, pick] of [

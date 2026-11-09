@@ -67,7 +67,12 @@ async function postRaw(
   options: { role?: ConsoleRole; origin?: string; csrf?: string; token?: string } = {},
 ): Promise<Reply> {
   const role = options.role ?? "owner";
-  const token = options.token ?? formTokenOf((await getPage(c, PATH, c.cookies[role])).body, PATH);
+  let token = options.token;
+  if (token === undefined) {
+    const form = await getPage(c, PATH, c.cookies[role]);
+    expectCalloutsOnly(form.body);
+    token = formTokenOf(form.body, PATH);
+  }
   const params = new URLSearchParams();
   params.append("csrf", options.csrf ?? c.csrfs[role]);
   params.append("form_token", token);
@@ -113,7 +118,9 @@ describe("access", () => {
   test.each(["admin", "member", "viewer"] as const)("%s gets 403 on GET and POST", async (role) => {
     const api = fakeApi();
     const c = await teamConsole(api);
-    expect((await getPage(c, PATH, c.cookies[role])).status).toBe(403);
+    const reply = await getPage(c, PATH, c.cookies[role]);
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(403);
     const res = await sendBody(
       c,
       new URLSearchParams({ csrf: c.csrfs[role], form_token: "x", action: "save" }).toString(),
@@ -146,18 +153,30 @@ describe("access", () => {
     const api = fakeApi();
     const c = await teamConsole(api);
     const save = saveFields({ action: "save" });
-    expect((await postRaw(c, save, { origin: "http://evil.example" })).status).toBe(403);
-    expect((await postRaw(c, save, { csrf: "wrong" })).status).toBe(403);
-    const token = formTokenOf((await getPage(c, PATH, c.cookies.owner)).body, PATH);
-    expect((await postRaw(c, save, { token })).status).toBe(303);
-    expect((await postRaw(c, save, { token })).status).toBe(409);
+    const reply = await postRaw(c, save, { origin: "http://evil.example" });
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(403);
+    const reply2 = await postRaw(c, save, { csrf: "wrong" });
+    expectCalloutsOnly(reply2.body);
+    expect(reply2.status).toBe(403);
+    const form = await getPage(c, PATH, c.cookies.owner);
+    expectCalloutsOnly(form.body);
+    const token = formTokenOf(form.body, PATH);
+    const reply3 = await postRaw(c, save, { token });
+    expectCalloutsOnly(reply3.body);
+    expect(reply3.status).toBe(303);
+    const reply4 = await postRaw(c, save, { token });
+    expectCalloutsOnly(reply4.body);
+    expect(reply4.status).toBe(409);
     expect(writes(api)).toEqual([`PUT ${SETTINGS_PATH}`]);
   });
 
   test("a role change between read and write is 403 and sends nothing", async () => {
     const api = fakeApi();
     const c = await teamConsole(api);
-    const token = formTokenOf((await getPage(c, PATH, c.cookies.owner)).body, PATH);
+    const form = await getPage(c, PATH, c.cookies.owner);
+    expectCalloutsOnly(form.body);
+    const token = formTokenOf(form.body, PATH);
     const demote: FakeReply = {
       ...jsonReply(statusSettingsView()),
       after: () => c.db.run("UPDATE users SET role = 'admin' WHERE id = ?", [c.ids.owner]),
@@ -335,7 +354,9 @@ describe("fields", () => {
         fields[`${mode}-${key}`] = "#aabbccdd";
       }
     }
-    const token = formTokenOf((await getPage(c, PATH, c.cookies.owner)).body, PATH);
+    const form = await getPage(c, PATH, c.cookies.owner);
+    expectCalloutsOnly(form.body);
+    const token = formTokenOf(form.body, PATH);
     const params = new URLSearchParams({ csrf: c.csrfs.owner, form_token: token });
     saveFields(fields)(params);
     const body = params.toString();
@@ -349,7 +370,9 @@ describe("fields", () => {
 
     const big = `${body}&pad=${"x".repeat(65537 - body.length - 5)}`;
     expect(Buffer.byteLength(big)).toBe(65537);
-    expect((await sendBody(c, big, "owner")).status).toBe(413);
+    const reply = await sendBody(c, big, "owner");
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(413);
   });
 });
 
@@ -458,9 +481,9 @@ describe("api states", () => {
     const api = fakeApi();
     api.replyTo("GET", SETTINGS_PATH, { status: 401, headers: WIRE_HEADERS, body: "{}" });
     const c = await teamConsole(api);
-    expect((await getPage(c, PATH, c.cookies.owner)).body).toContain(
-      "pulse-api rejected the console token",
-    );
+    const reply = await getPage(c, PATH, c.cookies.owner);
+    expectCalloutsOnly(reply.body);
+    expect(reply.body).toContain("pulse-api rejected the console token");
     api.replyTo("GET", SETTINGS_PATH, { status: 404, headers: WIRE_HEADERS, body: "{}" });
     const old = await getPage(c, PATH, c.cookies.owner);
     expectCalloutsOnly(old.body);
@@ -490,6 +513,7 @@ describe("api states", () => {
     }
     for (const fn of timers) fn();
     const res = await pending;
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(504);
     expect(writes(api)).toEqual([`PUT ${SETTINGS_PATH}`]);
     const rows = c.db

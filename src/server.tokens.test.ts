@@ -223,7 +223,9 @@ describe("roles", () => {
         `/tokens/rotate?id=${OPS_ID}`,
         `/tokens/revoke?id=${OPS_ID}`,
       ]) {
-        expect((await getPage(c, path, c.cookies[role])).status).toBe(403);
+        const reply = await getPage(c, path, c.cookies[role]);
+        expectCalloutsOnly(reply.body);
+        expect(reply.status).toBe(403);
       }
       for (const path of [
         "/tokens/new",
@@ -341,9 +343,9 @@ describe("POST /tokens/new", () => {
       name: "x",
       preset: "read",
     };
-    expect((await postForm(c, "/tokens/new", fields, { cookie: c.cookies.admin })).status).toBe(
-      200,
-    );
+    const reply = await postForm(c, "/tokens/new", fields, { cookie: c.cookies.admin });
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(200);
     const again = await postForm(c, "/tokens/new", fields, { cookie: c.cookies.admin });
     expectCalloutsOnly(again.body);
     expect(again.status).toBe(409);
@@ -540,6 +542,7 @@ describe("POST /tokens/new", () => {
     // The reads are done; firing every timer only cuts the held write.
     for (const fire of timers.splice(0)) fire();
     const res = await pending;
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(504);
     expect(res.body).toContain("The result is unknown.");
     expect(writes(api)).toEqual(["POST /admin/tokens"]);
@@ -762,13 +765,15 @@ describe("rotate and revoke", () => {
     test(`${change} of a probe token or unknown id is not found`, async () => {
       const api = tokenApi([self, probe]);
       const c = await tokensConsole(api);
-      expect((await getPage(c, `/tokens/${change}?id=${probe.id}`, c.cookies.admin)).status).toBe(
-        404,
-      );
-      expect((await getPage(c, `/tokens/${change}?id=tok_missing`, c.cookies.admin)).status).toBe(
-        404,
-      );
-      expect((await getPage(c, `/tokens/${change}?id=self`, c.cookies.admin)).status).toBe(404);
+      const reply = await getPage(c, `/tokens/${change}?id=${probe.id}`, c.cookies.admin);
+      expectCalloutsOnly(reply.body);
+      expect(reply.status).toBe(404);
+      const reply2 = await getPage(c, `/tokens/${change}?id=tok_missing`, c.cookies.admin);
+      expectCalloutsOnly(reply2.body);
+      expect(reply2.status).toBe(404);
+      const reply3 = await getPage(c, `/tokens/${change}?id=self`, c.cookies.admin);
+      expectCalloutsOnly(reply3.body);
+      expect(reply3.status).toBe(404);
       expect(writes(api)).toEqual([]);
     });
 
@@ -933,7 +938,9 @@ describe("secrets", () => {
       headers: WIRE_HEADERS,
     });
     const c = await tokensConsole(api);
-    expect((await postNew(c, { name: "x", preset: "read" })).body).toContain(FAKE_SECRET);
+    const reply = await postNew(c, { name: "x", preset: "read" });
+    expectCalloutsOnly(reply.body);
+    expect(reply.body).toContain(FAKE_SECRET);
     const open = await openChange(c, "rotate", OPS_ID);
     const rotated = await postChange(c, "rotate", OPS_ID, {
       form_token: open.formToken,

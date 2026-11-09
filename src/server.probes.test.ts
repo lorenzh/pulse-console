@@ -219,7 +219,9 @@ describe("roles", () => {
         `/probes/rotate?id=${EU_ID}`,
         `/probes/revoke?id=${EU_ID}`,
       ]) {
-        expect((await getPage(c, path, c.cookies[role])).status).toBe(403);
+        const reply = await getPage(c, path, c.cookies[role]);
+        expectCalloutsOnly(reply.body);
+        expect(reply.status).toBe(403);
       }
       for (const path of [
         "/probes/new",
@@ -372,9 +374,9 @@ describe("add location", () => {
       form_token: formTokenOf(page.body, "/probes/new"),
       ...VALID,
     };
-    expect((await postForm(c, "/probes/new", fields, { cookie: c.cookies.admin })).status).toBe(
-      200,
-    );
+    const reply = await postForm(c, "/probes/new", fields, { cookie: c.cookies.admin });
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(200);
     const again = await postForm(c, "/probes/new", fields, { cookie: c.cookies.admin });
     expectCalloutsOnly(again.body);
     expect(again.status).toBe(409);
@@ -501,6 +503,7 @@ describe("rotate and revoke", () => {
       revision: open.revision,
       confirm_name: "EU",
     });
+    expectCalloutsOnly(wrong.body);
     expect(wrong.status).toBe(422);
     expect(writes(api)).toEqual([]);
     const again = await openChange(c, "revoke", EU_ID);
@@ -600,12 +603,12 @@ describe("rotate and revoke", () => {
     test(`${change}: an admin-side token or an unknown id is not found`, async () => {
       const api = probeApi([self, ops]);
       const c = await probesConsole(api);
-      expect((await getPage(c, `/probes/${change}?id=${OPS_ID}`, c.cookies.admin)).status).toBe(
-        404,
-      );
-      expect((await getPage(c, `/probes/${change}?id=tok_unknown`, c.cookies.admin)).status).toBe(
-        404,
-      );
+      const reply = await getPage(c, `/probes/${change}?id=${OPS_ID}`, c.cookies.admin);
+      expectCalloutsOnly(reply.body);
+      expect(reply.status).toBe(404);
+      const reply2 = await getPage(c, `/probes/${change}?id=tok_unknown`, c.cookies.admin);
+      expectCalloutsOnly(reply2.body);
+      expect(reply2.status).toBe(404);
     });
 
     test(`${change}: the own token has no form and a forged POST is 409 with 0 writes`, async () => {
@@ -681,11 +684,14 @@ describe("self failures", () => {
     expect(list.body).toContain(EU_ID);
     expect(list.body).not.toContain('href="/probes/new"');
     expect(list.body).not.toContain("Rotate this token");
-    expect((await getPage(c, "/probes/new", c.cookies.admin)).status).toBe(503);
+    const reply = await getPage(c, "/probes/new", c.cookies.admin);
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(503);
     const rotate = await postChange(c, "rotate", EU_ID, {
       form_token: open.formToken,
       revision: open.revision,
     });
+    expectCalloutsOnly(rotate.body);
     expect(rotate.status).toBe(503);
     const created = await postForm(
       c,
@@ -693,6 +699,7 @@ describe("self failures", () => {
       { csrf: c.csrfs.admin, form_token: formTokenOf(add.body, "/probes/new"), ...VALID },
       { cookie: c.cookies.admin },
     );
+    expectCalloutsOnly(created.body);
     expect(created.status).toBe(503);
     expect(writes(api)).toEqual([]);
   });
@@ -704,7 +711,9 @@ describe("self failures", () => {
     const list = await getPage(c, "/probes", c.cookies.admin);
     expectCalloutsOnly(list.body);
     expect(list.body).not.toContain('href="/probes/new"');
-    expect((await getPage(c, "/probes/new", c.cookies.admin)).status).toBe(502);
+    const reply = await getPage(c, "/probes/new", c.cookies.admin);
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(502);
   });
 });
 
@@ -718,7 +727,9 @@ describe("secrets", () => {
     );
     api.replyTo("POST", `/admin/tokens/${EU_ID}/rotate`, secretReply(eu, ROTATED_SECRET, null));
     const c = await probesConsole(api);
-    expect((await postNew(c, VALID)).body).toContain(FAKE_SECRET);
+    const reply = await postNew(c, VALID);
+    expectCalloutsOnly(reply.body);
+    expect(reply.body).toContain(FAKE_SECRET);
     const open = await openChange(c, "rotate", EU_ID);
     expectCalloutsOnly(open.page.body);
     const rotated = await postChange(c, "rotate", EU_ID, {

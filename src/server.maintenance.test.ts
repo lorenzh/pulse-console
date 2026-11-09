@@ -237,6 +237,7 @@ describe("maintenance form GET", () => {
     const a = api();
     const c = await team(a);
     const created = await getPage(c, "/maintenance/new", c.cookies.member);
+    expectCalloutsOnly(created.body);
     expect(created.status).toBe(200);
     expect(calls(a)).toEqual(["GET /admin/maintenance", "GET /admin/config"]);
     a.seen.length = 0;
@@ -416,8 +417,10 @@ describe("POST /maintenance/new", () => {
       [["csrf", c.csrfs.viewer], ...CREATE],
       "viewer",
     );
+    expectCalloutsOnly(viewer.body);
     expect(viewer.status).toBe(403);
     const wrongCsrf = await post(c, "/maintenance/new", [["csrf", "nope"], ...CREATE], "member");
+    expectCalloutsOnly(wrongCsrf.body);
     expect(wrongCsrf.status).toBe(403);
     const twice = await post(
       c,
@@ -712,6 +715,7 @@ describe("/maintenance/delete", () => {
     const a = api();
     const c = await team(a);
     const unknown = await getPage(c, "/maintenance/delete?id=none-here", c.cookies.admin);
+    expectCalloutsOnly(unknown.body);
     expect(unknown.status).toBe(404);
     a.seen.length = 0;
     const forged = await post(
@@ -724,6 +728,7 @@ describe("/maintenance/delete", () => {
       ],
       "member",
     );
+    expectCalloutsOnly(forged.body);
     expect(forged.status).toBe(403);
     expect(a.seen).toHaveLength(0);
   });
@@ -910,6 +915,7 @@ describe("maintenance outcomes not covered above", () => {
       }
       for (const fn of [...pending]) fn();
       const answer = await res;
+      expectCalloutsOnly(answer.body);
       expect(answer.status).toBe(504);
       expect(answer.body).toContain(
         "The result is unknown. Open Maintenance to see whether the window was saved.",
