@@ -8,29 +8,9 @@ import {
   startIncidentApi,
 } from "../test/incident-api.ts";
 import { expectCalloutsOnly } from "../test/rendered-audit.ts";
-import {
-  getPage as fetchPage,
-  formTokenOf,
-  type Reply,
-  replyOf as readReply,
-} from "../test/signed-in-console.ts";
+import { formTokenOf, getPage, type Reply, replyOf } from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import type { ConsoleRole } from "./roles.ts";
-
-/** Every HTML page this suite reads passes the shared callout audit. */
-async function audited(reply: Promise<Reply>): Promise<Reply> {
-  const r = await reply;
-  if ((r.headers.get("content-type") ?? "").includes("text/html")) expectCalloutsOnly(r.body);
-  return r;
-}
-
-function getPage(...args: Parameters<typeof fetchPage>): Promise<Reply> {
-  return audited(fetchPage(...args));
-}
-
-function replyOf(res: Response): Promise<Reply> {
-  return audited(readReply(res));
-}
 
 const TOKEN = "maintenance-admin-token-sentinel-0123456789";
 const NOTE = "Database upgrade sentinel note";
@@ -131,6 +111,7 @@ async function submit(
 ): Promise<Reply> {
   const role = view.role ?? "member";
   const opened = await getPage(c, view.page, c.cookies[role]);
+  expectCalloutsOnly(opened.body);
   expect(opened.status).toBe(200);
   const token = formTokenOf(opened.body, view.action);
   a.seen.length = 0;
@@ -205,6 +186,7 @@ describe("GET /maintenance", () => {
     const a = api();
     const c = await team(a);
     const page = await getPage(c, "/maintenance", c.cookies.owner);
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(calls(a)).toEqual(["GET /admin/maintenance", "GET /admin/config"]);
     expect(page.body).toContain("Current (1)");
@@ -223,6 +205,7 @@ describe("GET /maintenance", () => {
     const a = api();
     const c = await team(a);
     const page = await getPage(c, "/maintenance", c.cookies.viewer);
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).not.toContain("/maintenance/edit");
     expect(page.body).not.toContain("/maintenance/delete");
@@ -239,6 +222,7 @@ describe("GET /maintenance", () => {
     const c = await team(a);
     for (const path of ["/maintenance", "/maintenance/new", EDIT]) {
       const page = await getPage(c, path, c.cookies.owner);
+      expectCalloutsOnly(page.body);
       expect(page.body).toContain(
         "This pulse-api is too old for the Maintenance page. It needs database maintenance windows (pulse-api with #765).",
       );
@@ -257,6 +241,7 @@ describe("maintenance form GET", () => {
     expect(calls(a)).toEqual(["GET /admin/maintenance", "GET /admin/config"]);
     a.seen.length = 0;
     const edit = await getPage(c, EDIT, c.cookies.member);
+    expectCalloutsOnly(edit.body);
     expect(edit.status).toBe(200);
     expect(calls(a)).toEqual(["GET /admin/maintenance", "GET /admin/config"]);
     expect(edit.body).toContain('value="2026-11-06T10:00:00"');
@@ -280,6 +265,7 @@ describe("maintenance form GET", () => {
       a.beforeAnswer("GET", "/admin/config", flip);
     });
     const page = await getPage(c, "/maintenance/new", c.cookies.member);
+    expectCalloutsOnly(page.body);
     expect(flips).toBe(2);
     expect(calls(a)).toEqual([
       "GET /admin/maintenance",
@@ -297,6 +283,7 @@ describe("maintenance form GET", () => {
     a.seen.length = 0;
     a.beforeAnswer("GET", "/admin/config", () => a.bumpRevision());
     const page = await getPage(c, "/maintenance/new", c.cookies.member);
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(a.reads()).toBe(4);
     expect(page.body).toContain(`name="revision" value="${a.revision()}"`);
@@ -306,6 +293,7 @@ describe("maintenance form GET", () => {
     const a = api();
     const c = await team(a);
     const page = await getPage(c, `/maintenance/edit?id=${id}`, c.cookies.member);
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(id === "file-window" ? 409 : 404);
     expectNoScreenForm(page.body, "/maintenance/edit");
     expect(a.reads()).toBe(2);
@@ -317,6 +305,7 @@ describe("maintenance form GET", () => {
       const a = api();
       const c = await team(a);
       const page = await getPage(c, `/maintenance/edit?id=${id}`, c.cookies.member);
+      expectCalloutsOnly(page.body);
       expect(page.status).toBe(404);
       expect(a.seen).toHaveLength(0);
     },
@@ -332,6 +321,7 @@ describe("POST /maintenance/new", () => {
       action: "/maintenance/new",
       entries: CREATE,
     });
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(303);
     expect(reply.headers.get("location")).toBe("/maintenance?saved=1");
     expect(calls(a)).toEqual(["GET /admin/config", "POST /admin/maintenance"]);
@@ -351,6 +341,7 @@ describe("POST /maintenance/new", () => {
       },
     ]);
     const list = await getPage(c, "/maintenance?saved=1", c.cookies.member);
+    expectCalloutsOnly(list.body);
     expect(list.body).toContain("Maintenance window saved.");
   });
 
@@ -363,6 +354,7 @@ describe("POST /maintenance/new", () => {
       action: "/maintenance/new",
       entries,
     });
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(409);
     expect([a.reads(), a.writes()]).toEqual([1, 1]);
     expect(reply.body).toContain("a window with this id exists");
@@ -388,6 +380,7 @@ describe("POST /maintenance/new", () => {
       action: "/maintenance/new",
       entries,
     });
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(422);
     expect(reply.body).toContain(text);
     expect([a.reads(), a.writes()]).toEqual([1, 0]);
@@ -397,6 +390,7 @@ describe("POST /maintenance/new", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, "/maintenance/new", c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, "/maintenance/new");
     a.bumpRevision();
     a.seen.length = 0;
@@ -406,6 +400,7 @@ describe("POST /maintenance/new", () => {
       [["csrf", c.csrfs.member], ["form_token", token], ...CREATE],
       "member",
     );
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(409);
     expect(reply.body).toContain("Open the form again");
     expect(reply.body).toContain(NOTE);
@@ -461,6 +456,7 @@ describe("POST /maintenance/new", () => {
       action: "/maintenance/new",
       entries: CREATE,
     });
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(502);
     expect(reply.body).toContain(
       "The result is unknown. Open Maintenance to see whether the window was saved.",
@@ -484,6 +480,7 @@ describe("POST /maintenance/edit", () => {
       action: EDIT,
       entries: editEntries(start, end),
     });
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(303);
     expect(reply.headers.get("location")).toBe("/maintenance?saved=1");
     expect(calls(a)).toEqual([
@@ -511,6 +508,7 @@ describe("POST /maintenance/edit", () => {
       ["start_ms", "1"],
     ] as const;
     const reply = await submit(c, a, { page: EDIT, action: EDIT, entries });
+    expectCalloutsOnly(reply.body);
     // An unknown field is ignored; the PUT keeps the epochs of the maintenance read.
     expect(reply.status).toBe(303);
     expect(a.seen[2]?.body).toMatchObject({ start: 1793959200123, end: 1793966400456 });
@@ -522,6 +520,7 @@ describe("POST /maintenance/edit", () => {
       const a = api();
       const c = await team(a);
       const opened = await getPage(c, EDIT, c.cookies.member);
+      expectCalloutsOnly(opened.body);
       const token = formTokenOf(opened.body, EDIT);
       const [method, path] = call.split(" ");
       a.beforeAnswer(method ?? "", path ?? "", () => a.bumpRevision());
@@ -536,6 +535,7 @@ describe("POST /maintenance/edit", () => {
         ],
         "member",
       );
+      expectCalloutsOnly(reply.body);
       expect(reply.status).toBe(409);
       expect(reply.body).toContain("Open the form again");
       expect(calls(a)).toEqual(["GET /admin/maintenance", "GET /admin/config"]);
@@ -546,6 +546,7 @@ describe("POST /maintenance/edit", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, EDIT, c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, EDIT);
     a.seen.length = 0;
     const entries = editEntries("2026-11-06T10:00", "2026-11-06T12:00").map(
@@ -558,6 +559,7 @@ describe("POST /maintenance/edit", () => {
       [["csrf", c.csrfs.member], ["form_token", token], ...entries],
       "member",
     );
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(409);
     expect(reply.body).toContain(
       "This window comes from the checks file or is shadowed by it; it cannot be edited here.",
@@ -569,6 +571,7 @@ describe("POST /maintenance/edit", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, EDIT, c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, EDIT);
     a.windows.splice(0, 1);
     a.seen.length = 0;
@@ -582,6 +585,7 @@ describe("POST /maintenance/edit", () => {
       ],
       "member",
     );
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(404);
     expect(reply.body).toContain("This maintenance window no longer exists.");
     expect(a.reads()).toBe(2);
@@ -595,6 +599,7 @@ describe("POST /maintenance/edit", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, EDIT, c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, EDIT);
     a.beforeAnswer("GET", "/admin/config", () => {
       if (kind === "role lowered") {
@@ -614,6 +619,7 @@ describe("POST /maintenance/edit", () => {
       ],
       "member",
     );
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(status);
     expect(calls(a)).toEqual(["GET /admin/maintenance", "GET /admin/config"]);
   });
@@ -635,6 +641,7 @@ describe("POST /maintenance/edit", () => {
       action: EDIT,
       entries: editEntries("2026-11-06T10:00", "2026-11-06T12:00"),
     });
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(412);
     expect(reply.body).toContain("Open the form again");
     expect(reply.body).toContain("Edited");
@@ -648,6 +655,7 @@ describe("/maintenance/delete", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, "/maintenance/delete?id=db-upgrade", c.cookies.admin);
+    expectCalloutsOnly(opened.body);
     expect(opened.status).toBe(200);
     expect(opened.body).toContain("Delete maintenance window db-upgrade?");
     expect(calls(a)).toEqual(["GET /admin/maintenance"]);
@@ -664,6 +672,7 @@ describe("/maintenance/delete", () => {
       ],
       "admin",
     );
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(303);
     expect(reply.headers.get("location")).toBe("/maintenance?deleted=1");
     expect(calls(a)).toEqual(["DELETE /admin/maintenance/db-upgrade"]);
@@ -677,6 +686,7 @@ describe("/maintenance/delete", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, "/maintenance/delete?id=file-window", c.cookies.admin);
+    expectCalloutsOnly(opened.body);
     expect(opened.body).toContain(
       "Delete the database copy of file-window? The file window stays in force.",
     );
@@ -692,6 +702,7 @@ describe("/maintenance/delete", () => {
       ],
       "admin",
     );
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(303);
     expect(a.shadowed).toHaveLength(0);
     expect(a.windows.some((w) => w.id === "file-window" && w.source === "file")).toBe(true);
@@ -727,8 +738,10 @@ describe("maintenance secrets", () => {
       action: "/maintenance/new",
       entries: CREATE,
     });
+    expectCalloutsOnly(reply.body);
     expect(reply.body).not.toContain(TOKEN);
     const list = await getPage(c, "/maintenance", c.cookies.owner);
+    expectCalloutsOnly(list.body);
     expect(list.body).not.toContain(TOKEN);
     expect(c.logs.join("\n")).not.toContain(TOKEN);
     expect(c.logs.join("\n")).not.toContain(NOTE);
@@ -747,6 +760,7 @@ describe("maintenance outcomes not covered above", () => {
   async function deleteAfter(c: TeamConsole, a: IncidentApi, change: () => void): Promise<Reply> {
     const path = "/maintenance/delete?id=db-upgrade";
     const opened = await getPage(c, path, c.cookies.admin);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, path);
     change();
     a.seen.length = 0;
@@ -777,6 +791,7 @@ describe("maintenance outcomes not covered above", () => {
         () => new Response(JSON.stringify({ error: "refused" }), { status, headers: WIRE_HEADERS }),
       ),
     );
+    expectCalloutsOnly(reply.body);
     expect(reply.status).not.toBe(303);
     expect(reply.status).toBeGreaterThanOrEqual(400);
     expect(calls(a)).toEqual(["DELETE /admin/maintenance/db-upgrade"]);
@@ -788,6 +803,7 @@ describe("maintenance outcomes not covered above", () => {
     const a = api();
     const c = await team(a);
     const reply = await deleteAfter(c, a, () => a.bumpRevision());
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(412);
     expect([a.reads(), a.writes()]).toEqual([0, 1]);
     expect(a.windows.some((w) => w.id === "db-upgrade")).toBe(true);
@@ -798,6 +814,7 @@ describe("maintenance outcomes not covered above", () => {
     const c = await team(a);
     a.seen.length = 0;
     const reply = await getPage(c, "/maintenance/edit?id=none-here", c.cookies.member);
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(404);
     expect([a.reads(), a.writes()]).toEqual([2, 0]);
   });
@@ -806,6 +823,7 @@ describe("maintenance outcomes not covered above", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, "/maintenance/new", c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, "/maintenance/new");
     a.beforeAnswer("GET", "/admin/config", () => {
       c.db.query("UPDATE users SET role = 'viewer' WHERE id = ?").run(c.ids.member);
@@ -817,6 +835,7 @@ describe("maintenance outcomes not covered above", () => {
       [["csrf", c.csrfs.member], ["form_token", token], ...CREATE],
       "member",
     );
+    expectCalloutsOnly(reply.body);
     expect(reply.status).toBe(403);
     expect(calls(a)).toEqual(["GET /admin/config"]);
   });
@@ -867,6 +886,7 @@ describe("maintenance outcomes not covered above", () => {
       );
       cleanups.push(() => release());
       const opened = await getPage(c, page, c.cookies[role]);
+      expectCalloutsOnly(opened.body);
       const token = formTokenOf(opened.body, action);
       pending.clear();
       a.seen.length = 0;

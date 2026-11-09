@@ -9,29 +9,9 @@ import {
   startIncidentApi,
 } from "../test/incident-api.ts";
 import { expectCalloutsOnly } from "../test/rendered-audit.ts";
-import {
-  getPage as fetchPage,
-  formTokenOf,
-  type Reply,
-  replyOf as readReply,
-} from "../test/signed-in-console.ts";
+import { formTokenOf, getPage, type Reply, replyOf } from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import type { ConsoleRole } from "./roles.ts";
-
-/** Every HTML page this suite reads passes the shared callout audit. */
-async function audited(reply: Promise<Reply>): Promise<Reply> {
-  const r = await reply;
-  if ((r.headers.get("content-type") ?? "").includes("text/html")) expectCalloutsOnly(r.body);
-  return r;
-}
-
-function getPage(...args: Parameters<typeof fetchPage>): Promise<Reply> {
-  return audited(fetchPage(...args));
-}
-
-function replyOf(res: Response): Promise<Reply> {
-  return audited(readReply(res));
-}
 
 const TOKEN = "incidents-write-admin-token-sentinel-0123456789";
 
@@ -84,6 +64,7 @@ async function submit(
 ): Promise<Reply> {
   const role = view.role ?? "member";
   const opened = await getPage(c, view.page, c.cookies[role]);
+  expectCalloutsOnly(opened.body);
   expect(opened.status).toBe(200);
   const token = formTokenOf(opened.body, view.action);
   a.seen.length = 0;
@@ -128,6 +109,7 @@ describe("POST /incidents/new", () => {
     const a = api();
     const c = await team(a);
     const res = await submit(c, a, composer(PUBLISH));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/incidents/manual?id=4&published=1");
     expect([a.reads(), a.writes()]).toEqual([1, 1]);
@@ -161,6 +143,7 @@ describe("POST /incidents/new", () => {
       ["action", "preview"],
     ];
     const res = await submit(c, a, composer(entries));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(200);
     expect(res.body).toContain('<h3 data-part="title">&lt;b&gt;Checkout&lt;/b&gt; slow</h3>');
     expect(res.body).toContain('<p data-part="affects">Affects: Web, Public API</p>');
@@ -182,6 +165,7 @@ describe("POST /incidents/new", () => {
       ["action", "publish"],
     ];
     const res = await submit(c, a, composer(entries));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(res.body).toContain(
       "The title needs at least one letter, digit, punctuation mark or symbol.",
@@ -195,6 +179,7 @@ describe("POST /incidents/new", () => {
     const c = await team(a);
     const entries: Entries = [...PUBLISH.filter(([k]) => k !== "component"), ["component", "old"]];
     const res = await submit(c, a, composer(entries));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(res.body).toContain("Component old is not configured any more.");
     expect(a.writes()).toBe(0);
@@ -217,11 +202,13 @@ describe("POST /incidents/new", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, "/incidents/new", c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, "/incidents/new");
     const entries: Entries = [["csrf", c.csrfs.member], ["form_token", token], ...PUBLISH];
     expect((await post(c, "/incidents/new", entries, "member")).status).toBe(303);
     const before = a.seen.length;
     const replay = await post(c, "/incidents/new", entries, "member");
+    expectCalloutsOnly(replay.body);
     expect(replay.status).toBe(409);
     expect(replay.body).toContain("Already submitted");
     expect(a.seen).toHaveLength(before);
@@ -236,6 +223,7 @@ describe("POST /incidents/new", () => {
       release = resolve;
     });
     const opened = await getPage(c, "/incidents/new", c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, "/incidents/new");
     a.override("GET", "/admin/config", () => {
       c.db.query("UPDATE users SET role = 'viewer' WHERE id = ?").run(c.ids.member);
@@ -252,6 +240,7 @@ describe("POST /incidents/new", () => {
       [["csrf", c.csrfs.member], ["form_token", token], ...PUBLISH],
       "member",
     );
+    expectCalloutsOnly(res.body);
     await gate;
     expect(res.status).toBe(403);
     expect([a.reads(), a.writes()]).toEqual([1, 0]);
@@ -272,6 +261,7 @@ describe("POST /incidents/new", () => {
         () => new Response('{"error":"refused"}', { status, headers: WIRE_HEADERS }),
       );
       const res = await submit(c, a, composer(PUBLISH));
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(expected);
       expect(res.body).toContain(text);
       expect(a.writes()).toBe(1);
@@ -294,6 +284,7 @@ describe("POST /incidents/new", () => {
         () => new Response('{"error":"title is bad sentinel"}', { status, headers: WIRE_HEADERS }),
       );
       const res = await submit(c, a, composer(PUBLISH));
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(expected);
       expect(res.body).toContain(text);
       expect(res.body).not.toContain(TOKEN);
@@ -307,6 +298,7 @@ describe("POST /incidents/new", () => {
     const c = await team(a);
     const entries = PUBLISH.map(([k, v]) => [k, k === "title" ? "​" : v] as const);
     const res = await submit(c, a, composer(entries));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(res.body).toContain(
       "The title needs at least one letter, digit, punctuation mark or symbol.",
@@ -320,6 +312,7 @@ describe("POST /incidents/new", () => {
     const title = "a😀".repeat(100);
     const entries = PUBLISH.map(([k, v]) => [k, k === "title" ? title : v] as const);
     const res = await submit(c, a, composer(entries));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     const [body] = writeBodies(a);
     expect(body).toMatchObject({ title });
@@ -329,6 +322,7 @@ describe("POST /incidents/new", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, "/incidents/new", c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, "/incidents/new");
     a.override("GET", "/admin/config", () => {
       c.db.query("DELETE FROM sessions WHERE user_id = ?").run(c.ids.member);
@@ -341,6 +335,7 @@ describe("POST /incidents/new", () => {
       [["csrf", c.csrfs.member], ["form_token", token], ...PUBLISH],
       "member",
     );
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(409);
     expect(res.body).toContain("Not saved");
     expect(a.seen.map((s) => `${s.method} ${s.path}`)).toEqual(["GET /admin/config"]);
@@ -369,6 +364,7 @@ describe("POST /incidents/new", () => {
     );
     cleanups.push(() => release());
     const opened = await getPage(c, "/incidents/new", c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, "/incidents/new");
     pending.clear();
     a.seen.length = 0;
@@ -398,8 +394,10 @@ describe("POST /incidents/new", () => {
     const a = api();
     const c = await team(a);
     const res = await submit(c, a, composer(PUBLISH));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     const detail = await getPage(c, res.headers.get("location") ?? "/", c.cookies.member);
+    expectCalloutsOnly(detail.body);
     expect(detail.body).not.toContain(TOKEN);
     expect(res.body).not.toContain(TOKEN);
     const logs = c.logs.join("\n");
@@ -421,6 +419,7 @@ describe("POST /incidents/new", () => {
     const c = await team(a);
     a.override("POST", "/manual-incidents", () => new Response("<html>", { status: 200 }));
     const res = await submit(c, a, composer(PUBLISH));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(502);
     expect(res.body).toContain(
       "The result is unknown. Open the incident list to see whether the change was published before you send it again.",
@@ -449,6 +448,7 @@ describe("POST /incidents/update", () => {
     const a = api();
     const c = await team(a);
     const res = await submit(c, a, update(updateEntries("identified")));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/incidents/manual?id=1&posted=1");
     expect([a.reads(), a.writes()]).toEqual([2, 1]);
@@ -460,6 +460,7 @@ describe("POST /incidents/update", () => {
     const a = api();
     const c = await team(a);
     const res = await submit(c, a, update(updateEntries("resolved")));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(res.body).toContain("Use Resolve to resolve an incident.");
     expect([a.reads(), a.writes()]).toEqual([2, 0]);
@@ -469,6 +470,7 @@ describe("POST /incidents/update", () => {
     const a = api();
     const c = await team(a);
     const res = await submit(c, a, update(updateEntries("monitoring", "preview")));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(200);
     expect(res.body).toContain('rows="4">\n\nSecond update</textarea>');
     expect(res.body).toContain('<span data-part="status">Status: monitoring</span>');
@@ -492,6 +494,7 @@ describe("/incidents/resolve", () => {
   test("GET shows the message prefilled and the resolved preview", async () => {
     const c = await team(api());
     const page = await getPage(c, "/incidents/resolve?id=1", c.cookies.member);
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).toContain('rows="4">\nResolved.</textarea>');
     expect(page.body).toContain('data-preview="resolved"');
@@ -501,6 +504,7 @@ describe("/incidents/resolve", () => {
   test("GET of a resolved incident answers 409 without a resolve form", async () => {
     const c = await team(api());
     const page = await getPage(c, "/incidents/resolve?id=2", c.cookies.member);
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(409);
     expect(page.body).toContain("This incident is already resolved.");
     const main = page.body.slice(
@@ -518,6 +522,7 @@ describe("/incidents/resolve", () => {
     const a = api();
     const c = await team(a);
     const res = await submit(c, a, resolve(resolveEntries()));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/incidents/manual?id=1&resolved=1");
     expect([a.reads(), a.writes()]).toEqual([2, 1]);
@@ -542,6 +547,7 @@ describe("/incidents/resolve", () => {
     expect((await send(first)).status).toBe(303);
     a.seen.length = 0;
     const again = await send(second);
+    expectCalloutsOnly(again.body);
     expect(again.status).toBe(409);
     expect(again.body).toContain("This incident is already resolved.");
     expect(again.body).toContain("All good.");
@@ -552,6 +558,7 @@ describe("/incidents/resolve", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, "/incidents/resolve?id=1", c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, "/incidents/resolve?id=1");
     a.resolveAfterNextRead(1);
     a.seen.length = 0;
@@ -561,6 +568,7 @@ describe("/incidents/resolve", () => {
       [["csrf", c.csrfs.member], ["form_token", token], ...resolveEntries()],
       "member",
     );
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(409);
     expect(res.body).toContain("incident is resolved");
     expect(a.writes()).toBe(1);
@@ -585,6 +593,7 @@ describe("/incidents/delete", () => {
     const a = api();
     const c = await team(a);
     const res = await submit(c, a, deletion(1, " Checkout slow "));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/incidents?deleted=1");
     expect([a.reads(), a.writes()]).toEqual([1, 1]);
@@ -603,6 +612,7 @@ describe("/incidents/delete", () => {
       const a = api();
       const c = await team(a);
       const res = await submit(c, a, deletion(1, typed));
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(422);
       expect(res.body).toContain(text);
       expect([a.reads(), a.writes()]).toEqual([1, 0]);
@@ -613,9 +623,11 @@ describe("/incidents/delete", () => {
     const a = api();
     const c = await team(a);
     const page = await getPage(c, "/incidents/delete?id=2", c.cookies.admin);
+    expectCalloutsOnly(page.body);
     expect(page.body).toContain("Type Incident 2 to confirm");
     expect(page.body).toContain("Delete Untitled incident #2");
     const res = await submit(c, a, deletion(2, "Incident 2"));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(a.writes()).toBe(1);
   });
@@ -624,6 +636,7 @@ describe("/incidents/delete", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, "/incidents/delete?id=1", c.cookies.admin);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, "/incidents/delete?id=1");
     a.manual.splice(0, 1);
     a.seen.length = 0;
@@ -633,6 +646,7 @@ describe("/incidents/delete", () => {
       [["csrf", c.csrfs.admin], ["form_token", token], ...deletion(1, "Checkout slow").entries],
       "admin",
     );
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(404);
     expect(res.body).toContain("This incident does not exist or is not public.");
     expect([a.reads(), a.writes()]).toEqual([1, 0]);
@@ -762,6 +776,7 @@ describe("request counting", () => {
           entries: row.entries ?? [],
           role,
         });
+        expectCalloutsOnly(res.body);
         expect([200, 303]).toContain(res.status);
       }
       expect(a.seen.map((s) => `${s.method} ${s.path}`)).toEqual(row.calls);
@@ -776,6 +791,7 @@ describe("incident review follow-ups", () => {
     cleanups.push(() => a.stop());
     const c = await team(a);
     const opened = await getPage(c, "/incidents/new", c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, "/incidents/new");
     config.components = [{ id: "web", name: "Web", checkIds: ["web"] }];
     a.seen.length = 0;
@@ -785,6 +801,7 @@ describe("incident review follow-ups", () => {
       [["csrf", c.csrfs.member], ["form_token", token], ...PUBLISH],
       "member",
     );
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(res.body).toContain("Component public-api is not configured any more.");
     expect(res.body).toMatch(/name="component" value="public-api"[^>]*checked/);
@@ -799,6 +816,7 @@ describe("incident review follow-ups", () => {
       const c = await team(a);
       const entries = PUBLISH.map(([k, v]) => [k, k === "message" ? message : v] as const);
       const res = await submit(c, a, composer(entries));
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(303);
       expect([a.reads(), a.writes()]).toEqual([1, 1]);
       expect(writeBodies(a)[0]).toMatchObject({ message });
@@ -811,6 +829,7 @@ describe("incident review follow-ups", () => {
       const c = await team(a);
       const entries = PUBLISH.map(([k, v]) => [k, k === "message" ? message : v] as const);
       const res = await submit(c, a, composer(entries));
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(422);
       expect(res.body).toContain("must be 1..2000 characters");
       expect(res.body).toContain(`${message.slice(0, 40)}`);
@@ -841,6 +860,7 @@ describe("incident review follow-ups", () => {
           expect((await getPage(c, path, c.cookies.admin)).body).toContain("Untitled incident #12");
         }
         const del = await getPage(c, "/incidents/delete?id=12", c.cookies.admin);
+        expectCalloutsOnly(del.body);
         expect(del.body).toContain("Untitled incident #12");
         expect(del.body).toContain("Type Incident 12 to confirm");
       });
@@ -850,6 +870,7 @@ describe("incident review follow-ups", () => {
           seedTitle(a, title);
           const c = await team(a);
           const res = await submit(c, a, deletion(12, typed));
+          expectCalloutsOnly(res.body);
           expect(res.status).toBe(303);
           expect([a.reads(), a.writes()]).toEqual([1, 1]);
         });
@@ -863,6 +884,7 @@ describe("incident review follow-ups", () => {
           seedTitle(a, title);
           const c = await team(a);
           const res = await submit(c, a, deletion(12, typed));
+          expectCalloutsOnly(res.body);
           expect(res.status).toBe(422);
           expect(res.body).toContain(text);
           expect([a.reads(), a.writes()]).toEqual([1, 0]);
@@ -883,6 +905,7 @@ describe("incident review follow-ups", () => {
       seedTitle(a, title);
       const c = await team(a);
       const res = await submit(c, a, deletion(12, typed));
+      expectCalloutsOnly(res.body);
       if (isDeleted) {
         expect(res.status).toBe(303);
         expect([a.reads(), a.writes()]).toEqual([1, 1]);
@@ -899,6 +922,7 @@ describe("incident review follow-ups", () => {
     const a = api();
     const c = await team(a);
     const opened = await getPage(c, "/incidents/new", c.cookies.member);
+    expectCalloutsOnly(opened.body);
     const token = formTokenOf(opened.body, "/incidents/new");
     a.seen.length = 0;
     const res = await post(
@@ -907,6 +931,7 @@ describe("incident review follow-ups", () => {
       [["csrf", "wrong"], ["form_token", token], ...PUBLISH],
       "member",
     );
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(403);
     expect(a.seen).toHaveLength(0);
   });
@@ -921,6 +946,7 @@ describe("incident review follow-ups", () => {
       [["csrf", c.csrfs.member], ["form_token", "x"], ...deletion(1, "Checkout slow").entries],
       "member",
     );
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(403);
     expect(a.seen).toHaveLength(0);
     expect(a.manual.some((m) => m.id === 1)).toBe(true);
@@ -948,6 +974,7 @@ describe("incident review follow-ups", () => {
           body,
         });
         const page = await replyOf(res);
+        expectCalloutsOnly(page.body);
         expect(page.body).not.toBe("");
         if (isTooLarge) expect(res.status).toBe(413);
         else expect(res.status).not.toBe(413);

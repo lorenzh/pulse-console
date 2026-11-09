@@ -10,30 +10,10 @@ import {
   WIRE_HEADERS,
 } from "../test/fake-api.ts";
 import { expectCalloutsOnly } from "../test/rendered-audit.ts";
-import {
-  getPage as fetchPage,
-  formTokenOf,
-  type Reply,
-  replyOf as readReply,
-} from "../test/signed-in-console.ts";
+import { formTokenOf, getPage, type Reply, replyOf } from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import { parseForm } from "./forms.ts";
 import type { ConsoleRole } from "./roles.ts";
-
-/** Every HTML page this suite reads passes the shared callout audit. */
-async function audited(reply: Promise<Reply>): Promise<Reply> {
-  const r = await reply;
-  if ((r.headers.get("content-type") ?? "").includes("text/html")) expectCalloutsOnly(r.body);
-  return r;
-}
-
-function getPage(...args: Parameters<typeof fetchPage>): Promise<Reply> {
-  return audited(fetchPage(...args));
-}
-
-function replyOf(res: Response): Promise<Reply> {
-  return audited(readReply(res));
-}
 
 const TOKEN = "status-page-admin-token-sentinel-0123456789";
 const PATH = "/status-page";
@@ -139,6 +119,7 @@ describe("access", () => {
       new URLSearchParams({ csrf: c.csrfs[role], form_token: "x", action: "save" }).toString(),
       role,
     );
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(403);
     expect(writes(api)).toEqual([]);
   });
@@ -146,6 +127,7 @@ describe("access", () => {
   test("the owner sees the nav entry and the form; save is the first submit button", async () => {
     const c = await teamConsole(fakeApi(statusSettingsView({ componentOrder: ["web", "db"] })));
     const res = await getPage(c, PATH, c.cookies.owner);
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(200);
     expect(res.body).toContain('href="/status-page"');
     const form = res.body.slice(res.body.indexOf(`action="${PATH}"`));
@@ -182,6 +164,7 @@ describe("access", () => {
     };
     api.replyTo("GET", SETTINGS_PATH, demote);
     const res = await postRaw(c, saveFields({ action: "save", name: "Acme" }), { token });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(403);
     expect(writes(api)).toEqual([]);
   });
@@ -192,6 +175,7 @@ describe("component order", () => {
     const api = fakeApi();
     const c = await teamConsole(api);
     const res = await postRaw(c, saveFields({ order: "web,db,cdn", action: "save" }));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/status-page?saved=1");
     expect(putBody(api)).toEqual({ componentOrder: ["web", "db", "cdn"] });
@@ -199,6 +183,7 @@ describe("component order", () => {
     expect(put?.headers["if-match"]).toBe(`"${STATUS_REVISION}"`);
     expect(put?.authorization).toBe(`Bearer ${TOKEN}`);
     const saved = await getPage(c, "/status-page?saved=1", c.cookies.owner);
+    expectCalloutsOnly(saved.body);
     expect(saved.body).toContain("Status page settings saved.");
   });
 
@@ -212,6 +197,7 @@ describe("component order", () => {
     const api = fakeApi();
     const c = await teamConsole(api);
     const res = await postRaw(c, saveFields({ order: "web,db,cdn", action }));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(200);
     expect(hiddenOrder(res.body)).toBe(expected);
     expect(writes(api)).toEqual([]);
@@ -221,6 +207,7 @@ describe("component order", () => {
     const api = fakeApi();
     const c = await teamConsole(api);
     const res = await postRaw(c, saveFields({ order: "db,web", action: "reset-order" }));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(200);
     expect(hiddenOrder(res.body)).toBe("site,data");
     expect(writes(api)).toEqual([]);
@@ -234,6 +221,7 @@ describe("component order", () => {
       params.append("order", "db");
       params.append("action", "save");
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(400);
     expect(res.body).toBe("repeated form field\n");
     expect(writes(api)).toEqual([]);
@@ -250,6 +238,7 @@ describe("component order", () => {
       const api = fakeApi();
       const c = await teamConsole(api);
       const res = await postRaw(c, saveFields({ order, action: "save" }));
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(422);
       expect(res.body).toContain("The component order is invalid.");
       expect(hiddenOrder(res.body)).toBe(order);
@@ -266,6 +255,7 @@ describe("component order", () => {
     });
     const c = await teamConsole(api);
     const res = await postRaw(c, saveFields({ order: "web,web", action: "save", name: "Acme" }));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(putBody(api)).toEqual({ name: "Acme", componentOrder: ["web", "web"] });
     expect(hiddenOrder(res.body)).toBe("web,web");
@@ -276,6 +266,7 @@ describe("component order", () => {
     const api = fakeApi(statusSettingsView({ componentOrder: ["web"] }));
     const c = await teamConsole(api);
     const res = await postRaw(c, saveFields({ order: "", action: "save" }));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(putBody(api)).toEqual({});
   });
@@ -297,6 +288,7 @@ describe("fields", () => {
         action: "save",
       }),
     );
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(putBody(api)).toEqual({
       showLatency: false,
@@ -309,6 +301,7 @@ describe("fields", () => {
     const api = fakeApi();
     const c = await teamConsole(api);
     const res = await postRaw(c, saveFields({ "light-bg": "red", action: "save" }));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(res.body).toContain("settings.theme.light.bg: must be a colour");
     expect(res.body).toContain('value="red"');
@@ -348,6 +341,7 @@ describe("fields", () => {
     const body = params.toString();
     expect(Buffer.byteLength(body)).toBeLessThan(47000);
     const res = await sendBody(c, body, "owner");
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     const sent = putBody(api) as { componentOrder: string[]; name: string };
     expect(sent.componentOrder).toHaveLength(500);
@@ -382,11 +376,13 @@ describe("locked fields and report states", () => {
     const api = fakeApi(LOCKED_VIEW);
     const c = await teamConsole(api);
     const page = await getPage(c, PATH, c.cookies.owner);
+    expectCalloutsOnly(page.body);
     expect(page.body).toContain("Set by <code>PULSE_STATUS_NAME</code> on pulse-status");
     expect(page.body).toContain("Set by <code>theme file</code> on pulse-status");
     expect(page.body).not.toContain('name="name"');
     expect(page.body).not.toContain('name="light-bg"');
     const res = await postRaw(c, saveFields({ "dark-bg": "#000000", action: "save" }));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(putBody(api)).toEqual({ name: "Database name", theme: { dark: { bg: "#000000" } } });
   });
@@ -395,6 +391,7 @@ describe("locked fields and report states", () => {
     const api = fakeApi(LOCKED_VIEW);
     const c = await teamConsole(api);
     const res = await postRaw(c, saveFields({ name: "Forged", action: "save" }));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(res.body).toContain("This field is set on pulse-status and cannot be changed here.");
     expect(writes(api)).toEqual([]);
@@ -413,6 +410,7 @@ describe("locked fields and report states", () => {
   ])("a %s report shows unknown overrides and keeps every field editable", async (_, service) => {
     const c = await teamConsole(fakeApi(statusSettingsView({ name: "Db" }, service)));
     const page = await getPage(c, PATH, c.cookies.owner);
+    expectCalloutsOnly(page.body);
     expect(page.body).toContain("pulse-status has not reported; overrides are unknown");
     expect(page.body).toContain('name="name"');
     expect(page.body).not.toContain("Set by");
@@ -434,6 +432,7 @@ describe("locked fields and report states", () => {
       },
     );
     const page = await getPage(await teamConsole(fakeApi(view)), PATH);
+    expectCalloutsOnly(page.body);
     expect(page.body).toContain("settings.name: must be 1..60 characters");
     expect(page.body).toContain("Saved, not yet applied");
   });
@@ -449,6 +448,7 @@ describe("api states", () => {
     });
     const c = await teamConsole(api);
     const res = await postRaw(c, saveFields({ name: "Kept name", action: "save" }));
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(412);
     expect(res.body).toContain("Changed since you opened it");
     expect(res.body).toContain('value="Kept name"');
@@ -463,6 +463,7 @@ describe("api states", () => {
     );
     api.replyTo("GET", SETTINGS_PATH, { status: 404, headers: WIRE_HEADERS, body: "{}" });
     const old = await getPage(c, PATH, c.cookies.owner);
+    expectCalloutsOnly(old.body);
     expect(old.status).toBe(404);
     expect(old.body).toContain("This pulse-api is too old for this page.");
   });
@@ -471,6 +472,7 @@ describe("api states", () => {
     const api = fakeApi({ revision: "nope" });
     const c = await teamConsole(api);
     const res = await getPage(c, PATH, c.cookies.owner);
+    expectCalloutsOnly(res.body);
     expect(res.body).toContain("pulse-api sent an invalid answer.");
   });
 

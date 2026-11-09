@@ -10,29 +10,9 @@ import {
   webhookChannel,
 } from "../test/fake-api.ts";
 import { expectCalloutsOnly } from "../test/rendered-audit.ts";
-import {
-  getPage as fetchPage,
-  formTokenOf,
-  type Reply,
-  replyOf as readReply,
-} from "../test/signed-in-console.ts";
+import { formTokenOf, getPage, type Reply, replyOf } from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import type { ConsoleRole } from "./roles.ts";
-
-/** Every HTML page this suite reads passes the shared callout audit. */
-async function audited(reply: Promise<Reply>): Promise<Reply> {
-  const r = await reply;
-  if ((r.headers.get("content-type") ?? "").includes("text/html")) expectCalloutsOnly(r.body);
-  return r;
-}
-
-function getPage(...args: Parameters<typeof fetchPage>): Promise<Reply> {
-  return audited(fetchPage(...args));
-}
-
-function replyOf(res: Response): Promise<Reply> {
-  return audited(readReply(res));
-}
 
 const TOKEN = "notify-admin-token-sentinel-0123456789";
 const CHANNELS = "/admin/notify/channels";
@@ -188,6 +168,7 @@ describe("access", () => {
   test("the owner sees the nav entry", async () => {
     const c = await teamConsole(fakeApi());
     const res = await getPage(c, "/notifications", c.cookies.owner);
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(200);
     expect(res.body).toContain('<a class="nav-item" href="/notifications"');
   });
@@ -196,10 +177,12 @@ describe("access", () => {
     const api = fakeApi();
     const c = await teamConsole(api);
     const page = await getPage(c, "/notifications/new", c.cookies.owner);
+    expectCalloutsOnly(page.body);
     c.db.run("UPDATE users SET role = 'admin' WHERE id = ?", [c.ids.owner]);
     const res = await post(c, "", "/notifications/new", webhookFields, {
       token: formTokenOf(page.body, "/notifications/new"),
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(403);
     expect(writes(api)).toEqual([]);
   });
@@ -300,6 +283,7 @@ describe("list", () => {
     );
     api.replyTo("GET", CHANNELS, { status: 404, headers: WIRE_HEADERS, body: "{}" });
     const old = await getPage(c, "/notifications", c.cookies.owner);
+    expectCalloutsOnly(old.body);
     expect(old.status).toBe(404);
     expect(old.body).toContain("This pulse-api is too old for this page.");
     // A record with a literal url passes no admin validator.
@@ -345,6 +329,7 @@ describe("editor", () => {
       url: "https://forged.example",
       secret: "s3cret-sentinel",
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/notifications?saved=1");
     const seen = api.seen.find((s) => s.method === "POST");
@@ -404,6 +389,7 @@ describe("editor", () => {
     const body = params.toString();
     expect(Buffer.byteLength(body)).toBeLessThanOrEqual(57_344);
     const res = await send(c, "/notifications/new", body);
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(sentBody(api, "POST")).toEqual(base);
   });
@@ -434,6 +420,7 @@ describe("editor", () => {
     });
     const c = await teamConsole(api);
     const res = await post(c, "/notifications/new", "/notifications/new", webhookFields);
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(res.body).toContain("must be at most 16384 bytes as JSON");
     expect(res.body).toContain('value="hook"');
@@ -446,6 +433,7 @@ describe("editor", () => {
       ...webhookFields,
       id: "Bad Id",
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(res.body).toContain('value="Bad Id"');
     expect(writes(api)).toEqual([]);
@@ -456,12 +444,14 @@ describe("editor", () => {
     api.replyTo("PUT", `${CHANNELS}/a`, { status: 412, headers: WIRE_HEADERS, body: "{}" });
     const c = await teamConsole(api);
     const page = await getPage(c, "/notifications/edit?id=a", c.cookies.owner);
+    expectCalloutsOnly(page.body);
     expect(page.body).toContain('value="HOOK"');
     const res = await post(c, "/notifications/edit?id=a", "/notifications/edit", {
       ...webhookFields,
       id: "a",
       url_env: "KEPT_INPUT",
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(412);
     expect(res.body).toContain("Changed since you opened it");
     expect(res.body).toContain('value="KEPT_INPUT"');
@@ -474,6 +464,7 @@ describe("editor", () => {
     const api = fakeApi(notifyChannelsView({ shadowed: [webhookChannel("a")] }));
     const c = await teamConsole(api);
     const res = await getPage(c, "/notifications/edit?id=a", c.cookies.owner);
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(409);
     expect(res.body).toContain("Shadowed by the channel file: only Delete is possible.");
     expect((await getPage(c, "/notifications/edit?id=zz", c.cookies.owner)).status).toBe(404);
@@ -486,6 +477,7 @@ describe("editor", () => {
       id: "a",
       revision: NOTIFY_REVISION,
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/notifications?deleted=1");
     expect(writes(api)).toEqual([`DELETE ${CHANNELS}/a`]);
@@ -596,9 +588,11 @@ describe("failed and resend", () => {
       key: "1:opened",
       request_id: requestId,
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(503);
     expect(res.body).toContain("pulse-api cannot take a resend now");
     const state = await getPage(c, `/notifications/resend?id=${COMMAND_ID}`, c.cookies.owner);
+    expectCalloutsOnly(state.body);
     expect(state.status).toBe(200);
     expect(state.body).toContain("Delivered.");
     expect((await getPage(c, "/notifications/resend?id=bad", c.cookies.owner)).status).toBe(404);
@@ -615,6 +609,7 @@ describe("failed and resend", () => {
       api.replyTo("GET", FAILED, jsonReply(failedView(rows)));
       const c = await teamConsole(api);
       const page = await getPage(c, "/notifications/failed", c.cookies.owner);
+      expectCalloutsOnly(page.body);
       const forms = [
         ...page.body.matchAll(/<form[^>]*action="\/notifications\/resend"[\s\S]*?<\/form>/g),
       ];
@@ -626,6 +621,7 @@ describe("failed and resend", () => {
       }
       expect(params.get("key")).toBe(`${pick}:opened`);
       const res = await send(c, "/notifications/resend", params.toString());
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(303);
       expect(writes(api)).toEqual([`POST ${RESENDS}`]);
     });
@@ -636,6 +632,7 @@ describe("failed and resend", () => {
     api.replyTo("GET", FAILED, { status: 404, headers: WIRE_HEADERS, body: "{}" });
     const c = await teamConsole(api);
     const res = await getPage(c, "/notifications/failed", c.cookies.owner);
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(404);
     expect(res.body).toContain("This pulse-api is too old for this page.");
   });

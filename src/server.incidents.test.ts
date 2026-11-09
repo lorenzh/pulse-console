@@ -9,28 +9,9 @@ import {
   startIncidentApi,
 } from "../test/incident-api.ts";
 import { expectCalloutsOnly } from "../test/rendered-audit.ts";
-import {
-  getPage as fetchPage,
-  type Reply,
-  postForm as sendForm,
-} from "../test/signed-in-console.ts";
+import { getPage, postForm, type Reply } from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import type { ConsoleRole } from "./roles.ts";
-
-/** Every HTML page this suite reads passes the shared callout audit. */
-async function audited(reply: Promise<Reply>): Promise<Reply> {
-  const r = await reply;
-  if ((r.headers.get("content-type") ?? "").includes("text/html")) expectCalloutsOnly(r.body);
-  return r;
-}
-
-function getPage(...args: Parameters<typeof fetchPage>): Promise<Reply> {
-  return audited(fetchPage(...args));
-}
-
-function postForm(...args: Parameters<typeof sendForm>): Promise<Reply> {
-  return audited(sendForm(...args));
-}
 
 const TOKEN = "incidents-admin-token-sentinel-0123456789";
 
@@ -80,6 +61,7 @@ describe("GET /incidents", () => {
     const a = api();
     const c = await team(a);
     const page = await get(c, "/incidents");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).toContain('<a href="/incidents/manual?id=1">Checkout slow</a>');
     expect(page.body).toContain('<a href="/incidents/manual?id=2">Untitled incident #2</a>');
@@ -142,6 +124,7 @@ describe("GET /incidents", () => {
     a.override("GET", "/manual-incidents", () => new Response("", { status: 404 }));
     const c = await team(a);
     const page = await get(c, "/incidents");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).toContain("No incidents in the last 14 days.");
   });
@@ -151,6 +134,7 @@ describe("GET /incidents", () => {
     a.setPrivateItem(true);
     const c = await team(a);
     const page = await get(c, "/incidents");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).not.toContain("Private draft title");
   });
@@ -158,6 +142,7 @@ describe("GET /incidents", () => {
   test("a Viewer sees no Declare incident link", async () => {
     const c = await team(api());
     const page = await get(c, "/incidents", "viewer");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).not.toContain("Declare incident");
   });
@@ -167,6 +152,7 @@ describe("GET /incidents", () => {
     a.override("GET", "/admin/config", () => new Response("{}", { status: 401 }));
     const c = await team(a);
     const page = await get(c, "/incidents");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(502);
     expect(page.body).toContain("pulse-api rejected the console token");
     expect(page.body).not.toContain("manual?id=1");
@@ -183,6 +169,7 @@ describe("GET /incidents/manual", () => {
     const a = api();
     const c = await team(a);
     const page = await get(c, "/incidents/manual?id=1&published=1");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).toContain("Incident published.");
     expect(page.body).toContain('<h2 class="incident-title">Checkout slow</h2>');
@@ -203,6 +190,7 @@ describe("GET /incidents/manual", () => {
   test("a resolved incident has no form of its own for any role", async () => {
     const c = await team(api());
     const page = await get(c, "/incidents/manual?id=2");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).toContain("Untitled incident #2");
     const main = mainOf(page.body);
@@ -216,6 +204,7 @@ describe("GET /incidents/manual", () => {
   test("a Viewer sees no update form, no Resolve and no Delete", async () => {
     const c = await team(api());
     const page = await get(c, "/incidents/manual?id=1", "viewer");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).not.toContain('action="/incidents/update"');
     expect(page.body).not.toContain(">Resolve</a>");
@@ -225,6 +214,7 @@ describe("GET /incidents/manual", () => {
   test("an unknown id answers 404 with the incident text", async () => {
     const c = await team(api());
     const page = await get(c, "/incidents/manual?id=99");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(404);
     expect(page.body).toContain("This incident does not exist or is not public.");
   });
@@ -234,6 +224,7 @@ describe("GET /incidents/manual", () => {
       const a = api();
       const c = await team(a);
       const page = await get(c, `/incidents/manual${query}`);
+      expectCalloutsOnly(page.body);
       expect(page.status).toBe(404);
       expect(a.seen).toHaveLength(0);
     });
@@ -245,6 +236,7 @@ describe("GET /incidents/automatic", () => {
     const a = api();
     const c = await team(a);
     const page = await get(c, "/incidents/automatic?id=7");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).toContain('href="/checks/check?id=web">Web shop</a>');
     expect(page.body).toContain("timeout");
@@ -263,6 +255,7 @@ describe("GET /incidents/automatic", () => {
       const a = api();
       const c = await team(a);
       const page = await get(c, `/incidents/automatic?id=${id}`);
+      expectCalloutsOnly(page.body);
       expect(page.status).toBe(200);
       expect(page.body).toContain(
         `pulse-api cannot address the id &quot;${checkId}&quot; in a URL path`,
@@ -284,6 +277,7 @@ describe("GET /incidents/automatic", () => {
     cleanups.push(() => a.stop());
     const c = await team(a);
     const page = await get(c, "/incidents/automatic?id=8");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).toContain("The check no longer exists; no results.");
     expect(a.seen.at(-1)?.query).toBe(`?limit=20&before=${NOW - 999}`);
@@ -292,6 +286,7 @@ describe("GET /incidents/automatic", () => {
   test("an id outside the window answers 404 with its text", async () => {
     const c = await team(api());
     const page = await get(c, "/incidents/automatic?id=5");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(404);
     expect(page.body).toContain(
       "This automatic incident is not among the incidents of the last 14 days.",
@@ -313,6 +308,7 @@ describe("GET /incidents/new", () => {
     const a = api();
     const c = await team(a);
     const page = await get(c, "/incidents/new?from=31");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).toContain(
       'value="public-api" data-name="Public API" checked> Public API</label>',
@@ -346,6 +342,7 @@ describe("GET /incidents/new", () => {
     const a = api();
     const c = await team(a);
     const page = await get(c, "/incidents/new");
+    expectCalloutsOnly(page.body);
     expect(page.status).toBe(200);
     expect(page.body).toContain('name="impact" value="minor" checked');
     expect(page.body).toContain('name="status" value="investigating" checked');
