@@ -8,6 +8,7 @@ import {
   startFakeApi,
   WIRE_HEADERS,
 } from "../test/fake-api.ts";
+import { expectCalloutsOnly } from "../test/rendered-audit.ts";
 import { formTokenOf, getPage, postForm, type Reply, START } from "../test/signed-in-console.ts";
 import { startTeamConsole, type TeamConsole } from "../test/team-console.ts";
 import { adminToken, FAKE_SECRET, probeToken, SELF_ID, selfToken } from "../test/token-fixtures.ts";
@@ -66,6 +67,7 @@ async function postNew(
   role: ConsoleRole = "admin",
 ): Promise<Reply> {
   const page = await getPage(c, "/tokens/new", c.cookies[role]);
+  expectCalloutsOnly(page.body);
   return postForm(
     c,
     "/tokens/new",
@@ -84,6 +86,7 @@ async function openChange(
   id: string,
 ): Promise<{ page: Reply; formToken: string; revision: string }> {
   const page = await getPage(c, `/tokens/${change}?id=${id}`, c.cookies.admin);
+  expectCalloutsOnly(page.body);
   return {
     page,
     formToken: formTokenOf(page.body, `/tokens/${change}?id=${id}`),
@@ -121,6 +124,7 @@ describe("GET /tokens", () => {
     const c = await tokensConsole(api);
     for (const role of ["owner", "admin"] as const) {
       const res = await getPage(c, "/tokens", c.cookies[role]);
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(200);
       expect(res.headers.get("cache-control")).toBe("no-store");
       const body = res.body;
@@ -161,6 +165,7 @@ describe("GET /tokens", () => {
   test("the empty list has a create action", async () => {
     const c = await tokensConsole(tokenApi([]));
     const res = await getPage(c, "/tokens", c.cookies.admin);
+    expectCalloutsOnly(res.body);
     expect(res.body).toContain("No tokens");
     expect(res.body).toContain('<a class="button" href="/tokens/new">Create a token</a>');
   });
@@ -169,6 +174,7 @@ describe("GET /tokens", () => {
     const twin = adminToken({ id: OTHER_ID, name: "console" });
     const c = await tokensConsole(tokenApi([self, twin, ops]));
     const res = await getPage(c, "/tokens", c.cookies.admin);
+    expectCalloutsOnly(res.body);
     expect(res.body).toContain(`href="/tokens/revoke?id=${OTHER_ID}"`);
     const open = await openChange(c, "revoke", OTHER_ID);
     expect(open.page.status).toBe(200);
@@ -180,12 +186,16 @@ describe("GET /tokens", () => {
     const api = tokenApi([expiredSelf, last, other], expiredSelf);
     const c = await tokensConsole(api);
     const res = await getPage(c, "/tokens", c.cookies.admin);
+    expectCalloutsOnly(res.body);
     expect(res.body).toContain("Last active admin token: it cannot be revoked.");
     expect(res.body).not.toContain(`href="/tokens/revoke?id=${OPS_ID}"`);
     expect(res.body).toContain(
       "The last active admin token expires at 1970-01-02 02:30:00 UTC. After that nobody can manage pulse-api tokens.",
     );
+    expect(res.body).toContain('<section class="callout callout-warning" role="alert">');
+    expect(res.body).toContain("The last active admin token expires at 1970-01-02 02:30:00 UTC.");
     const get = await getPage(c, `/tokens/revoke?id=${OPS_ID}`, c.cookies.admin);
+    expectCalloutsOnly(get.body);
     expect(get.status).toBe(409);
     expect(get.body).not.toContain('<form method="post" action="/tokens');
     const token = (await openChange(c, "revoke", OTHER_ID)).formToken;
@@ -195,6 +205,7 @@ describe("GET /tokens", () => {
       revision,
       confirm_name: "ops",
     });
+    expectCalloutsOnly(forged.body);
     expect(forged.status).toBe(409);
     expect(forged.body).toContain("Last active admin token: it cannot be revoked.");
     expect(writes(api)).toEqual([]);
@@ -212,7 +223,9 @@ describe("roles", () => {
         `/tokens/rotate?id=${OPS_ID}`,
         `/tokens/revoke?id=${OPS_ID}`,
       ]) {
-        expect((await getPage(c, path, c.cookies[role])).status).toBe(403);
+        const reply = await getPage(c, path, c.cookies[role]);
+        expectCalloutsOnly(reply.body);
+        expect(reply.status).toBe(403);
       }
       for (const path of [
         "/tokens/new",
@@ -232,6 +245,7 @@ describe("roles", () => {
           },
           { cookie: c.cookies[role] },
         );
+        expectCalloutsOnly(res.body);
         expect(res.status).toBe(403);
       }
       expect(writes(api)).toEqual([]);
@@ -243,10 +257,12 @@ describe("roles", () => {
     const c = await tokensConsole(tokenApi([self]));
     for (const role of ["owner", "admin"] as const) {
       const res = await getPage(c, "/tokens", c.cookies[role]);
+      expectCalloutsOnly(res.body);
       expect(res.body).toContain('href="/tokens" aria-current="page"');
       expect(res.body).not.toContain('href="/probes"></a>');
     }
     const member = await getPage(c, "/checks", c.cookies.member);
+    expectCalloutsOnly(member.body);
     expect(member.body).not.toContain('href="/tokens"');
   });
 });
@@ -269,6 +285,7 @@ describe("POST /tokens/new", () => {
       api.replyTo("POST", "/admin/tokens", created(row));
       const c = await tokensConsole(api);
       const res = await postNew(c, { name: "  new one ", preset });
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(200);
       const post = api.seen.filter((s) => s.method === "POST");
       expect(post).toHaveLength(1);
@@ -282,6 +299,7 @@ describe("POST /tokens/new", () => {
     api.replyTo("POST", "/admin/tokens", created(adminToken({ id: OTHER_ID, name: "ci" })));
     const c = await tokensConsole(api);
     const res = await postNew(c, { name: "ci", preset: "checks" }, "owner");
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.body).toContain(`<pre id="token-secret" data-secret>${FAKE_SECRET}</pre>`);
@@ -309,6 +327,7 @@ describe("POST /tokens/new", () => {
       },
     ]);
     const after = await getPage(c, "/tokens", c.cookies.owner);
+    expectCalloutsOnly(after.body);
     expect(after.body).not.toContain("pulse_");
   });
 
@@ -317,16 +336,18 @@ describe("POST /tokens/new", () => {
     api.replyTo("POST", "/admin/tokens", created(adminToken({ id: OTHER_ID })));
     const c = await tokensConsole(api);
     const page = await getPage(c, "/tokens/new", c.cookies.admin);
+    expectCalloutsOnly(page.body);
     const fields = {
       csrf: c.csrfs.admin,
       form_token: formTokenOf(page.body, "/tokens/new"),
       name: "x",
       preset: "read",
     };
-    expect((await postForm(c, "/tokens/new", fields, { cookie: c.cookies.admin })).status).toBe(
-      200,
-    );
+    const reply = await postForm(c, "/tokens/new", fields, { cookie: c.cookies.admin });
+    expectCalloutsOnly(reply.body);
+    expect(reply.status).toBe(200);
     const again = await postForm(c, "/tokens/new", fields, { cookie: c.cookies.admin });
+    expectCalloutsOnly(again.body);
     expect(again.status).toBe(409);
     expect(again.body).toContain("Already submitted");
     expect(again.body).not.toContain(FAKE_SECRET);
@@ -345,6 +366,7 @@ describe("POST /tokens/new", () => {
       const api = tokenApi([self]);
       const c = await tokensConsole(api);
       const res = await postNew(c, fields);
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(422);
       expect(res.body).toContain("There is a problem");
       expect(writes(api)).toEqual([]);
@@ -355,6 +377,7 @@ describe("POST /tokens/new", () => {
     const api = tokenApi([self]);
     const c = await tokensConsole(api);
     const form = await getPage(c, "/tokens/new", c.cookies.admin);
+    expectCalloutsOnly(form.body);
     expect(form.body.split('<label class="choice option-card">').length - 1).toBe(6);
     for (const text of [
       '<span class="choice-title">Read</span><small class="hint">Reads the checks and their configuration. Changes nothing.</small>',
@@ -373,6 +396,7 @@ describe("POST /tokens/new", () => {
     expect(form.body).not.toContain("checked");
     expect(form.body).toContain('<input id="field-name" class="input-medium" name="name"');
     const res = await postNew(c, { name: "x" });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(res.body).toContain(
       '<fieldset id="field-preset" aria-describedby="preset-note field-preset-error">',
@@ -385,6 +409,7 @@ describe("POST /tokens/new", () => {
     const api = tokenApi([weak], weak);
     const c = await tokensConsole(api);
     const form = await getPage(c, "/tokens/new", c.cookies.admin);
+    expectCalloutsOnly(form.body);
     expect(form.body).toContain(
       '<label class="choice option-card"><input type="radio" name="preset" value="read"><span class="choice-text"><span class="choice-title">Read</span><small class="hint">Reads the checks and their configuration. Changes nothing.</small></span></label>',
     );
@@ -400,6 +425,7 @@ describe("POST /tokens/new", () => {
       '<p class="hint" id="preset-note">Manage checks, Post incidents and Full access can also create, rotate and revoke tokens with the same or fewer scopes, and read the audit log.</p>',
     );
     const res = await postNew(c, { name: "x", preset: "full" });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(422);
     expect(res.body).toContain("The console token lacks checks.");
     expect(writes(api)).toEqual([]);
@@ -410,6 +436,7 @@ describe("POST /tokens/new", () => {
     api.replyTo("POST", "/admin/tokens", { status: 201, body: "{}", headers: WIRE_HEADERS });
     const c = await tokensConsole(api);
     const res = await postNew(c, { name: "x", preset: "read" });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(502);
     expect(res.body).toContain("pulse-api made the change, but its answer could not be read");
     expect(writes(api)).toEqual(["POST /admin/tokens"]);
@@ -475,9 +502,12 @@ describe("POST /tokens/new", () => {
       api.replyTo("POST", "/admin/tokens", reply);
       const c = await tokensConsole(api);
       const res = await postNew(c, { name: "x", preset: "read" });
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(status);
       expect(res.body).toContain(text);
       expect(res.body).not.toContain("Saved in pulse-api.");
+      expect(res.body).toContain('<section class="callout callout-error" role="alert">');
+      expect(res.body).toContain(text);
       expect(writes(api)).toEqual(["POST /admin/tokens"]);
     });
   }
@@ -496,6 +526,7 @@ describe("POST /tokens/new", () => {
     });
     cleanups.push(() => c.close());
     const form = await getPage(c, "/tokens/new", c.cookies.admin);
+    expectCalloutsOnly(form.body);
     const pending = postForm(
       c,
       "/tokens/new",
@@ -511,6 +542,7 @@ describe("POST /tokens/new", () => {
     // The reads are done; firing every timer only cuts the held write.
     for (const fire of timers.splice(0)) fire();
     const res = await pending;
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(504);
     expect(res.body).toContain("The result is unknown.");
     expect(writes(api)).toEqual(["POST /admin/tokens"]);
@@ -538,10 +570,13 @@ describe("self failures", () => {
       const open = await openChange(c, "rotate", OPS_ID);
       api.reply("/admin/tokens/self", reply);
       const list = await getPage(c, "/tokens", c.cookies.admin);
+      expectCalloutsOnly(list.body);
       expect(list.status).toBe(200);
       expect(list.body).toContain(
         `The console cannot tell which token it uses (${reason}). Changes are off until it can. pulse-api needs GET /admin/tokens/self.`,
       );
+      expect(list.body).toContain('<section class="callout callout-error" role="alert">');
+      expect(list.body).toContain(`which token it uses (${reason}).`);
       expect(list.body).toContain(OPS_ID);
       expect(list.body).not.toContain('href="/tokens/new"');
       expect(list.body).not.toContain('href="/tokens/rotate');
@@ -552,13 +587,17 @@ describe("self failures", () => {
         `/tokens/revoke?id=${OPS_ID}`,
       ]) {
         const form = await getPage(c, path, c.cookies.admin);
+        expectCalloutsOnly(form.body);
         expect(form.body).not.toContain('<form method="post" action="/tokens');
       }
       const res = await postChange(c, "rotate", OPS_ID, {
         form_token: open.formToken,
         revision: open.revision,
       });
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(503);
+      expect(res.body).toContain("The console cannot tell which token it uses");
+      expect(res.body).toContain('<section class="callout callout-error" role="alert">');
       expect(res.body).toContain("The console cannot tell which token it uses");
       expect(writes(api)).toEqual([]);
     });
@@ -574,6 +613,7 @@ describe("self failures", () => {
       headers: WIRE_HEADERS,
     });
     const list = await getPage(c, "/tokens", c.cookies.admin);
+    expectCalloutsOnly(list.body);
     expect(list.body).toContain("The console cannot tell which token it uses");
   });
 
@@ -582,6 +622,7 @@ describe("self failures", () => {
     api.reply("/admin/tokens/self", { status: 401, body: "{}", headers: WIRE_HEADERS });
     const c = await tokensConsole(api);
     const list = await getPage(c, "/tokens", c.cookies.admin);
+    expectCalloutsOnly(list.body);
     expect(list.body).toContain("pulse-api rejected the console token");
     expect(list.body).not.toContain('href="/tokens/rotate');
   });
@@ -607,6 +648,7 @@ describe("rotate and revoke", () => {
       form_token: open.formToken,
       revision: open.revision,
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(200);
     expect(res.body).toContain("<h1>Token rotated</h1>");
     expect(res.body).toContain(`<pre id="token-secret" data-secret>${ROTATED_SECRET}</pre>`);
@@ -631,6 +673,7 @@ describe("rotate and revoke", () => {
       form_token: open.formToken,
       revision: open.revision,
     });
+    expectCalloutsOnly(res.body);
     expect(res.body).toContain("The old secret no longer works.");
     expect(res.body).not.toContain("data-countdown");
   });
@@ -645,6 +688,7 @@ describe("rotate and revoke", () => {
       revision: open.revision,
       confirm_name: "Deploy",
     });
+    expectCalloutsOnly(wrong.body);
     expect(wrong.status).toBe(422);
     expect(wrong.body).toContain("The name does not match.");
     const again = formTokenOf(wrong.body, `/tokens/revoke?id=${OTHER_ID}`);
@@ -653,9 +697,13 @@ describe("rotate and revoke", () => {
       revision: open.revision,
       confirm_name: " deploy ",
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe(`/tokens?revoked=${OTHER_ID}`);
     const list = await getPage(c, res.headers.get("location") ?? "", c.cookies.admin);
+    expectCalloutsOnly(list.body);
+    expect(list.body).toContain(`Revoked deploy (${OTHER_ID}).`);
+    expect(list.body).toContain('<section class="callout callout-success" role="status">');
     expect(list.body).toContain(`Revoked deploy (${OTHER_ID}).`);
     expect(writes(api)).toEqual([`POST /admin/tokens/${OTHER_ID}/revoke`]);
     const row = c.db
@@ -678,6 +726,7 @@ describe("rotate and revoke", () => {
       revision: open.revision,
       confirm_name: "deploy",
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(409);
     expect(res.body).toContain("cannot revoke the last active admin token");
     expect(res.body).toContain('<form method="post" action="/tokens/revoke');
@@ -689,6 +738,7 @@ describe("rotate and revoke", () => {
       const api = tokenApi([self, ops]);
       const c = await tokensConsole(api);
       const own = await getPage(c, `/tokens/${change}?id=${SELF_ID}`, c.cookies.admin);
+      expectCalloutsOnly(own.body);
       expect(own.status).toBe(409);
       expect(own.body).toContain("This is the console&#39;s own token. Nothing was changed.");
       expect(own.body).not.toContain('<form method="post" action="/tokens');
@@ -704,21 +754,26 @@ describe("rotate and revoke", () => {
         },
         { cookie: c.cookies.admin },
       );
+      expectCalloutsOnly(forged.body);
       expect(forged.status).toBe(409);
       expect(forged.body).toContain("This is the console&#39;s own token. Nothing was changed.");
+      expect(forged.body).toContain('<section class="callout callout-error" role="alert">');
+      expect(forged.body).toContain("This is the console&#39;s own token.");
       expect(writes(api)).toEqual([]);
     });
 
     test(`${change} of a probe token or unknown id is not found`, async () => {
       const api = tokenApi([self, probe]);
       const c = await tokensConsole(api);
-      expect((await getPage(c, `/tokens/${change}?id=${probe.id}`, c.cookies.admin)).status).toBe(
-        404,
-      );
-      expect((await getPage(c, `/tokens/${change}?id=tok_missing`, c.cookies.admin)).status).toBe(
-        404,
-      );
-      expect((await getPage(c, `/tokens/${change}?id=self`, c.cookies.admin)).status).toBe(404);
+      const reply = await getPage(c, `/tokens/${change}?id=${probe.id}`, c.cookies.admin);
+      expectCalloutsOnly(reply.body);
+      expect(reply.status).toBe(404);
+      const reply2 = await getPage(c, `/tokens/${change}?id=tok_missing`, c.cookies.admin);
+      expectCalloutsOnly(reply2.body);
+      expect(reply2.status).toBe(404);
+      const reply3 = await getPage(c, `/tokens/${change}?id=self`, c.cookies.admin);
+      expectCalloutsOnly(reply3.body);
+      expect(reply3.status).toBe(404);
       expect(writes(api)).toEqual([]);
     });
 
@@ -727,6 +782,7 @@ describe("rotate and revoke", () => {
       const api = tokenApi([self, revoked]);
       const c = await tokensConsole(api);
       const res = await getPage(c, `/tokens/${change}?id=${OPS_ID}`, c.cookies.admin);
+      expectCalloutsOnly(res.body);
       expect(res.status).toBe(409);
       expect(res.body).toContain("This token is already revoked or expired.");
       expect(res.body).not.toContain('<form method="post" action="/tokens');
@@ -743,6 +799,7 @@ describe("rotate and revoke", () => {
       revision: open.revision,
       confirm_name: "deploy",
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(409);
     expect(res.body).toContain("Changed since you opened it");
     expect(res.body).not.toContain("This token is already revoked or expired.");
@@ -760,6 +817,7 @@ describe("rotate and revoke", () => {
       form_token: open.formToken,
       revision: open.revision,
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(409);
     expect(res.body).toContain("This token is already revoked or expired.");
     expect(writes(api)).toEqual([]);
@@ -769,6 +827,7 @@ describe("rotate and revoke", () => {
     const api = tokenApi([self, ops, other]);
     const c = await tokensConsole(api);
     const form = await openChange(c, "revoke", OTHER_ID);
+    expectCalloutsOnly(form.page.body);
     const revoked = { ...other, revokedAt: START };
     api.setTokens([self, ops, revoked]);
     api.reply("/admin/tokens/self", jsonReply(self));
@@ -790,6 +849,7 @@ describe("rotate and revoke", () => {
       revision: hasher.digest("hex"),
       confirm_name: "deploy",
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(409);
     expect(res.body).toContain("This token is already revoked or expired.");
     expect(writes(api)).toEqual([]);
@@ -809,6 +869,7 @@ describe("rotate and revoke", () => {
       form_token: open.formToken,
       revision: open.revision,
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(200);
   });
 
@@ -821,6 +882,7 @@ describe("rotate and revoke", () => {
       form_token: open.formToken,
       revision: open.revision,
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(403);
     expect(res.body).toContain("The console token lacks checks.");
     expect(writes(api)).toEqual([]);
@@ -835,6 +897,7 @@ describe("rotate and revoke", () => {
       form_token: open.formToken,
       revision: open.revision,
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(403);
     expect(writes(api)).toEqual([]);
   });
@@ -850,8 +913,13 @@ describe("rotate and revoke", () => {
       revision: open.revision,
       confirm_name: "deploy",
     });
+    expectCalloutsOnly(res.body);
     expect(res.status).toBe(200);
     expect(res.body).toContain("Saved in pulse-api. The People log row could not be written.");
+    expect(res.body).toContain('<section class="callout callout-warning" role="alert">');
+    expect(res.body).toContain("The People log row could not be written.");
+    expect(res.body).toContain('<section class="callout callout-success" role="status">');
+    expect(res.body).toContain(`Revoked deploy (${OTHER_ID}).`);
     expect(c.logs.some((l) => l.includes("token change not logged"))).toBe(true);
   });
 });
@@ -870,23 +938,119 @@ describe("secrets", () => {
       headers: WIRE_HEADERS,
     });
     const c = await tokensConsole(api);
-    expect((await postNew(c, { name: "x", preset: "read" })).body).toContain(FAKE_SECRET);
+    const reply = await postNew(c, { name: "x", preset: "read" });
+    expectCalloutsOnly(reply.body);
+    expect(reply.body).toContain(FAKE_SECRET);
     const open = await openChange(c, "rotate", OPS_ID);
     const rotated = await postChange(c, "rotate", OPS_ID, {
       form_token: open.formToken,
       revision: open.revision,
     });
+    expectCalloutsOnly(rotated.body);
     expect(rotated.body).toContain("10:00</time> left");
     const file = c.db.filename;
     c.db.run("PRAGMA wal_checkpoint(TRUNCATE)");
     const bytes = readFileSync(file).toString("latin1");
     const metrics = await (await fetch(`${c.base}/metrics`)).text();
     const later = await getPage(c, "/tokens", c.cookies.admin);
+    expectCalloutsOnly(later.body);
     const events = JSON.stringify(c.db.query("SELECT * FROM people_events").all());
     for (const secret of [FAKE_SECRET, ROTATED_SECRET, TOKEN]) {
       for (const text of [bytes, metrics, later.body, events, c.logs.join("\n")]) {
         expect(text).not.toContain(secret);
       }
     }
+  });
+});
+
+describe("callouts", () => {
+  const NO_TOKEN =
+    "The console has no pulse-api token. Set PULSE_CONSOLE_ADMIN_TOKEN_FILE and restart the console.";
+  const EXPIRED_CHANGE =
+    "This form has expired. Nothing was sent. Open it again to see the current version.";
+  const EXPIRED_CREATE = "This form has expired. Your input is kept below. Send it again.";
+  const NOT_LOGGED = "Saved in pulse-api. The People log row could not be written.";
+
+  test("no admin token: the banner and the body are error callouts", async () => {
+    const api = tokenApi([self, ops]);
+    const c = await startTeamConsole({ apiUrl: api.url, adminToken: undefined });
+    cleanups.push(() => c.close());
+    const res = await getPage(c, "/tokens", c.cookies.admin);
+    expectCalloutsOnly(res.body);
+    expect(res.status).toBe(200);
+    expect(res.body.split(NO_TOKEN).length - 1).toBe(2);
+    expect(res.body).toContain('<section class="callout callout-error" role="alert">');
+    expect(res.body).toContain(NO_TOKEN);
+    expect(res.body).not.toContain('class="state state-');
+  });
+
+  for (const change of ["rotate", "revoke"] as const) {
+    test(`an expired ${change} form is a warning callout with 0 writes`, async () => {
+      const api = tokenApi([self, ops, other]);
+      const c = await tokensConsole(api);
+      const open = await openChange(c, change, OTHER_ID);
+      const res = await postChange(c, change, OTHER_ID, {
+        form_token: "x",
+        revision: open.revision,
+        confirm_name: "deploy",
+      });
+      expectCalloutsOnly(res.body);
+      expect(res.status).toBe(409);
+      expect(res.body).toContain('<section class="callout callout-warning" role="alert">');
+      expect(res.body).toContain(EXPIRED_CHANGE);
+      expect(writes(api)).toEqual([]);
+    });
+  }
+
+  test("an expired create form keeps the input under a warning callout", async () => {
+    const api = tokenApi([self]);
+    const c = await tokensConsole(api);
+    const res = await postForm(
+      c,
+      "/tokens/new",
+      { csrf: c.csrfs.admin, form_token: "x", name: "ci", preset: "read" },
+      { cookie: c.cookies.admin },
+    );
+    expectCalloutsOnly(res.body);
+    expect(res.status).toBe(409);
+    expect(res.body).toContain('<section class="callout callout-warning" role="alert">');
+    expect(res.body).toContain(EXPIRED_CREATE);
+    expect(writes(api)).toEqual([]);
+  });
+
+  test("a People insert failure after a create warns on the secret page", async () => {
+    const api = tokenApi([self]);
+    api.replyTo("POST", "/admin/tokens", created(adminToken({ id: OTHER_ID, name: "ci" })));
+    const c = await tokensConsole(api);
+    const page = await getPage(c, "/tokens/new", c.cookies.admin);
+    expectCalloutsOnly(page.body);
+    c.db.run("DROP TABLE people_events");
+    const res = await postForm(
+      c,
+      "/tokens/new",
+      {
+        csrf: c.csrfs.admin,
+        form_token: formTokenOf(page.body, "/tokens/new"),
+        name: "ci",
+        preset: "read",
+      },
+      { cookie: c.cookies.admin },
+    );
+    expectCalloutsOnly(res.body);
+    expect(res.status).toBe(200);
+    expect(res.body).toContain(FAKE_SECRET);
+    expect(res.body).toContain('<section class="callout callout-warning" role="alert">');
+    expect(res.body).toContain(NOT_LOGGED);
+  });
+
+  test("the revoked notice escapes the token name", async () => {
+    const hostile = adminToken({ id: OTHER_ID, name: "<b>x</b> & co", revokedAt: START - 1 });
+    const api = tokenApi([self, ops, hostile]);
+    const c = await tokensConsole(api);
+    const res = await getPage(c, `/tokens?revoked=${OTHER_ID}`, c.cookies.admin);
+    expectCalloutsOnly(res.body);
+    expect(res.body).toContain('<section class="callout callout-success" role="status">');
+    expect(res.body).toContain(`Revoked &lt;b&gt;x&lt;/b&gt; &amp; co (${OTHER_ID}).`);
+    expect(res.body).not.toContain("<b>x</b>");
   });
 });

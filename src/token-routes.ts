@@ -9,7 +9,14 @@ import { paragraph } from "./html.ts";
 import { routeRole } from "./permissions.ts";
 import type { PageRequest, PageResult, ProtectedRoute } from "./protected-route.ts";
 import type { ConsoleRole } from "./roles.ts";
-import { apiUnavailableState, notFoundState, staleState, tokenRejectedBanner } from "./states.ts";
+import {
+  alertCallout,
+  apiUnavailableState,
+  callout,
+  notFoundState,
+  staleState,
+  tokenRejectedBanner,
+} from "./states.ts";
 import {
   createFormHtml,
   LAST_ADMIN_TEXT,
@@ -90,10 +97,6 @@ function notFound(): PageResult {
   return page(404, "Page not found", notFoundState());
 }
 
-function alert(text: string): string {
-  return paragraph(text, ' role="alert"');
-}
-
 function backLink(): string {
   return `<p><a href="${LIST}">Back to Tokens</a></p>\n`;
 }
@@ -105,7 +108,7 @@ export function readProblem(
 ): { banner: string | undefined; body: string } {
   switch (read.kind) {
     case "no-token":
-      return { banner: undefined, body: alert(NO_TOKEN_TEXT) };
+      return { banner: undefined, body: alertCallout(NO_TOKEN_TEXT) };
     case "token-rejected":
       return { banner: tokenRejectedBanner(), body: "" };
     case "failed":
@@ -123,9 +126,9 @@ export function selfBanner(self: Exclude<TokenRead<TokenMetadata>, { kind: "ok" 
     case "token-rejected":
       return tokenRejectedBanner();
     case "no-token":
-      return `<section class="state state-error" role="alert">${paragraph(NO_TOKEN_TEXT)}</section>\n`;
+      return alertCallout(NO_TOKEN_TEXT);
     case "failed":
-      return `<section class="state state-error" role="alert">${paragraph(selfUnknownText(self.failure))}</section>\n`;
+      return alertCallout(selfUnknownText(self.failure));
     default: {
       const never: never = self;
       return never;
@@ -152,14 +155,18 @@ export function fieldOf(fields: PageRequest["fields"], name: string): string {
 function listBanner(tokens: readonly TokenMetadata[], now: number): string | undefined {
   const last = lastActiveAdmin(tokens, now);
   if (last?.expiresAt === null || last === undefined) return undefined;
-  return `<section class="state state-warning" role="alert">${paragraph(lastAdminExpiryText(last.expiresAt))}</section>\n`;
+  return callout({
+    kind: "warning",
+    body: paragraph(lastAdminExpiryText(last.expiresAt)),
+    role: "alert",
+  });
 }
 
 function revokedNotice(tokens: readonly TokenMetadata[], id: string | null): string {
   if (id === null) return "";
   const name = tokens.find((t) => t.id === id)?.name;
   const text = name === undefined ? `Revoked (${id}).` : `Revoked ${name} (${id}).`;
-  return paragraph(text, ' role="status"');
+  return callout({ kind: "success", body: paragraph(text), role: "status" });
 }
 
 async function listPage(deps: TokenRouteDeps, request: PageRequest): Promise<PageResult> {
@@ -279,7 +286,7 @@ function answerPage(
       if (answer.reason === "token-rejected") {
         return page(answer.status, title, backLink(), tokenRejectedBanner());
       }
-      return page(answer.status, title, alert(answer.message) + backLink());
+      return page(answer.status, title, alertCallout(answer.message) + backLink());
     default: {
       const never: never = answer;
       return never;
@@ -372,7 +379,7 @@ function pathOf(change: Change): string {
 }
 
 function conflict(change: Change, text: string): PageResult {
-  return page(409, titleOf(change), alert(text) + backLink());
+  return page(409, titleOf(change), alertCallout(text) + backLink());
 }
 
 function tokenReadPage(
@@ -492,7 +499,7 @@ async function changeRefusal(
   }
   const lacks = missingScope(target.token.scopes, target.self.scopes);
   if (lacks !== undefined)
-    return page(403, titleOf(change), alert(lacksScopeText(lacks)) + backLink());
+    return page(403, titleOf(change), alertCallout(lacksScopeText(lacks)) + backLink());
   return undefined;
 }
 
@@ -544,7 +551,9 @@ async function postChange(
     return page(
       200,
       "Token revoked",
-      paragraph(text, ' role="status"') + alert(answer.notLogged) + backLink(),
+      callout({ kind: "success", body: paragraph(text), role: "status" }) +
+        callout({ kind: "warning", body: paragraph(answer.notLogged), role: "alert" }) +
+        backLink(),
     );
   }
   return answerPage(answer, titleOf(change), (status, message) =>
@@ -559,7 +568,11 @@ function expiredChange(change: Change): (request: PageRequest) => PageResult {
       id === undefined
         ? ""
         : `<p><a href="${escapeHtml(pathOf(change) + tokenQuery(id))}">Open it again</a></p>\n`;
-    return page(409, "Form expired", alert(FORM_EXPIRED_TEXT) + reopen);
+    return page(
+      409,
+      "Form expired",
+      callout({ kind: "warning", body: paragraph(FORM_EXPIRED_TEXT), role: "alert" }) + reopen,
+    );
   };
 }
 

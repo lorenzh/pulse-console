@@ -10,7 +10,7 @@ import {
   paragraph,
   submitButton,
 } from "./html.ts";
-import { emptyState } from "./states.ts";
+import { alertCallout, callout, emptyState } from "./states.ts";
 import {
   ADMIN_PRESET_TEXT,
   accessText,
@@ -157,7 +157,7 @@ function presetHtml(model: CreateFormModel): string {
 export function createFormHtml(model: CreateFormModel): string {
   const nameError = model.errors.find((e) => e.name === "name")?.text;
   const presetError = model.errors.find((e) => e.name === "preset")?.text;
-  const notice = model.notice === undefined ? "" : paragraph(model.notice, ' role="alert"');
+  const notice = alertCallout(model.notice);
   const presetErrorHtml =
     presetError === undefined
       ? ""
@@ -198,7 +198,9 @@ function overlapHtml(previousValidUntil: number | null, now: number): string {
 export function secretHtml(model: SecretPageModel): string {
   const { token, secret } = model.answer;
   const notLogged =
-    model.notLogged === undefined ? "" : paragraph(model.notLogged, ' role="alert"');
+    model.notLogged === undefined
+      ? ""
+      : callout({ kind: "warning", body: paragraph(model.notLogged), role: "alert" });
   const overlap =
     model.action === "rotate" ? overlapHtml(model.answer.previousValidUntil, model.now) : "";
   return `${notLogged}<dl class="settings">
